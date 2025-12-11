@@ -24,8 +24,9 @@ export interface NumberSuggestion {
 }
 
 export interface SmartCheckOptions {
-  yearOfBirth?: number;
-  cohortWindowYears?: number; // e.g. 1 => ±1 year
+  seasonYear?: number;      // optional explicit season year
+  yearOfBirth?: number;     // player's YOB
+  cohortWindowYears?: number; // e.g. 1 => ±1 age band (we'll use it as a tolerance)
 }
 
 export interface SmartCheckResult {
@@ -35,13 +36,41 @@ export interface SmartCheckResult {
 }
 
 /**
- * Helper – load players in a club who currently have a given jersey number.
+ * Cohort-aware clash + stock check for a given number in a club.
+ *
+ * If yearOfBirth is provided:
+ *   - We compute an "age group" as (seasonYear - yearOfBirth).
+ *   - Only players in the same age band (±cohortWindowYears) are treated as clashes.
+ *   - Players with null year_of_birth are ignored for YOB-based clashes.
+ *
+ * If yearOfBirth is NOT provided:
+ *   - Any player in the club with that number is treated as a clash.
  */
-async function loadPlayersWithNumber(
+export async function smartCheckNumber(
   clubId: string,
-  jerseyNumber: number
-): Promise<ClashPlayer[]> {
-  const { data, error } = await supabase
+  jerseyNumber: number,
+  options: SmartCheckOptions = {}
+): Promise<SmartCheckResult> {
+  const {
+    seasonYear: optSeasonYear,
+    yearOfBirth,
+    cohortWindowYears = 0,
+  } = options;
+
+  // Default season year = current calendar year if not provided
+  const seasonYear =
+    typeof optSeasonYear === "number" && Number.isFinite(optSeasonYear)
+      ? optSeasonYear
+      : new Date().getFullYear();
+
+  // Compute requested age group if YOB provided
+  const requestedAgeGroup =
+    typeof yearOfBirth === "number" && Number.isFinite(yearOfBirth)
+      ? seasonYear - yearOfBirth
+      : undefined;
+
+  // 1) Load all players in this club currently using this jersey number
+  const { data: clashRows, error: clashError } = await supabase
     .from("players")
     .select(
       "id, first_name, last_name, team_id, final_shirt, year_of_birth"
@@ -49,112 +78,112 @@ async function loadPlayersWithNumber(
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber);
 
-  if (error) {
-    console.error("loadPlayersWithNumber error", error);
-    throw new Error("Failed to load players for clash check.");
+  if (clashError) {
+    console.error("smartCheckNumber: clash query error", clashError);
+    throw new Error("Failed to check clashes for this number.");
   }
 
-  return (data ?? []) as ClashPlayer[];
-}
+  const allNumberHolders = (clashRows ?? []) as ClashPlayer[];
 
-/**
- * Helper – load inventory rows for a given club + number that are Available.
- */
-async function loadInventoryForNumber(
-  clubId: string,
-  jerseyNumber: number
-): Promise<StockBySize[]> {
-  const { data, error } = await supabase
+  // 2) Apply cohort logic
+  let effectiveClashes: ClashPlayer[];
+
+  if (requestedAgeGroup === undefined) {
+    // No YOB → treat ANY holder in the club as a clash
+    effectiveClashes = allNumberHolders;
+  } else {
+    const window = Math.max(0, cohortWindowYears);
+    effectiveClashes = allNumberHolders.filter((p) => {
+      if (
+        typeof p.year_of_birth !== "number" ||
+        !Number.isFinite(p.year_of_birth)
+      ) {
+        // No YOB stored on existing player → ignore them for cohort-specific clashes
+        return false;
+      }
+      const playerAgeGroup = seasonYear - p.year_of_birth;
+      return Math.abs(playerAgeGroup - requestedAgeGroup) <= window;
+    });
+  }
+
+  // 3) Build stock summary for this club + number
+  const { data: inventoryRows, error: invError } = await supabase
     .from("inventory")
-    .select("size")
+    .select("size, status")
     .eq("club_id", clubId)
-    .eq("status", "Available")
     .eq("jersey_number", jerseyNumber);
 
-  if (error) {
-    console.error("loadInventoryForNumber error", error);
-    throw new Error("Failed to load inventory for this number.");
+  if (invError) {
+    console.error("smartCheckNumber: inventory query error", invError);
+    throw new Error("Failed to check inventory for this number.");
   }
 
-  const sizeCounts = new Map<string, number>();
-  (data ?? []).forEach((row: any) => {
-    const size = String(row.size ?? "");
-    if (!size) return;
-    sizeCounts.set(size, (sizeCounts.get(size) ?? 0) + 1);
-  });
+  const stockMap = new Map<string, number>();
 
-  return Array.from(sizeCounts.entries()).map(([size, count]) => ({
-    size,
-    count,
-  }));
-}
+  for (const row of inventoryRows ?? []) {
+    const sizeLabel = String(row.size ?? "");
+    if (!sizeLabel) continue;
 
-/**
- * Smart clash + stock check for a given number in a club.
- *
- * – Uses YOB cohort logic if provided:
- *   - If you pass yearOfBirth, we only consider clashes where the other player
- *     ALSO has year_of_birth AND is within ±cohortWindowYears.
- *   - Players with null year_of_birth are ignored for YOB-based clashes,
- *     so missing data doesn’t block everything.
- * – If you don't pass yearOfBirth, all players with that number are treated as clashes.
- */
-export async function smartCheckNumber(
-  clubId: string,
-  jerseyNumber: number,
-  options: SmartCheckOptions = {}
-): Promise<SmartCheckResult> {
-  const { yearOfBirth, cohortWindowYears = 1 } = options;
-
-  // 1) Load raw players with this number
-  const players = await loadPlayersWithNumber(clubId, jerseyNumber);
-
-  let clashes: ClashPlayer[] = [];
-
-  if (yearOfBirth && Number.isFinite(yearOfBirth)) {
-    const minY = yearOfBirth - cohortWindowYears;
-    const maxY = yearOfBirth + cohortWindowYears;
-
-    // Only treat players with a known YOB in this band as clashes.
-    clashes = players.filter((p) => {
-      if (p.year_of_birth == null) return false; // ignore unknown YOB
-      return p.year_of_birth >= minY && p.year_of_birth <= maxY;
-    });
-  } else {
-    // No YOB provided → any player with that number is treated as a clash
-    clashes = players;
+    if (row.status === "Available") {
+      stockMap.set(sizeLabel, (stockMap.get(sizeLabel) ?? 0) + 1);
+    }
   }
 
-  // 2) Load inventory stock for this number (by size)
-  const stockBySize = await loadInventoryForNumber(clubId, jerseyNumber);
+  const stockBySize: StockBySize[] = Array.from(stockMap.entries()).map(
+    ([size, count]) => ({ size, count })
+  );
 
-  // 3) Status message
+  // 4) Status message for UI
   let statusMessage = "";
-  if (clashes.length === 0 && stockBySize.length === 0) {
-    statusMessage =
-      "No clashes found and no stock in this club for this number.";
-  } else if (clashes.length === 0 && stockBySize.length > 0) {
-    statusMessage = "No clashes found and stock is available.";
-  } else if (clashes.length > 0 && stockBySize.length === 0) {
-    statusMessage =
-      "There are clashes in this cohort and no available stock for this number.";
+
+  const hasClash = effectiveClashes.length > 0;
+  const hasStock = stockBySize.length > 0;
+
+  if (requestedAgeGroup !== undefined) {
+    // Cohort-aware wording
+    if (hasClash && hasStock) {
+      statusMessage =
+        "This number is already used in the same age group for this club, but inventory exists. Proceed with caution.";
+    } else if (hasClash && !hasStock) {
+      statusMessage =
+        "This number clashes in the same age group and there is no available stock.";
+    } else if (!hasClash && hasStock) {
+      statusMessage =
+        "No cohort clash found for this number and there is available stock.";
+    } else {
+      statusMessage =
+        "No cohort clash found, but there is no available inventory for this number in this club.";
+    }
   } else {
-    statusMessage =
-      "There are cohort clashes and some inventory in this number. Consider using the suggestion tool.";
+    // Fallback wording when YOB isn't known
+    if (hasClash && hasStock) {
+      statusMessage =
+        "This number is already used in this club, but inventory exists. Proceed with caution.";
+    } else if (hasClash && !hasStock) {
+      statusMessage =
+        "This number is already used in this club and there is no available stock.";
+    } else if (!hasClash && hasStock) {
+      statusMessage =
+        "This number is not currently used in this club and there is available stock.";
+    } else {
+      statusMessage =
+        "This number is not currently used in this club, but there is no available inventory for it.";
+    }
   }
 
   return {
-    clashes,
+    clashes: effectiveClashes,
     stockBySize,
     statusMessage,
   };
 }
 
 /**
- * Suggest clash-free numbers that have available stock for a given size.
+ * Suggest clash-free numbers with stock for a given club + size.
  *
- * – Looks at inventory for that club + size.
- * – For each candidate jersey number, runs a light version of the clash logic.
+ * – Finds numbers that have Available stock for the given size.
+ * – For each, runs smartCheckNumber with NO YOB (club-wide clash safety).
+ * – Returns up to `limit` results sorted by jersey number.
  */
 export async function suggestNumbersForClub(
   clubId: string,
@@ -177,6 +206,7 @@ export async function suggestNumbersForClub(
   const counts = new Map<number, number>();
   (data ?? []).forEach((row: any) => {
     const n = Number(row.jersey_number);
+    // Allow 0 as a valid jersey number
     if (!Number.isFinite(n)) return;
     counts.set(n, (counts.get(n) ?? 0) + 1);
   });
@@ -187,11 +217,13 @@ export async function suggestNumbersForClub(
 
   const results: NumberSuggestion[] = [];
 
-  // 2) For each candidate, run clash check with NO YOB (club-wide clash safety)
+  // 2) For each candidate, run clash check with NO YOB (club-wide clash)
   for (const candidate of candidates) {
-    const { clashes } = await smartCheckNumber(clubId, candidate.jersey_number, {
-      // No yearOfBirth → "hard" club-wide clash check
-    });
+    const { clashes } = await smartCheckNumber(
+      clubId,
+      candidate.jersey_number,
+      {}
+    );
 
     if (clashes.length === 0) {
       results.push(candidate);

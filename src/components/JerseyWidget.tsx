@@ -1,187 +1,195 @@
 // FILE: src/components/JerseyWidget.tsx
 import React, { useEffect, useState } from "react";
+import { supabase } from "../services/supabase";
 import {
   smartCheckNumber,
   suggestNumbersForClub,
-  ClashPlayer,
   StockBySize,
   NumberSuggestion,
 } from "../services/allocation";
 
-interface JerseyWidgetProps {
-  /** Club this product belongs to – in Shopify this will come from metafields */
-  clubId: string;
-  /** Variant size selected on the Shopify product (e.g. "Youth 12") */
-  size?: string | null;
-  /** Optional: flag so we can tweak text slightly in the demo */
-  demoMode?: boolean;
+interface Club {
+  id: string;
+  name: string;
+  is_client: boolean;
 }
 
-const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId, size, demoMode }) => {
-  const [clubName, setClubName] = useState<string>("");
-  const [loadingClub, setLoadingClub] = useState(false);
+const JerseyWidget: React.FC = () => {
+  // Demo-only controls
+  const [clubs, setClubs] = useState<Club[]>([]);
+  const [selectedClubId, setSelectedClubId] = useState<string>("");
+  const [sizes, setSizes] = useState<string[]>([]);
+  const [selectedSize, setSelectedSize] = useState<string>("");
 
-  const [numberInput, setNumberInput] = useState<string>("");
-  const [yobInput, setYobInput] = useState<string>("");
+  // Widget inputs
+  const [yearOfBirth, setYearOfBirth] = useState<string>("");
+  const [preferredNumber, setPreferredNumber] = useState<string>("");
+
+  // Results / status
+  const [statusMessage, setStatusMessage] = useState<string>("");
+  const [stockBySize, setStockBySize] = useState<StockBySize[]>([]);
+  const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const [checking, setChecking] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
 
-  const [statusMessage, setStatusMessage] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
-
-  const [clashes, setClashes] = useState<ClashPlayer[]>([]);
-  const [stockBySize, setStockBySize] = useState<StockBySize[]>([]);
-  const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
-
-  // Normalised size string we will use in logic
-  const effectiveSize = (size ?? "").trim() || null;
-
-  // 1) Optional: load club name for nicer text
+  // 1) Load demo clubs (is_client = true)
   useEffect(() => {
-    const loadClubName = async () => {
-      if (!clubId) {
-        setClubName("");
+    const loadClubs = async () => {
+      setError(null);
+
+      const { data, error } = await supabase
+        .from("clubs")
+        .select("id, name, is_client")
+        .eq("is_client", true)
+        .order("name", { ascending: true });
+
+      if (error) {
+        console.error("JerseyWidget loadClubs error", error);
+        setError("Failed to load clubs for demo.");
         return;
       }
 
-      try {
-        setLoadingClub(true);
-        setError(null);
+      const list = (data ?? []) as Club[];
+      setClubs(list);
 
-        const resp = await fetch(
-          `/supabase/club-name?club_id=${encodeURIComponent(clubId)}`
-        ).catch(() => null);
-
-        // If you don't have a small API route for this yet, we just fall back to generic text.
-        if (!resp || !resp.ok) {
-          setClubName("");
-          return;
-        }
-
-        const json = await resp.json();
-        if (json?.name) {
-          setClubName(json.name as string);
-        }
-      } finally {
-        setLoadingClub(false);
+      if (list.length > 0) {
+        setSelectedClubId(list[0].id);
       }
     };
 
-    void loadClubName();
-  }, [clubId]);
+    void loadClubs();
+  }, []);
 
-  const resetOutput = () => {
-    setStatusMessage("");
+  // 2) Load available sizes for the selected club (from inventory)
+  useEffect(() => {
+    const loadSizes = async () => {
+      if (!selectedClubId) {
+        setSizes([]);
+        setSelectedSize("");
+        return;
+      }
+
+      setError(null);
+
+      const { data, error } = await supabase
+        .from("inventory")
+        .select("size")
+        .eq("club_id", selectedClubId)
+        .eq("status", "Available");
+
+      if (error) {
+        console.error("JerseyWidget loadSizes error", error);
+        setError("Failed to load sizes for this club.");
+        return;
+      }
+
+      const unique = Array.from(
+        new Set((data ?? []).map((row: any) => String(row.size ?? "")))
+      ).filter((s) => s.length > 0);
+
+      unique.sort();
+      setSizes(unique);
+      setSelectedSize(unique[0] ?? "");
+    };
+
+    void loadSizes();
+  }, [selectedClubId]);
+
+  const handleCheckNumber = async () => {
     setError(null);
-    setClashes([]);
+    setStatusMessage("");
     setStockBySize([]);
     setSuggestions([]);
-  };
 
-  const handleCheck = async () => {
-    resetOutput();
-
-    if (!clubId) {
-      setError("Please select the correct club for this product.");
+    if (!selectedClubId) {
+      setError("Please choose a club.");
+      return;
+    }
+    if (!selectedSize) {
+      setError("Please choose a size.");
+      return;
+    }
+    if (!yearOfBirth) {
+      setError("Please enter year of birth.");
+      return;
+    }
+    if (!preferredNumber) {
+      setError("Please enter a preferred number.");
       return;
     }
 
-    if (!numberInput) {
-      setError("Please enter your preferred playing number.");
+    const yobNum = Number(yearOfBirth);
+    const num = Number(preferredNumber);
+
+    if (!Number.isFinite(yobNum) || yobNum < 1900) {
+      setError("Year of birth looks invalid.");
       return;
     }
-
-    const jerseyNumber = Number(numberInput);
-    if (!Number.isFinite(jerseyNumber) || jerseyNumber <= 0) {
-      setError("Playing number must be a positive number.");
+    if (!Number.isFinite(num) || num <= 0) {
+      setError("Preferred number must be a positive number.");
       return;
-    }
-
-    let yearOfBirth: number | undefined;
-    if (yobInput && Number.isFinite(Number(yobInput))) {
-      yearOfBirth = Number(yobInput);
     }
 
     setChecking(true);
-
     try {
-      const { clashes, stockBySize, statusMessage } = await smartCheckNumber(
-        clubId,
-        jerseyNumber,
+      // Season-aware cohort check:
+      const { stockBySize, statusMessage } = await smartCheckNumber(
+        selectedClubId,
+        num,
         {
-          yearOfBirth,
+          seasonYear: 2025, // tweak here each season
+          yearOfBirth: yobNum,
           cohortWindowYears: 1,
         }
       );
 
-      setClashes(clashes);
       setStockBySize(stockBySize);
-
-      // If we know the size, tailor the message to that size.
-      if (effectiveSize) {
-        const stockForSize =
-          stockBySize.find((s) => s.size === effectiveSize)?.count ?? 0;
-
-        if (clashes.length === 0 && stockForSize > 0) {
-          setStatusMessage(
-            `Good news – ${jerseyNumber} is available in ${effectiveSize} for this club.`
-          );
-        } else if (clashes.length === 0 && stockForSize === 0) {
-          setStatusMessage(
-            `No clash found, but there is no stock in ${effectiveSize} for #${jerseyNumber}. Try the suggestions.`
-          );
-        } else if (clashes.length > 0) {
-          setStatusMessage(
-            `This number clashes within your age group for this club. Please choose another number or use the suggestions below.`
-          );
-        } else {
-          setStatusMessage(statusMessage);
-        }
-      } else {
-        // Fallback: generic message if we don’t know the size
-        setStatusMessage(statusMessage);
-      }
+      setStatusMessage(statusMessage);
     } catch (err: any) {
-      console.error("JerseyWidget handleCheck error", err);
+      console.error("JerseyWidget handleCheckNumber error", err);
       setError(err.message ?? "Failed to check this number.");
     } finally {
       setChecking(false);
     }
   };
 
-  const handleSuggest = async () => {
-    resetOutput();
+  const handleSuggestNumbers = async () => {
+    setError(null);
+    setStatusMessage("");
+    setSuggestions([]);
+    setStockBySize([]);
 
-    if (!clubId) {
-      setError("Please select the correct club for this product.");
+    if (!selectedClubId) {
+      setError("Please choose a club.");
       return;
     }
-
-    if (!effectiveSize) {
-      setError(
-        "Please select your jersey size on the product first before using suggestions."
-      );
+    if (!selectedSize) {
+      setError("Please choose a size.");
       return;
     }
 
     setSuggesting(true);
-
     try {
-      const results = await suggestNumbersForClub(clubId, effectiveSize, 10);
-      setSuggestions(results);
+      const result = await suggestNumbersForClub(
+        selectedClubId,
+        selectedSize,
+        10
+      );
+      setSuggestions(result);
 
-      if (results.length === 0) {
+      if (result.length === 0) {
         setStatusMessage(
-          `We couldn't find any clash-free numbers with stock in ${effectiveSize} for this club.`
+          `There are no clash-free numbers with available stock for size ${selectedSize} in this club.`
         );
       } else {
         setStatusMessage(
-          `Here are clash-free numbers available in ${effectiveSize} for this club.`
+          `Here are clash-free numbers with stock in size ${selectedSize}.`
         );
       }
     } catch (err: any) {
-      console.error("JerseyWidget handleSuggest error", err);
+      console.error("JerseyWidget handleSuggestNumbers error", err);
       setError(err.message ?? "Failed to suggest numbers.");
     } finally {
       setSuggesting(false);
@@ -189,141 +197,167 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId, size, demoMode }) =
   };
 
   const handleUseSuggestion = (num: number) => {
-    setNumberInput(String(num));
+    setPreferredNumber(String(num));
     setStatusMessage(
-      `Using suggested number #${num}. You can proceed with this number, or check another if you prefer.`
+      `Using suggested number ${num}. You can now continue with this number.`
     );
   };
 
+  const clubName =
+    clubs.find((c) => c.id === selectedClubId)?.name ?? "Selected club";
+
   return (
-    <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm text-sm space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h3 className="font-semibold text-slate-900">
-            Jersey Number Check
-          </h3>
-          <p className="text-xs text-slate-500">
-            We help your club avoid duplicate playing numbers.
-          </p>
+    <div className="max-w-xl mx-auto">
+      <h1 className="text-2xl font-bold mb-4">Widget Demo</h1>
+      <p className="text-sm text-gray-600 mb-6">
+        This is an internal preview of the jersey number widget logic. In
+        Shopify, the widget will auto-detect club + size from the product; here
+        you pick a club and size manually for testing.
+      </p>
+
+      <div className="bg-white rounded-xl shadow p-6 space-y-4">
+        {/* Demo club + size controls */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              Demo club
+            </label>
+            <select
+              value={selectedClubId}
+              onChange={(e) => setSelectedClubId(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm"
+            >
+              {clubs.length === 0 && (
+                <option value="">No client clubs found</option>
+              )}
+              {clubs.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              Jersey size (demo)
+            </label>
+            <select
+              value={selectedSize}
+              onChange={(e) => setSelectedSize(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm"
+              disabled={sizes.length === 0}
+            >
+              {sizes.length === 0 && (
+                <option value="">No sizes in inventory</option>
+              )}
+              {sizes.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        {clubName && (
-          <div className="text-right text-xs text-slate-500">
-            <div className="font-semibold text-slate-700">{clubName}</div>
-            <div>Jersey allocation system</div>
+
+        {/* Inputs for YOB + number */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              Year of birth
+            </label>
+            <input
+              type="number"
+              value={yearOfBirth}
+              onChange={(e) => setYearOfBirth(e.target.value)}
+              placeholder="e.g. 2013"
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              Preferred jersey number
+            </label>
+            <input
+              type="number"
+              value={preferredNumber}
+              onChange={(e) => setPreferredNumber(e.target.value)}
+              placeholder="e.g. 12"
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex flex-col md:flex-row gap-3">
+          <button
+            type="button"
+            onClick={handleCheckNumber}
+            disabled={checking}
+            className="flex-1 px-4 py-2 rounded bg-indigo-600 text-white text-sm font-semibold disabled:bg-gray-400"
+          >
+            {checking ? "Checking…" : "Check this number"}
+          </button>
+          <button
+            type="button"
+            onClick={handleSuggestNumbers}
+            disabled={suggesting}
+            className="flex-1 px-4 py-2 rounded bg-slate-800 text-white text-sm font-semibold disabled:bg-gray-400"
+          >
+            {suggesting ? "Finding options…" : "Suggest numbers with stock"}
+          </button>
+        </div>
+
+        {/* Messages */}
+        {error && (
+          <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
+            {error}
+          </div>
+        )}
+
+        {statusMessage && (
+          <div className="text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 rounded p-3">
+            {statusMessage}
+          </div>
+        )}
+
+        {/* Suggestions (no names / no team details – customer-safe) */}
+        {suggestions.length > 0 && (
+          <div>
+            <h2 className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
+              Suggested clash-free numbers with stock ({clubName}, size{" "}
+              {selectedSize || "—"})
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              {suggestions.map((s) => (
+                <button
+                  key={s.jersey_number}
+                  type="button"
+                  onClick={() => handleUseSuggestion(s.jersey_number)}
+                  className="px-3 py-1 rounded-full text-xs border border-emerald-500 text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+                >
+                  #{s.jersey_number} &middot; {s.total_stock} in stock
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Optional: tiny debug view of stock for current number */}
+        {stockBySize.length > 0 && preferredNumber && (
+          <div>
+            <h2 className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
+              Internal view: inventory for #{preferredNumber} in {clubName}
+            </h2>
+            <div className="text-[11px] text-gray-600">
+              {stockBySize
+                .map((s) => `${s.size}: ${s.count} available`)
+                .join(" • ")}
+            </div>
           </div>
         )}
       </div>
-
-      {/* Size indicator from Shopify */}
-      {effectiveSize && (
-        <div className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-          Size selected on product:{" "}
-          <span className="font-semibold">{effectiveSize}</span>
-        </div>
-      )}
-
-      {/* Inputs */}
-      <div className="grid grid-cols-1 gap-3">
-        <div>
-          <label className="block text-xs font-semibold mb-1">
-            Preferred jersey number
-          </label>
-          <input
-            type="number"
-            inputMode="numeric"
-            min={1}
-            value={numberInput}
-            onChange={(e) => setNumberInput(e.target.value)}
-            placeholder="e.g. 7 or 23"
-            className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-semibold mb-1">
-            Year of birth (optional)
-          </label>
-          <input
-            type="number"
-            inputMode="numeric"
-            value={yobInput}
-            onChange={(e) => setYobInput(e.target.value)}
-            placeholder="e.g. 2015"
-            className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-          />
-          <p className="mt-1 text-[11px] text-slate-500">
-            We use this to check for clashes in your age group for this club.
-          </p>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="flex flex-col sm:flex-row gap-2">
-        <button
-          type="button"
-          onClick={handleCheck}
-          disabled={checking}
-          className="flex-1 inline-flex justify-center items-center px-3 py-2 rounded-lg bg-indigo-600 text-white font-medium text-sm disabled:opacity-60"
-        >
-          {checking ? "Checking…" : "Check this number"}
-        </button>
-        <button
-          type="button"
-          onClick={handleSuggest}
-          disabled={suggesting}
-          className="flex-1 inline-flex justify-center items-center px-3 py-2 rounded-lg bg-slate-800 text-white font-medium text-sm disabled:opacity-60"
-        >
-          {suggesting ? "Finding options…" : "Suggest numbers"}
-        </button>
-      </div>
-
-      {/* Error / status */}
-      {error && (
-        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-          {error}
-        </div>
-      )}
-
-      {statusMessage && !error && (
-        <div className="text-xs text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-          {statusMessage}
-        </div>
-      )}
-
-      {/* Suggestions (no player data, just numbers + stock) */}
-      {suggestions.length > 0 && (
-        <div className="border-t border-slate-200 pt-3">
-          <div className="text-xs font-semibold text-slate-800 mb-2">
-            Suggested clash-free numbers
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {suggestions.map((s) => (
-              <button
-                key={s.jersey_number}
-                type="button"
-                onClick={() => handleUseSuggestion(s.jersey_number)}
-                className="px-3 py-1 rounded-full border border-emerald-500 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 text-xs"
-              >
-                #{s.jersey_number}{" "}
-                <span className="text-[11px] text-emerald-600">
-                  ({s.total_stock} in stock)
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* We DO NOT show player names in widget – privacy + simplicity */}
-      {clashes.length > 0 && (
-        <div className="border-t border-slate-200 pt-3">
-          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            This number is already used in your age group for this club. Please
-            choose a different number or use the suggestion button above.
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -67,6 +67,33 @@ const Allocation: React.FC = () => {
   const [swapNumber, setSwapNumber] = useState<string>("");
   const [swapBusy, setSwapBusy] = useState(false);
 
+  // Helper: current player object
+  const currentPlayer =
+    clubPlayers.find((p) => p.id === selectedPlayerId) ?? null;
+
+  // Helper: derive the YOB to use for cohort logic
+  const deriveCohortYear = (): number | undefined => {
+    // 1) Prefer typed YOB
+    if (yearOfBirth) {
+      const typed = Number(yearOfBirth);
+      if (Number.isFinite(typed)) {
+        return typed;
+      }
+    }
+
+    // 2) Fall back to player's stored YOB
+    if (
+      currentPlayer &&
+      typeof currentPlayer.year_of_birth === "number" &&
+      Number.isFinite(currentPlayer.year_of_birth)
+    ) {
+      return currentPlayer.year_of_birth;
+    }
+
+    // 3) No YOB → cohort logic disabled, use club-wide fallback
+    return undefined;
+  };
+
   // Load client clubs
   useEffect(() => {
     const loadClubs = async () => {
@@ -208,9 +235,6 @@ const Allocation: React.FC = () => {
     return entry?.count ?? 0;
   };
 
-  const currentPlayer =
-    clubPlayers.find((p) => p.id === selectedPlayerId) ?? null;
-
   const handleCheckNumber = async () => {
     if (!selectedClubId) {
       setError("Please select a club.");
@@ -239,15 +263,12 @@ const Allocation: React.FC = () => {
     setStockBySize([]);
 
     try {
-      const yobNum =
-        yearOfBirth && Number.isFinite(Number(yearOfBirth))
-          ? Number(yearOfBirth)
-          : undefined;
+      const yobNum = deriveCohortYear();
 
       const { clashes, stockBySize, statusMessage } =
         await smartCheckNumber(selectedClubId, num, {
           yearOfBirth: yobNum,
-          cohortWindowYears: 1, // ±1 year
+          // seasonYear: 2025 // optional: could be configurable later
         });
 
       setClashes(clashes);
@@ -335,10 +356,7 @@ const Allocation: React.FC = () => {
       return;
     }
 
-    const yobNum =
-      yearOfBirth && Number.isFinite(Number(yearOfBirth))
-        ? Number(yearOfBirth)
-        : undefined;
+    const yobNum = deriveCohortYear();
 
     setAllocating(true);
 
@@ -349,7 +367,6 @@ const Allocation: React.FC = () => {
         num,
         {
           yearOfBirth: yobNum,
-          cohortWindowYears: 1,
         }
       );
 
@@ -379,7 +396,7 @@ const Allocation: React.FC = () => {
       );
 
       if (!invResult.success || !invResult.inventoryId) {
-        setAllocationMessage(invResult.message);
+        setAllocationMessage(invResult.message || "Failed to reserve stock.");
         setAllocating(false);
         return;
       }
@@ -422,7 +439,7 @@ const Allocation: React.FC = () => {
         return;
       }
 
-      // 4) Log allocation event (NEW)
+      // 4) Log allocation event
       await logAllocationEvent({
         allocation_type: "new",
         club_id: selectedClubId,
@@ -431,10 +448,10 @@ const Allocation: React.FC = () => {
         size: selectedSize,
         previous_jersey_number: null,
         previous_size: null,
-        note: "New allocation via admin panel",
+        note: "New allocation from admin panel",
       });
 
-      // Update local clubPlayers snapshot so UI reflects latest number/YOB
+      // Update local snapshot so UI reflects latest number/YOB
       setClubPlayers((prev) =>
         prev.map((p) =>
           p.id === playerId
@@ -529,7 +546,7 @@ const Allocation: React.FC = () => {
         return;
       }
 
-      // 3) Log end-allocation event (NEW)
+      // 3) Log event
       await logAllocationEvent({
         allocation_type: "end",
         club_id: selectedClubId,
@@ -538,7 +555,7 @@ const Allocation: React.FC = () => {
         size: null,
         previous_jersey_number: currentNumber,
         previous_size: null,
-        note: "End allocation via admin panel",
+        note: "End allocation from admin panel",
       });
 
       // 4) Update local state so UI reflects the change
@@ -598,18 +615,8 @@ const Allocation: React.FC = () => {
       return;
     }
 
-    // Decide which YOB to use for cohort logic:
-    // 1) If operator typed a YOB in the top box, prefer that.
-    // 2) Else fall back to player's stored year_of_birth.
-    let yobNum: number | undefined;
-    if (yearOfBirth && Number.isFinite(Number(yearOfBirth))) {
-      yobNum = Number(yearOfBirth);
-    } else if (
-      currentPlayer.year_of_birth &&
-      Number.isFinite(currentPlayer.year_of_birth)
-    ) {
-      yobNum = currentPlayer.year_of_birth;
-    }
+    // Decide which YOB to use for cohort logic (same rules as check/allocation)
+    const yobNum = deriveCohortYear();
 
     setSwapBusy(true);
 
@@ -620,7 +627,6 @@ const Allocation: React.FC = () => {
         newNumber,
         {
           yearOfBirth: yobNum,
-          cohortWindowYears: 1,
         }
       );
 
@@ -720,7 +726,7 @@ const Allocation: React.FC = () => {
         return;
       }
 
-      // 6) Log swap event (NEW)
+      // 6) Log swap event
       await logAllocationEvent({
         allocation_type: "swap",
         club_id: selectedClubId,
@@ -728,7 +734,7 @@ const Allocation: React.FC = () => {
         jersey_number: newNumber,
         size: swapSize,
         previous_jersey_number: previousNumber,
-        previous_size: selectedSize || null,
+        previous_size: null,
         note: "Swap via admin panel",
       });
 
@@ -875,6 +881,10 @@ const Allocation: React.FC = () => {
             placeholder="e.g. 2012"
             className="w-full border p-2 rounded"
           />
+          <p className="mt-1 text-xs text-gray-500">
+            If left blank, we use the player&apos;s stored year of birth (if
+            available) for cohort checks.
+          </p>
         </div>
 
         <div>
@@ -954,9 +964,7 @@ const Allocation: React.FC = () => {
               type="button"
               onClick={handleEndAllocation}
               disabled={
-                endingAllocation ||
-                !currentPlayer ||
-                currentPlayer.final_shirt == null
+                endingAllocation || !currentPlayer || currentPlayer.final_shirt == null
               }
               className="px-4 py-2 rounded bg-red-600 text-white text-sm disabled:bg-gray-400"
             >
