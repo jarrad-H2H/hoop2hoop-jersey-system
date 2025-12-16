@@ -1,4 +1,3 @@
-// FILE: src/services/allocation.ts
 import { supabase } from "./supabase";
 
 /**
@@ -24,9 +23,9 @@ export interface NumberSuggestion {
 }
 
 export interface SmartCheckOptions {
-  seasonYear?: number;      // optional explicit season year
-  yearOfBirth?: number;     // player's YOB
-  cohortWindowYears?: number; // e.g. 1 => ±1 age band (we'll use it as a tolerance)
+  seasonYear?: number;
+  yearOfBirth?: number;
+  cohortWindowYears?: number;
 }
 
 export interface SmartCheckResult {
@@ -37,14 +36,6 @@ export interface SmartCheckResult {
 
 /**
  * Cohort-aware clash + stock check for a given number in a club.
- *
- * If yearOfBirth is provided:
- *   - We compute an "age group" as (seasonYear - yearOfBirth).
- *   - Only players in the same age band (±cohortWindowYears) are treated as clashes.
- *   - Players with null year_of_birth are ignored for YOB-based clashes.
- *
- * If yearOfBirth is NOT provided:
- *   - Any player in the club with that number is treated as a clash.
  */
 export async function smartCheckNumber(
   clubId: string,
@@ -57,24 +48,19 @@ export async function smartCheckNumber(
     cohortWindowYears = 0,
   } = options;
 
-  // Default season year = current calendar year if not provided
   const seasonYear =
     typeof optSeasonYear === "number" && Number.isFinite(optSeasonYear)
       ? optSeasonYear
       : new Date().getFullYear();
 
-  // Compute requested age group if YOB provided
   const requestedAgeGroup =
     typeof yearOfBirth === "number" && Number.isFinite(yearOfBirth)
       ? seasonYear - yearOfBirth
       : undefined;
 
-  // 1) Load all players in this club currently using this jersey number
   const { data: clashRows, error: clashError } = await supabase
     .from("players")
-    .select(
-      "id, first_name, last_name, team_id, final_shirt, year_of_birth"
-    )
+    .select("id, first_name, last_name, team_id, final_shirt, year_of_birth")
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber);
 
@@ -85,20 +71,14 @@ export async function smartCheckNumber(
 
   const allNumberHolders = (clashRows ?? []) as ClashPlayer[];
 
-  // 2) Apply cohort logic
   let effectiveClashes: ClashPlayer[];
 
   if (requestedAgeGroup === undefined) {
-    // No YOB → treat ANY holder in the club as a clash
     effectiveClashes = allNumberHolders;
   } else {
     const window = Math.max(0, cohortWindowYears);
     effectiveClashes = allNumberHolders.filter((p) => {
-      if (
-        typeof p.year_of_birth !== "number" ||
-        !Number.isFinite(p.year_of_birth)
-      ) {
-        // No YOB stored on existing player → ignore them for cohort-specific clashes
+      if (typeof p.year_of_birth !== "number" || !Number.isFinite(p.year_of_birth)) {
         return false;
       }
       const playerAgeGroup = seasonYear - p.year_of_birth;
@@ -106,7 +86,6 @@ export async function smartCheckNumber(
     });
   }
 
-  // 3) Build stock summary for this club + number
   const { data: inventoryRows, error: invError } = await supabase
     .from("inventory")
     .select("size, status")
@@ -121,10 +100,9 @@ export async function smartCheckNumber(
   const stockMap = new Map<string, number>();
 
   for (const row of inventoryRows ?? []) {
-    const sizeLabel = String(row.size ?? "");
+    const sizeLabel = String((row as any).size ?? "");
     if (!sizeLabel) continue;
-
-    if (row.status === "Available") {
+    if ((row as any).status === "Available") {
       stockMap.set(sizeLabel, (stockMap.get(sizeLabel) ?? 0) + 1);
     }
   }
@@ -133,14 +111,12 @@ export async function smartCheckNumber(
     ([size, count]) => ({ size, count })
   );
 
-  // 4) Status message for UI
-  let statusMessage = "";
-
   const hasClash = effectiveClashes.length > 0;
   const hasStock = stockBySize.length > 0;
 
+  let statusMessage = "";
+
   if (requestedAgeGroup !== undefined) {
-    // Cohort-aware wording
     if (hasClash && hasStock) {
       statusMessage =
         "This number is already used in the same age group for this club, but inventory exists. Proceed with caution.";
@@ -155,7 +131,6 @@ export async function smartCheckNumber(
         "No cohort clash found, but there is no available inventory for this number in this club.";
     }
   } else {
-    // Fallback wording when YOB isn't known
     if (hasClash && hasStock) {
       statusMessage =
         "This number is already used in this club, but inventory exists. Proceed with caution.";
@@ -179,18 +154,14 @@ export async function smartCheckNumber(
 }
 
 /**
- * Suggest clash-free numbers with stock for a given club + size.
- *
- * – Finds numbers that have Available stock for the given size.
- * – For each, runs smartCheckNumber with NO YOB (club-wide clash safety).
- * – Returns up to `limit` results sorted by jersey number.
+ * Legacy: Suggest clash-free numbers with stock for a given club + size (club-wide, no YOB).
+ * Kept to avoid breaking any older callers.
  */
 export async function suggestNumbersForClub(
   clubId: string,
   size: string,
   limit: number = 10
 ): Promise<NumberSuggestion[]> {
-  // 1) Get available inventory rows for this size
   const { data, error } = await supabase
     .from("inventory")
     .select("jersey_number")
@@ -206,7 +177,6 @@ export async function suggestNumbersForClub(
   const counts = new Map<number, number>();
   (data ?? []).forEach((row: any) => {
     const n = Number(row.jersey_number);
-    // Allow 0 as a valid jersey number
     if (!Number.isFinite(n)) return;
     counts.set(n, (counts.get(n) ?? 0) + 1);
   });
@@ -217,14 +187,8 @@ export async function suggestNumbersForClub(
 
   const results: NumberSuggestion[] = [];
 
-  // 2) For each candidate, run clash check with NO YOB (club-wide clash)
   for (const candidate of candidates) {
-    const { clashes } = await smartCheckNumber(
-      clubId,
-      candidate.jersey_number,
-      {}
-    );
-
+    const { clashes } = await smartCheckNumber(clubId, candidate.jersey_number, {});
     if (clashes.length === 0) {
       results.push(candidate);
     }
@@ -235,17 +199,164 @@ export async function suggestNumbersForClub(
 }
 
 /**
- * Reserve a specific inventory row for a club/number/size.
+ * NEW: cohort + size suggestions, with optional team-aware fallback
  *
- * – Finds the first Available row.
- * – Marks it Allocated + timestamps.
+ * Primary suggestions:
+ * - Available stock in selected size
+ * - No same-age-group clash
+ *
+ * If none exist and teamId provided:
+ * Fallback suggestions:
+ * - Allow same-age clashes ONLY if those clashes are in DIFFERENT teams
+ */
+export async function suggestNumbersForCohortSizeTeam(params: {
+  clubId: string;
+  size: string;
+  seasonYear: number;
+  yearOfBirth: number;
+  teamId?: string | null;
+  limit?: number;
+}): Promise<{ suggestions: NumberSuggestion[]; usedTeamFallback: boolean }> {
+  const { clubId, size, seasonYear, yearOfBirth, teamId, limit = 10 } = params;
+
+  // 1) Count stock depth per number for the selected size
+  const { data: inv, error: invError } = await supabase
+    .from("inventory")
+    .select("jersey_number")
+    .eq("club_id", clubId)
+    .eq("status", "Available")
+    .eq("size", size);
+
+  if (invError) {
+    console.error("suggestNumbersForCohortSizeTeam inventory error", invError);
+    throw new Error("Failed to load inventory for suggestions.");
+  }
+
+  const stockCount = new Map<number, number>();
+  (inv ?? []).forEach((row: any) => {
+    const n = Number(row.jersey_number);
+    if (!Number.isFinite(n)) return;
+    stockCount.set(n, (stockCount.get(n) ?? 0) + 1);
+  });
+
+  const candidateNumbers = Array.from(stockCount.keys()).sort((a, b) => a - b);
+
+  // 2) Load all player holders for these numbers in one go (efficiency + consistent logic)
+  const { data: holders, error: holdersError } = await supabase
+    .from("players")
+    .select("final_shirt, year_of_birth, team_id")
+    .eq("club_id", clubId)
+    .in("final_shirt", candidateNumbers);
+
+  if (holdersError) {
+    console.error("suggestNumbersForCohortSizeTeam holders error", holdersError);
+    throw new Error("Failed to load player holders for suggestions.");
+  }
+
+  const targetAge = seasonYear - yearOfBirth;
+
+  type Hold = { final_shirt: number | null; year_of_birth: number | null; team_id: string | null };
+  const holderRows = (holders ?? []) as Hold[];
+
+  const sameAgeCountByNumber = new Map<number, number>();
+  const sameAgeSameTeamCountByNumber = new Map<number, number>();
+  const adjacentAgeCountByNumber = new Map<number, number>();
+  const totalHoldersByNumber = new Map<number, number>();
+
+  for (const h of holderRows) {
+    const n = typeof h.final_shirt === "number" ? h.final_shirt : null;
+    if (n === null || !Number.isFinite(n)) continue;
+
+    totalHoldersByNumber.set(n, (totalHoldersByNumber.get(n) ?? 0) + 1);
+
+    if (typeof h.year_of_birth !== "number" || !Number.isFinite(h.year_of_birth)) {
+      continue;
+    }
+
+    const age = seasonYear - h.year_of_birth;
+
+    if (age === targetAge) {
+      sameAgeCountByNumber.set(n, (sameAgeCountByNumber.get(n) ?? 0) + 1);
+      if (teamId && h.team_id && h.team_id === teamId) {
+        sameAgeSameTeamCountByNumber.set(
+          n,
+          (sameAgeSameTeamCountByNumber.get(n) ?? 0) + 1
+        );
+      }
+    } else if (Math.abs(age - targetAge) === 1) {
+      adjacentAgeCountByNumber.set(n, (adjacentAgeCountByNumber.get(n) ?? 0) + 1);
+    }
+  }
+
+  // 3) Build primary list (no same-age clashes)
+  const primary = candidateNumbers
+    .map((n) => ({
+      jersey_number: n,
+      total_stock: stockCount.get(n) ?? 0,
+      sameAge: sameAgeCountByNumber.get(n) ?? 0,
+      adjacent: adjacentAgeCountByNumber.get(n) ?? 0,
+      popularity: totalHoldersByNumber.get(n) ?? 0,
+    }))
+    .filter((x) => x.sameAge === 0);
+
+  // Ranking: lowest adjacent pressure, lowest popularity, highest stock depth, lowest number
+  primary.sort((a, b) => {
+    if (a.adjacent !== b.adjacent) return a.adjacent - b.adjacent;
+    if (a.popularity !== b.popularity) return a.popularity - b.popularity;
+    if (a.total_stock !== b.total_stock) return b.total_stock - a.total_stock;
+    return a.jersey_number - b.jersey_number;
+  });
+
+  if (primary.length > 0) {
+    return {
+      suggestions: primary.slice(0, limit).map((x) => ({
+        jersey_number: x.jersey_number,
+        total_stock: x.total_stock,
+      })),
+      usedTeamFallback: false,
+    };
+  }
+
+  // 4) Team fallback - only if teamId provided
+  if (!teamId) {
+    return { suggestions: [], usedTeamFallback: false };
+  }
+
+  const fallback = candidateNumbers
+    .map((n) => ({
+      jersey_number: n,
+      total_stock: stockCount.get(n) ?? 0,
+      sameAgeSameTeam: sameAgeSameTeamCountByNumber.get(n) ?? 0,
+      adjacent: adjacentAgeCountByNumber.get(n) ?? 0,
+      popularity: totalHoldersByNumber.get(n) ?? 0,
+    }))
+    // allow same-age clashes ONLY if not on same team
+    .filter((x) => x.sameAgeSameTeam === 0);
+
+  fallback.sort((a, b) => {
+    if (a.adjacent !== b.adjacent) return a.adjacent - b.adjacent;
+    if (a.popularity !== b.popularity) return a.popularity - b.popularity;
+    if (a.total_stock !== b.total_stock) return b.total_stock - a.total_stock;
+    return a.jersey_number - b.jersey_number;
+  });
+
+  return {
+    suggestions: fallback.slice(0, limit).map((x) => ({
+      jersey_number: x.jersey_number,
+      total_stock: x.total_stock,
+    })),
+    usedTeamFallback: true,
+  };
+}
+
+/**
+ * Reserve a specific inventory row for a club/number/size.
  */
 export async function allocateNumberForClub(
   clubId: string,
   jerseyNumber: number,
   size: string
 ): Promise<{ success: boolean; inventoryId?: string; message?: string }> {
-  // 1) Find an available row
   const { data, error } = await supabase
     .from("inventory")
     .select("id")
@@ -271,9 +382,8 @@ export async function allocateNumberForClub(
     };
   }
 
-  const inventoryId = row.id as string;
+  const inventoryId = (row as any).id as string;
 
-  // 2) Mark it allocated
   const { error: updateError } = await supabase
     .from("inventory")
     .update({
@@ -294,10 +404,7 @@ export async function allocateNumberForClub(
 }
 
 /**
- * Log allocation events into the `allocations` table.
- *
- * This is the single helper used by admin allocations, swaps, end-allocation
- * and warehouse returns, so everything flows into one audit table.
+ * Log allocation events into `allocations`.
  */
 export async function logAllocationEvent(payload: {
   allocation_type: "new" | "swap" | "end" | "return";
@@ -314,9 +421,7 @@ export async function logAllocationEvent(payload: {
     club_id: payload.club_id,
     player_id: payload.player_id ?? null,
     jersey_number:
-      typeof payload.jersey_number === "number"
-        ? payload.jersey_number
-        : null,
+      typeof payload.jersey_number === "number" ? payload.jersey_number : null,
     size: payload.size ?? null,
     previous_jersey_number:
       typeof payload.previous_jersey_number === "number"
@@ -337,18 +442,13 @@ export async function logAllocationEvent(payload: {
 }
 
 /**
- * Return a jersey to stock for a given club/number/size.
- *
- * – Finds an inventory row for that jersey that is currently Allocated OR Available.
- * – Marks it Available and clears any player linkage.
- * – Logs a "return" allocation event (without a player_id).
+ * Return a jersey to stock.
  */
 export async function returnJerseyToStock(
   clubId: string,
   jerseyNumber: number,
   size: string
 ): Promise<{ success: boolean; message: string }> {
-  // 1) Find a matching row (prefer Allocated, but fall back to Available)
   const { data, error } = await supabase
     .from("inventory")
     .select("id, status")
@@ -375,9 +475,8 @@ export async function returnJerseyToStock(
     };
   }
 
-  const inventoryId = row.id as string;
+  const inventoryId = (row as any).id as string;
 
-  // 2) Mark it Available + clear any allocation metadata
   const { error: updateError } = await supabase
     .from("inventory")
     .update({
@@ -396,7 +495,6 @@ export async function returnJerseyToStock(
     };
   }
 
-  // 3) Log event – warehouse return, no player_id
   await logAllocationEvent({
     allocation_type: "return",
     club_id: clubId,
