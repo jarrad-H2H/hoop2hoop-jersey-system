@@ -21,6 +21,7 @@ export interface StockBySize {
 export interface NumberSuggestion {
   jersey_number: number;
   total_stock: number;
+  score?: number; // lower is better (ranked suggestions only)
 }
 
 export interface SmartCheckOptions {
@@ -150,7 +151,7 @@ export async function smartCheckNumber(
 }
 
 /**
- * Suggest clash-free numbers with stock for a given club + size.
+ * Existing (basic) suggestion function - kept for backward compatibility.
  */
 export async function suggestNumbersForClub(
   clubId: string,
@@ -189,6 +190,179 @@ export async function suggestNumbersForClub(
   }
 
   return results;
+}
+
+/**
+ * NEW: Ranked suggestions (size-aware + cohort-aware + reservation-aware).
+ *
+ * Rules:
+ * - Must have Available stock in selected size.
+ * - Must not clash in SAME age group (cohortWindowYears applies).
+ * - Must not already be RESERVED (pending_allocations) in same cohort.
+ * Ranking:
+ * - Prefer numbers with more stock depth in that size.
+ * - Avoid numbers heavily used in adjacent cohorts (spillover risk).
+ * - Light penalty for "popular low numbers" (encourage entropy).
+ */
+export async function suggestNumbersForClubRanked(input: {
+  clubId: string;
+  size: string;
+  seasonYear: number;
+  yearOfBirth: number;
+  limit?: number;
+  cohortWindowYears?: number; // default 0 (same age group only)
+  adjacentCohortYears?: number; // default 1
+}): Promise<NumberSuggestion[]> {
+  const limit = Math.max(1, input.limit ?? 10);
+  const cohortWindowYears = Math.max(0, input.cohortWindowYears ?? 0);
+  const adjacentCohortYears = Math.max(0, input.adjacentCohortYears ?? 1);
+
+  const targetAge = input.seasonYear - input.yearOfBirth;
+
+  // 1) Available inventory in this size -> candidate counts
+  const { data: invRows, error: invErr } = await supabase
+    .from("inventory")
+    .select("jersey_number")
+    .eq("club_id", input.clubId)
+    .eq("status", "Available")
+    .eq("size", input.size);
+
+  if (invErr) {
+    console.error("suggestNumbersForClubRanked inventory error", invErr);
+    throw new Error("Failed to load inventory for ranked suggestions.");
+  }
+
+  const stockCounts = new Map<number, number>();
+  for (const r of invRows ?? []) {
+    const n = Number((r as any).jersey_number);
+    if (!Number.isFinite(n)) continue; // allow 0
+    stockCounts.set(n, (stockCounts.get(n) ?? 0) + 1);
+  }
+
+  const candidateNums = Array.from(stockCounts.keys());
+  if (candidateNums.length === 0) return [];
+
+  // Helper to compute YOB range for an age range
+  const yobForAge = (age: number) => input.seasonYear - age;
+
+  // 2) Players in same cohort window (hard block list)
+  const minAgeBlock = targetAge - cohortWindowYears;
+  const maxAgeBlock = targetAge + cohortWindowYears;
+  const minYobBlock = yobForAge(maxAgeBlock);
+  const maxYobBlock = yobForAge(minAgeBlock);
+
+  const { data: playersBlock, error: pbErr } = await supabase
+    .from("players")
+    .select("final_shirt, year_of_birth")
+    .eq("club_id", input.clubId)
+    .in("final_shirt", candidateNums)
+    .gte("year_of_birth", minYobBlock)
+    .lte("year_of_birth", maxYobBlock);
+
+  if (pbErr) {
+    console.error("players block query error", pbErr);
+    throw new Error("Failed to load player clash data for ranked suggestions.");
+  }
+
+  const blockedNums = new Set<number>();
+  for (const p of playersBlock ?? []) {
+    const n = Number((p as any).final_shirt);
+    if (!Number.isFinite(n)) continue;
+    blockedNums.add(n);
+  }
+
+  // 3) Reservations in same cohort window should also block
+  const { data: resBlock, error: rbErr } = await supabase
+    .from("pending_allocations")
+    .select("jersey_number, year_of_birth, season_year, expires_at, status, size")
+    .eq("club_id", input.clubId)
+    .eq("size", input.size)
+    .eq("season_year", input.seasonYear)
+    .eq("status", "reserved");
+
+  if (rbErr) {
+    console.error("reservations block query error", rbErr);
+    throw new Error("Failed to load reservation data for ranked suggestions.");
+  }
+
+  const now = Date.now();
+  for (const r of resBlock ?? []) {
+    const expiresAt = Date.parse(String((r as any).expires_at));
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+    const yob = Number((r as any).year_of_birth);
+    const n = Number((r as any).jersey_number);
+    if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
+    const age = input.seasonYear - yob;
+    if (age >= minAgeBlock && age <= maxAgeBlock) blockedNums.add(n);
+  }
+
+  // 4) Adjacent cohort usage (spillover risk)
+  const minAgeAdj = targetAge - adjacentCohortYears;
+  const maxAgeAdj = targetAge + adjacentCohortYears;
+  const minYobAdj = yobForAge(maxAgeAdj);
+  const maxYobAdj = yobForAge(minAgeAdj);
+
+  const { data: playersAdj, error: paErr } = await supabase
+    .from("players")
+    .select("final_shirt")
+    .eq("club_id", input.clubId)
+    .in("final_shirt", candidateNums)
+    .gte("year_of_birth", minYobAdj)
+    .lte("year_of_birth", maxYobAdj);
+
+  if (paErr) {
+    console.error("players adjacent query error", paErr);
+    throw new Error("Failed to load adjacent cohort usage for ranking.");
+  }
+
+  const adjCounts = new Map<number, number>();
+  for (const p of playersAdj ?? []) {
+    const n = Number((p as any).final_shirt);
+    if (!Number.isFinite(n)) continue;
+    adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
+  }
+
+  // Reservations in adjacent cohorts count too
+  for (const r of resBlock ?? []) {
+    const expiresAt = Date.parse(String((r as any).expires_at));
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+    const yob = Number((r as any).year_of_birth);
+    const n = Number((r as any).jersey_number);
+    if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
+    const age = input.seasonYear - yob;
+    if (age >= minAgeAdj && age <= maxAgeAdj) {
+      adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
+    }
+  }
+
+  // 5) Score each candidate (lower is better)
+  const scored: NumberSuggestion[] = [];
+  for (const n of candidateNums) {
+    if (blockedNums.has(n)) continue;
+
+    const stockDepth = stockCounts.get(n) ?? 0;
+    const adjUse = adjCounts.get(n) ?? 0;
+
+    // Mild penalty for low numbers (popular picks) to improve entropy
+    const lowNumberPenalty = n >= 0 && n <= 10 ? 2 : 0;
+
+    // Score design:
+    // - adjacent usage is the biggest risk driver (x100)
+    // - low-number penalty small
+    // - higher stock depth reduces score
+    const score = adjUse * 100 + lowNumberPenalty * 10 - stockDepth * 2;
+
+    scored.push({ jersey_number: n, total_stock: stockDepth, score });
+  }
+
+  scored.sort((a, b) => {
+    const as = a.score ?? 0;
+    const bs = b.score ?? 0;
+    if (as !== bs) return as - bs;
+    return a.jersey_number - b.jersey_number;
+  });
+
+  return scored.slice(0, limit);
 }
 
 /**
