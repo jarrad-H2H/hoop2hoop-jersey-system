@@ -13,6 +13,7 @@ interface Club {
 interface InventoryRow {
   size: string | null;
   status: "Available" | "Allocated" | string;
+  jersey_number: number | null;
 }
 
 interface AllocationRow {
@@ -20,6 +21,14 @@ interface AllocationRow {
   allocation_type: AllocationType;
   size: string | null;
   created_at: string;
+}
+
+interface PendingAllocationRow {
+  id: string;
+  size: string | null;
+  jersey_number: number | null;
+  status: "reserved" | "purchased" | "expired" | "cancelled" | "reconciled" | string;
+  expires_at: string | null;
 }
 
 interface ClubSettings {
@@ -31,14 +40,51 @@ interface ClubSettings {
 
 interface SizePlanRow {
   size: string;
-  currentStock: number;
+
+  // Raw inventory + reservation picture
+  availableStock: number;
+  reservedStock: number;
+  effectiveStock: number;
+
+  // Number flexibility signals (club-wide)
+  distinctNumbersAvailable: number;
+  numberEntropy: number | null; // normalized 0..1 (higher = healthier)
+  constrainedNumbers: string; // "5(1), 9(1), 0(2)" format
+
+  // Usage-based planning
   weeklyUsage: number;
   weeksOfCover: number | null;
   recommendedOrder: number;
   status: "OK" | "WATCH" | "ORDER_NOW";
+  notes: string;
 }
 
-const USAGE_WINDOW_WEEKS = 12; // lookback window
+const USAGE_WINDOW_WEEKS = 12;
+
+// Simple safe entropy calculation
+// - Uses available jersey_number depths in that size (after subtracting reservations)
+// - Returns normalized 0..1 (1 = very even, 0 = very uneven)
+function computeNormalizedEntropy(depths: number[]): number | null {
+  const total = depths.reduce((a, b) => a + b, 0);
+  if (!Number.isFinite(total) || total <= 0) return null;
+
+  const probs = depths.map((d) => d / total).filter((p) => p > 0);
+  if (probs.length <= 1) return 0;
+
+  // Shannon entropy
+  let h = 0;
+  for (const p of probs) {
+    h += -p * Math.log(p);
+  }
+
+  // Normalize by max entropy for N outcomes
+  const hMax = Math.log(probs.length);
+  if (hMax <= 0) return 0;
+
+  const norm = h / hMax;
+  // Clamp 0..1
+  return Math.max(0, Math.min(1, Number(norm.toFixed(3))));
+}
 
 const StockPlanner: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
@@ -46,6 +92,7 @@ const StockPlanner: React.FC = () => {
 
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [allocationRows, setAllocationRows] = useState<AllocationRow[]>([]);
+  const [pendingRows, setPendingRows] = useState<PendingAllocationRow[]>([]);
 
   const [settings, setSettings] = useState<ClubSettings | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -95,14 +142,11 @@ const StockPlanner: React.FC = () => {
       try {
         const { data, error } = await supabase
           .from("club_settings")
-          .select(
-            "club_id, lead_time_weeks, target_weeks_cover, min_buffer_units"
-          )
+          .select("club_id, lead_time_weeks, target_weeks_cover, min_buffer_units")
           .eq("club_id", selectedClubId)
           .maybeSingle();
 
         if (error && error.code !== "PGRST116") {
-          // PGRST116 is "Results contain 0 rows" which is fine
           console.error("StockPlanner loadSettings error", error);
           setError("Failed to load stock settings for this club.");
           return;
@@ -111,7 +155,6 @@ const StockPlanner: React.FC = () => {
         if (data) {
           setSettings(data as ClubSettings);
         } else {
-          // No settings yet – create local default, not saved until user hits Save
           setSettings({
             club_id: selectedClubId,
             lead_time_weeks: 4,
@@ -143,11 +186,9 @@ const StockPlanner: React.FC = () => {
         min_buffer_units: settings.min_buffer_units,
       };
 
-      const { error } = await supabase
-        .from("club_settings")
-        .upsert(payload, {
-          onConflict: "club_id",
-        });
+      const { error } = await supabase.from("club_settings").upsert(payload, {
+        onConflict: "club_id",
+      });
 
       if (error) {
         console.error("StockPlanner saveSettings error", error);
@@ -161,12 +202,13 @@ const StockPlanner: React.FC = () => {
     }
   };
 
-  // Load inventory + usage for selected club
+  // Load inventory + usage + pending reservations for selected club
   useEffect(() => {
     const loadData = async () => {
       if (!selectedClubId) {
         setInventoryRows([]);
         setAllocationRows([]);
+        setPendingRows([]);
         return;
       }
 
@@ -175,10 +217,10 @@ const StockPlanner: React.FC = () => {
       setInfoMessage(null);
 
       try {
-        // 1) Inventory (Available only, we care about stock on hand)
+        // 1) Inventory (jerseys only)
         const { data: invData, error: invError } = await supabase
           .from("inventory")
-          .select("size, status")
+          .select("size, status, jersey_number")
           .eq("club_id", selectedClubId);
 
         if (invError) {
@@ -189,7 +231,7 @@ const StockPlanner: React.FC = () => {
 
         setInventoryRows((invData ?? []) as InventoryRow[]);
 
-        // 2) Allocation-based usage for last N weeks
+        // 2) Allocation usage for last N weeks (new + swap)
         const windowStart = new Date();
         windowStart.setDate(windowStart.getDate() - USAGE_WINDOW_WEEKS * 7);
 
@@ -207,6 +249,22 @@ const StockPlanner: React.FC = () => {
         }
 
         setAllocationRows((allocData ?? []) as AllocationRow[]);
+
+        // 3) Pending allocations (reservations)
+        // Only active reservations matter for planning.
+        // We filter client-side to avoid timezone/operator inconsistencies.
+        const { data: pendingData, error: pendingError } = await supabase
+          .from("pending_allocations")
+          .select("id, size, jersey_number, status, expires_at")
+          .eq("club_id", selectedClubId);
+
+        if (pendingError) {
+          console.error("StockPlanner load pending_allocations error", pendingError);
+          setError("Failed to load pending allocations for this club.");
+          return;
+        }
+
+        setPendingRows((pendingData ?? []) as PendingAllocationRow[]);
       } finally {
         setLoading(false);
       }
@@ -215,95 +273,171 @@ const StockPlanner: React.FC = () => {
     void loadData();
   }, [selectedClubId]);
 
-  // Derived per-size plan rows
   const planRows: SizePlanRow[] = useMemo(() => {
     if (!settings) return [];
 
-    const {
-      lead_time_weeks,
-      target_weeks_cover,
-      min_buffer_units,
-    } = settings;
+    const { lead_time_weeks, target_weeks_cover, min_buffer_units } = settings;
 
-    // Aggregate current stock by size (Available only)
-    const stockBySize = new Map<string, number>();
+    // ---- 1) Available stock counts by size (Available only)
+    const availableBySize = new Map<string, number>();
+
+    // Also build depth map: size -> jersey_number -> availableCount
+    const availableDepthBySize = new Map<string, Map<number, number>>();
+
     for (const row of inventoryRows) {
       const size = (row.size ?? "").trim();
-      if (!size || row.status !== "Available") continue;
-      stockBySize.set(size, (stockBySize.get(size) ?? 0) + 1);
+      if (!size) continue;
+      if (row.status !== "Available") continue;
+
+      availableBySize.set(size, (availableBySize.get(size) ?? 0) + 1);
+
+      const n = typeof row.jersey_number === "number" ? row.jersey_number : null;
+      if (n === null || !Number.isFinite(n)) continue;
+
+      const depthMap = availableDepthBySize.get(size) ?? new Map<number, number>();
+      depthMap.set(n, (depthMap.get(n) ?? 0) + 1);
+      availableDepthBySize.set(size, depthMap);
     }
 
-    // Aggregate usage events by size over window
+    // ---- 2) Active reservations by size (reserved AND not expired)
+    const reservedBySize = new Map<string, number>();
+    const reservedDepthBySize = new Map<string, Map<number, number>>();
+
+    const nowMs = Date.now();
+
+    for (const r of pendingRows) {
+      if (r.status !== "reserved") continue;
+
+      const size = (r.size ?? "").trim();
+      if (!size) continue;
+
+      const expMs = r.expires_at ? Date.parse(r.expires_at) : NaN;
+      if (!Number.isFinite(expMs) || expMs <= nowMs) continue;
+
+      reservedBySize.set(size, (reservedBySize.get(size) ?? 0) + 1);
+
+      const n = typeof r.jersey_number === "number" ? r.jersey_number : null;
+      if (n === null || !Number.isFinite(n)) continue;
+
+      const depthMap = reservedDepthBySize.get(size) ?? new Map<number, number>();
+      depthMap.set(n, (depthMap.get(n) ?? 0) + 1);
+      reservedDepthBySize.set(size, depthMap);
+    }
+
+    // ---- 3) Usage events per size over window
     const usageCountBySize = new Map<string, number>();
     for (const row of allocationRows) {
       const size = (row.size ?? "").trim();
       if (!size) continue;
-      // each new/swap treated as one "consumption" for that size
       usageCountBySize.set(size, (usageCountBySize.get(size) ?? 0) + 1);
     }
 
+    // ---- 4) Union of all sizes
     const allSizes = new Set<string>([
-      ...Array.from(stockBySize.keys()),
+      ...Array.from(availableBySize.keys()),
+      ...Array.from(reservedBySize.keys()),
       ...Array.from(usageCountBySize.keys()),
     ]);
 
     const rows: SizePlanRow[] = [];
 
     for (const size of allSizes) {
-      const currentStock = stockBySize.get(size) ?? 0;
+      const availableStock = availableBySize.get(size) ?? 0;
+      const reservedStock = reservedBySize.get(size) ?? 0;
+      const effectiveStock = Math.max(0, availableStock - reservedStock);
+
       const totalUsageEvents = usageCountBySize.get(size) ?? 0;
+      const weeklyUsage = totalUsageEvents > 0 ? totalUsageEvents / USAGE_WINDOW_WEEKS : 0;
 
-      const weeklyUsage =
-        totalUsageEvents > 0 ? totalUsageEvents / USAGE_WINDOW_WEEKS : 0;
+      const weeksOfCover = weeklyUsage > 0 ? effectiveStock / weeklyUsage : null;
 
-      const weeksOfCover =
-        weeklyUsage > 0 ? currentStock / weeklyUsage : null;
-
-      // Consumption expected during lead time
       const consumptionDuringLead = weeklyUsage * lead_time_weeks;
-
-      // Target stock = cover whole (lead + target) plus a small buffer
       const targetStock =
-        weeklyUsage * (lead_time_weeks + target_weeks_cover) +
-        min_buffer_units;
+        weeklyUsage * (lead_time_weeks + target_weeks_cover) + min_buffer_units;
 
-      const recommendedOrderRaw = targetStock - currentStock;
-      const recommendedOrder =
-        recommendedOrderRaw > 0 ? Math.ceil(recommendedOrderRaw) : 0;
+      const recommendedOrderRaw = targetStock - effectiveStock;
+      const recommendedOrder = recommendedOrderRaw > 0 ? Math.ceil(recommendedOrderRaw) : 0;
 
-      // Status logic:
-      // - ORDER_NOW: current stock <= expected consumption before new stock arrives
-      // - WATCH: current stock > that, but within buffer range
-      // - OK: above that
+      // ---- Number flexibility: availableDepth minus reservedDepth
+      const availDepth = availableDepthBySize.get(size) ?? new Map<number, number>();
+      const resDepth = reservedDepthBySize.get(size) ?? new Map<number, number>();
+
+      const effectiveDepths: number[] = [];
+      const constrained: Array<{ n: number; d: number }> = [];
+
+      for (const [n, dAvail] of availDepth.entries()) {
+        const dRes = resDepth.get(n) ?? 0;
+        const dEff = dAvail - dRes;
+        if (dEff <= 0) continue;
+        effectiveDepths.push(dEff);
+        constrained.push({ n, d: dEff });
+      }
+
+      const distinctNumbersAvailable = constrained.length;
+
+      // Most constrained numbers = lowest depth first (top 3)
+      constrained.sort((a, b) => {
+        if (a.d !== b.d) return a.d - b.d;
+        return a.n - b.n;
+      });
+
+      const constrainedNumbers = constrained
+        .slice(0, 3)
+        .map((x) => `${x.n}(${x.d})`)
+        .join(", ");
+
+      const numberEntropy = computeNormalizedEntropy(effectiveDepths);
+
+      // ---- Status logic (now based on effectiveStock)
       let status: SizePlanRow["status"] = "OK";
+      let notes = "";
+
+      const lowEntropy = typeof numberEntropy === "number" && numberEntropy < 0.35;
+      const lowNumberFlex = distinctNumbersAvailable > 0 && distinctNumbersAvailable <= 5;
 
       if (weeklyUsage === 0) {
-        // No usage in the last window – just use buffer as simple guardrail
-        if (currentStock <= min_buffer_units) {
+        if (effectiveStock <= min_buffer_units) {
           status = "WATCH";
+          notes = "No recent usage, but buffer is thin.";
         } else {
           status = "OK";
+          notes = "No recent usage detected.";
         }
       } else {
-        if (currentStock <= consumptionDuringLead) {
+        if (effectiveStock <= consumptionDuringLead) {
           status = "ORDER_NOW";
-        } else if (
-          currentStock <= consumptionDuringLead + min_buffer_units
-        ) {
+          notes = "Risk of stockout before replenishment arrives.";
+        } else if (effectiveStock <= consumptionDuringLead + min_buffer_units) {
           status = "WATCH";
+          notes = "Stock is within buffer range.";
         } else {
           status = "OK";
+          notes = "Stock is above buffer range.";
         }
+      }
+
+      // Escalate WATCH if number pool is fragile (even if unit stock is ok)
+      // This is the “collision risk” proxy at club-wide level.
+      if (status === "OK" && (lowEntropy || lowNumberFlex)) {
+        status = "WATCH";
+        notes = lowNumberFlex
+          ? "Units OK, but very few distinct numbers available (future clash risk)."
+          : "Units OK, but number pool is unevenly distributed (future clash risk).";
       }
 
       rows.push({
         size,
-        currentStock,
+        availableStock,
+        reservedStock,
+        effectiveStock,
+        distinctNumbersAvailable,
+        numberEntropy,
+        constrainedNumbers: constrainedNumbers || "—",
         weeklyUsage: Number(weeklyUsage.toFixed(2)),
-        weeksOfCover:
-          weeksOfCover !== null ? Number(weeksOfCover.toFixed(1)) : null,
+        weeksOfCover: weeksOfCover !== null ? Number(weeksOfCover.toFixed(1)) : null,
         recommendedOrder,
         status,
+        notes,
       });
     }
 
@@ -321,15 +455,11 @@ const StockPlanner: React.FC = () => {
     });
 
     return rows;
-  }, [inventoryRows, allocationRows, settings]);
+  }, [inventoryRows, allocationRows, pendingRows, settings]);
 
-  const clubName =
-    clubs.find((c) => c.id === selectedClubId)?.name ?? "—";
+  const clubName = clubs.find((c) => c.id === selectedClubId)?.name ?? "—";
 
-  const totalRecommendedOrder = planRows.reduce(
-    (sum, row) => sum + row.recommendedOrder,
-    0
-  );
+  const totalRecommendedOrder = planRows.reduce((sum, row) => sum + row.recommendedOrder, 0);
 
   const handleExportCsv = () => {
     if (!planRows.length) return;
@@ -337,11 +467,17 @@ const StockPlanner: React.FC = () => {
     const header = [
       "Club",
       "Size",
-      "CurrentStock",
+      "AvailableStock",
+      "ReservedStock",
+      "EffectiveStock",
+      "DistinctNumbersAvailable",
+      "NumberEntropy",
+      "ConstrainedNumbers",
       "WeeklyUsage",
       "WeeksOfCover",
       "Status",
       "RecommendedOrder",
+      "Notes",
     ];
 
     const lines = [
@@ -350,18 +486,22 @@ const StockPlanner: React.FC = () => {
         [
           `"${clubName.replace(/"/g, '""')}"`,
           `"${row.size.replace(/"/g, '""')}"`,
-          row.currentStock,
+          row.availableStock,
+          row.reservedStock,
+          row.effectiveStock,
+          row.distinctNumbersAvailable,
+          row.numberEntropy ?? "",
+          `"${row.constrainedNumbers.replace(/"/g, '""')}"`,
           row.weeklyUsage,
           row.weeksOfCover ?? "",
           row.status,
           row.recommendedOrder,
+          `"${row.notes.replace(/"/g, '""')}"`,
         ].join(",")
       ),
     ];
 
-    const blob = new Blob([lines.join("\n")], {
-      type: "text/csv;charset=utf-8;",
-    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
 
     const a = document.createElement("a");
@@ -371,27 +511,17 @@ const StockPlanner: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleSettingsChange = (
-    field: keyof ClubSettings,
-    value: number
-  ) => {
+  const handleSettingsChange = (field: keyof ClubSettings, value: number) => {
     if (!settings) return;
-    setSettings({
-      ...settings,
-      [field]: value,
-    });
+    setSettings({ ...settings, [field]: value });
   };
 
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">Stock Planner</h1>
       <p className="text-sm text-gray-600 mb-6">
-        This tool helps plan jersey stock for each club by size, using{" "}
-        <span className="font-semibold">actual allocation history</span> to
-        estimate weekly usage. It combines that with per-club lead time and
-        target weeks of cover to suggest when to{" "}
-        <span className="font-semibold">order now</span> vs{" "}
-        <span className="font-semibold">monitor</span>.
+        Club-wide stock planning by size. Uses allocation history to estimate usage and includes
+        active reservations (pending allocations) so stock planning reflects reality.
       </p>
 
       {/* Top controls */}
@@ -406,9 +536,7 @@ const StockPlanner: React.FC = () => {
             onChange={(e) => setSelectedClubId(e.target.value)}
             className="border rounded px-3 py-2 min-w-[220px] text-sm"
           >
-            {clubs.length === 0 && (
-              <option value="">No client clubs found</option>
-            )}
+            {clubs.length === 0 && <option value="">No client clubs found</option>}
             {clubs.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
@@ -425,8 +553,7 @@ const StockPlanner: React.FC = () => {
                 Planning Settings for {clubName}
               </div>
               <div className="text-[11px] text-gray-500">
-                These settings only affect this club. Karen can tune them over
-                time.
+                Per-club tuning for lead time, cover and buffer.
               </div>
             </div>
             <button
@@ -450,16 +577,10 @@ const StockPlanner: React.FC = () => {
                   min={1}
                   value={settings.lead_time_weeks}
                   onChange={(e) =>
-                    handleSettingsChange(
-                      "lead_time_weeks",
-                      Number(e.target.value) || 0
-                    )
+                    handleSettingsChange("lead_time_weeks", Number(e.target.value) || 0)
                   }
                   className="w-full border rounded px-2 py-1.5 text-xs"
                 />
-                <p className="mt-1 text-[10px] text-gray-500">
-                  How long from PO to jerseys on shelf.
-                </p>
               </div>
 
               <div>
@@ -471,16 +592,10 @@ const StockPlanner: React.FC = () => {
                   min={0}
                   value={settings.target_weeks_cover}
                   onChange={(e) =>
-                    handleSettingsChange(
-                      "target_weeks_cover",
-                      Number(e.target.value) || 0
-                    )
+                    handleSettingsChange("target_weeks_cover", Number(e.target.value) || 0)
                   }
                   className="w-full border rounded px-2 py-1.5 text-xs"
                 />
-                <p className="mt-1 text-[10px] text-gray-500">
-                  Extra weeks of stock you want beyond lead time.
-                </p>
               </div>
 
               <div>
@@ -492,16 +607,10 @@ const StockPlanner: React.FC = () => {
                   min={0}
                   value={settings.min_buffer_units}
                   onChange={(e) =>
-                    handleSettingsChange(
-                      "min_buffer_units",
-                      Number(e.target.value) || 0
-                    )
+                    handleSettingsChange("min_buffer_units", Number(e.target.value) || 0)
                   }
                   className="w-full border rounded px-2 py-1.5 text-xs"
                 />
-                <p className="mt-1 text-[10px] text-gray-500">
-                  “Safety” units per size. We treat &le; this as thin.
-                </p>
               </div>
             </div>
           )}
@@ -523,12 +632,9 @@ const StockPlanner: React.FC = () => {
       {/* Summary / export */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-4 gap-2">
         <div className="text-sm text-gray-700">
-          <span className="font-semibold">{planRows.length}</span> sizes
-          analysed for{" "}
-          <span className="font-semibold">{clubName}</span>. Recommended total
-          order:{" "}
-          <span className="font-semibold">{totalRecommendedOrder}</span>{" "}
-          jerseys (sum of suggested orders).
+          <span className="font-semibold">{planRows.length}</span> sizes analysed for{" "}
+          <span className="font-semibold">{clubName}</span>. Recommended total order:{" "}
+          <span className="font-semibold">{totalRecommendedOrder}</span> jerseys.
         </div>
         <button
           type="button"
@@ -540,32 +646,31 @@ const StockPlanner: React.FC = () => {
         </button>
       </div>
 
-      {/* Loading or empty state */}
-      {loading && (
-        <div className="text-sm text-gray-600 mb-4">
-          Calculating stock plan…
-        </div>
-      )}
+      {loading && <div className="text-sm text-gray-600 mb-4">Calculating stock plan…</div>}
 
       {!loading && planRows.length === 0 && (
         <div className="text-sm text-gray-500 mb-4">
-          No inventory/usage found for this club yet. Once allocations and
-          stock are populated, this planner will calculate suggestions by size.
+          No inventory/usage found for this club yet.
         </div>
       )}
 
-      {/* Planner table */}
       {!loading && planRows.length > 0 && (
         <div className="overflow-x-auto bg-white rounded-lg shadow">
           <table className="min-w-full text-xs">
             <thead className="bg-gray-100">
               <tr>
                 <th className="px-3 py-2 text-left">Size</th>
-                <th className="px-3 py-2 text-left">Current Stock</th>
-                <th className="px-3 py-2 text-left">Weekly Usage (est)</th>
-                <th className="px-3 py-2 text-left">Weeks of Cover</th>
+                <th className="px-3 py-2 text-left">Avail</th>
+                <th className="px-3 py-2 text-left">Reserved</th>
+                <th className="px-3 py-2 text-left">Effective</th>
+                <th className="px-3 py-2 text-left"># Numbers</th>
+                <th className="px-3 py-2 text-left">Entropy</th>
+                <th className="px-3 py-2 text-left">Constrained #s</th>
+                <th className="px-3 py-2 text-left">Weekly Usage</th>
+                <th className="px-3 py-2 text-left">Weeks Cover</th>
                 <th className="px-3 py-2 text-left">Status</th>
                 <th className="px-3 py-2 text-left">Suggested Order</th>
+                <th className="px-3 py-2 text-left">Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -578,11 +683,7 @@ const StockPlanner: React.FC = () => {
                     : "bg-emerald-100 text-emerald-800 border-emerald-200";
 
                 const statusLabel =
-                  row.status === "ORDER_NOW"
-                    ? "Order Now"
-                    : row.status === "WATCH"
-                    ? "Watch"
-                    : "OK";
+                  row.status === "ORDER_NOW" ? "Order Now" : row.status === "WATCH" ? "Watch" : "OK";
 
                 return (
                   <tr
@@ -590,16 +691,17 @@ const StockPlanner: React.FC = () => {
                     className="border-t border-gray-100 odd:bg-white even:bg-gray-50"
                   >
                     <td className="px-3 py-2 align-top">{row.size}</td>
+                    <td className="px-3 py-2 align-top">{row.availableStock}</td>
+                    <td className="px-3 py-2 align-top">{row.reservedStock}</td>
+                    <td className="px-3 py-2 align-top font-semibold">{row.effectiveStock}</td>
+                    <td className="px-3 py-2 align-top">{row.distinctNumbersAvailable}</td>
                     <td className="px-3 py-2 align-top">
-                      {row.currentStock}
+                      {row.numberEntropy !== null ? row.numberEntropy.toFixed(2) : "—"}
                     </td>
+                    <td className="px-3 py-2 align-top">{row.constrainedNumbers}</td>
+                    <td className="px-3 py-2 align-top">{row.weeklyUsage.toFixed(2)}</td>
                     <td className="px-3 py-2 align-top">
-                      {row.weeklyUsage.toFixed(2)}
-                    </td>
-                    <td className="px-3 py-2 align-top">
-                      {row.weeksOfCover !== null
-                        ? row.weeksOfCover.toFixed(1)
-                        : "—"}
+                      {row.weeksOfCover !== null ? row.weeksOfCover.toFixed(1) : "—"}
                     </td>
                     <td className="px-3 py-2 align-top">
                       <span
@@ -610,12 +712,13 @@ const StockPlanner: React.FC = () => {
                     </td>
                     <td className="px-3 py-2 align-top">
                       {row.recommendedOrder > 0 ? (
-                        <span className="font-semibold text-gray-800">
-                          {row.recommendedOrder}
-                        </span>
+                        <span className="font-semibold text-gray-800">{row.recommendedOrder}</span>
                       ) : (
                         <span className="text-gray-400">—</span>
                       )}
+                    </td>
+                    <td className="px-3 py-2 align-top text-[11px] text-gray-600">
+                      {row.notes}
                     </td>
                   </tr>
                 );
