@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from "react";
+// FILE: src/components/JerseyWidget.tsx
+import React, { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
 import {
   smartCheckNumber,
-  suggestNumbersForCohortSizeTeam,
+  suggestNumbersForClub,
   StockBySize,
   NumberSuggestion,
+  reserveNumberForPurchase,
 } from "../services/allocation";
 
 interface Club {
@@ -13,56 +15,29 @@ interface Club {
   is_client: boolean;
 }
 
-interface TeamOption {
-  team_id: string; // stored on players.team_id (string)
-  label: string;   // team_label if available, else team_id
-}
-
-const CURRENT_SEASON_YEAR = 2025; // update once per season
-const NOT_ASSIGNED_TEAM_ID = "__NOT_ASSIGNED__";
-
-const toAgeGroup = (seasonYear: number, yob: number): string => {
-  const age = seasonYear - yob;
-  if (!Number.isFinite(age) || age <= 0) return "";
-  return `U${age}`;
-};
-
 const JerseyWidget: React.FC = () => {
-  // Demo-only controls
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
   const [sizes, setSizes] = useState<string[]>([]);
   const [selectedSize, setSelectedSize] = useState<string>("");
 
-  // Player identity inputs (needed to persist YOB)
-  const [firstName, setFirstName] = useState<string>("");
-  const [lastName, setLastName] = useState<string>("");
-
-  // Widget inputs
   const [yearOfBirth, setYearOfBirth] = useState<string>("");
   const [preferredNumber, setPreferredNumber] = useState<string>("");
 
-  // Team dropdown (loaded from players table, filtered by YOB-derived age_group)
-  const [teamOptions, setTeamOptions] = useState<TeamOption[]>([]);
-  const [selectedTeamId, setSelectedTeamId] = useState<string>(NOT_ASSIGNED_TEAM_ID);
-
-  // Results / status
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [stockBySize, setStockBySize] = useState<StockBySize[]>([]);
   const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
-  const [usedTeamFallback, setUsedTeamFallback] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [checking, setChecking] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
+  const [reserving, setReserving] = useState(false);
 
-  const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
-  const computedAgeGroup = useMemo(() => {
-    if (!Number.isFinite(yobNum) || yobNum < 1900) return "";
-    return toAgeGroup(CURRENT_SEASON_YEAR, yobNum);
-  }, [yobNum]);
+  const [reservationResult, setReservationResult] = useState<{
+    pendingAllocationId?: string;
+    inventoryId?: string;
+  }>({});
 
-  // 1) Load demo clubs (is_client = true)
   useEffect(() => {
     const loadClubs = async () => {
       setError(null);
@@ -90,7 +65,6 @@ const JerseyWidget: React.FC = () => {
     void loadClubs();
   }, []);
 
-  // 2) Load available sizes for selected club (from inventory)
   useEffect(() => {
     const loadSizes = async () => {
       if (!selectedClubId) {
@@ -125,178 +99,67 @@ const JerseyWidget: React.FC = () => {
     void loadSizes();
   }, [selectedClubId]);
 
-  // 3) Load team options for club + computed age group (from players table)
-  useEffect(() => {
-    const loadTeams = async () => {
-      setTeamOptions([]);
-      setSelectedTeamId(NOT_ASSIGNED_TEAM_ID);
-
-      if (!selectedClubId) return;
-      if (!computedAgeGroup) return; // require YOB before suggesting teams
-
-      setError(null);
-
-      const { data, error } = await supabase
-        .from("players")
-        .select("team_id, team_label, age_group")
-        .eq("club_id", selectedClubId)
-        .eq("age_group", computedAgeGroup);
-
-      if (error) {
-        console.warn("JerseyWidget loadTeams error", error);
-        // Not fatal - dropdown will just show "not assigned"
-        return;
-      }
-
-      const seen = new Map<string, string>();
-      (data ?? []).forEach((r: any) => {
-        const teamId = String(r.team_id ?? "").trim();
-        if (!teamId) return;
-        const label = String(r.team_label ?? "").trim();
-        if (!seen.has(teamId)) {
-          seen.set(teamId, label || teamId);
-        }
-      });
-
-      const options: TeamOption[] = Array.from(seen.entries())
-        .map(([team_id, label]) => ({ team_id, label }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-
-      setTeamOptions(options);
-    };
-
-    void loadTeams();
-  }, [selectedClubId, computedAgeGroup]);
-
-  const clubName =
-    clubs.find((c) => c.id === selectedClubId)?.name ?? "Selected club";
-
-  const getStockForSelectedSize = (stock: StockBySize[]) => {
-    const hit = stock.find(
-      (s) => String(s.size).trim() === String(selectedSize).trim()
-    );
-    return hit?.count ?? 0;
+  const resetOutputs = () => {
+    setStatusMessage("");
+    setStockBySize([]);
+    setSuggestions([]);
+    setReservationResult({});
   };
 
-  const upsertPlayerYobAndTeam = async () => {
-    // We only persist if we have enough to identify a player row.
-    // For Shopify, you can map these fields to line item properties and pass into the widget.
-    if (!selectedClubId) return;
-    if (!firstName.trim() || !lastName.trim()) return;
-    if (!Number.isFinite(yobNum) || yobNum < 1900) return;
-
-    const teamIdForStore =
-      selectedTeamId === NOT_ASSIGNED_TEAM_ID ? null : selectedTeamId;
-
-    const payload: any = {
-      club_id: selectedClubId,
-      first_name: firstName.trim(),
-      last_name: lastName.trim(),
-      year_of_birth: yobNum,
-      yob: yobNum,
-      age_group: computedAgeGroup || null,
-      team_id: teamIdForStore,
-    };
-
-    // Upsert strategy: use a pragmatic conflict target via Postgres unique index later.
-    // For now, we do: try find an existing record matching club + name, then update that id.
-    const { data: existing, error: findError } = await supabase
-      .from("players")
-      .select("id, year_of_birth")
-      .eq("club_id", selectedClubId)
-      .ilike("first_name", payload.first_name)
-      .ilike("last_name", payload.last_name)
-      .limit(1);
-
-    if (findError) {
-      console.warn("Widget player lookup failed", findError);
-      return;
+  const validateInputs = (): { yobNum: number; num: number } | null => {
+    if (!selectedClubId) {
+      setError("Please choose a club.");
+      return null;
+    }
+    if (!selectedSize) {
+      setError("Please choose a size.");
+      return null;
+    }
+    if (yearOfBirth.trim().length === 0) {
+      setError("Please enter year of birth.");
+      return null;
+    }
+    if (preferredNumber.trim().length === 0) {
+      setError("Please enter a preferred number.");
+      return null;
     }
 
-    const existingRow = (existing ?? [])[0];
+    const yobNum = Number(yearOfBirth);
+    const num = Number(preferredNumber);
 
-    if (existingRow?.id) {
-      // Update existing row - keep any existing year_of_birth if set and conflicts (avoid overwriting good data)
-      const existingYob = Number(existingRow.year_of_birth);
-      const finalYob =
-        Number.isFinite(existingYob) && existingYob > 0 ? existingYob : yobNum;
-
-      const { error: updateError } = await supabase
-        .from("players")
-        .update({
-          ...payload,
-          year_of_birth: finalYob,
-          yob: finalYob,
-        })
-        .eq("id", existingRow.id);
-
-      if (updateError) {
-        console.warn("Widget player update failed", updateError);
-      }
-    } else {
-      // Insert new row
-      const { error: insertError } = await supabase.from("players").insert(payload);
-      if (insertError) {
-        console.warn("Widget player insert failed", insertError);
-      }
+    if (!Number.isFinite(yobNum) || yobNum < 1900) {
+      setError("Year of birth looks invalid.");
+      return null;
     }
+
+    // allow 0 as valid jersey number
+    if (!Number.isFinite(num) || num < 0) {
+      setError("Preferred number must be 0 or a positive number.");
+      return null;
+    }
+
+    return { yobNum, num };
   };
 
   const handleCheckNumber = async () => {
     setError(null);
-    setStatusMessage("");
-    setStockBySize([]);
-    setSuggestions([]);
-    setUsedTeamFallback(false);
+    resetOutputs();
 
-    if (!selectedClubId) return setError("Please choose a club.");
-    if (!selectedSize) return setError("Please choose a size.");
-    if (!yearOfBirth) return setError("Please enter year of birth.");
-    if (preferredNumber === "") return setError("Please enter a preferred number.");
+    const validated = validateInputs();
+    if (!validated) return;
 
-    if (!Number.isFinite(yobNum) || yobNum < 1900) {
-      return setError("Year of birth looks invalid.");
-    }
-
-    const num = Number(preferredNumber);
-
-    // Allow 0 as valid
-    if (!Number.isFinite(num) || num < 0) {
-      return setError("Preferred number must be 0 or a positive number.");
-    }
+    const { yobNum, num } = validated;
 
     setChecking(true);
     try {
-      // Persist YOB + team (best effort, non-blocking)
-      await upsertPlayerYobAndTeam();
-
-      // Strict same-age check: cohortWindowYears = 0
-      const result = await smartCheckNumber(selectedClubId, num, {
-        seasonYear: CURRENT_SEASON_YEAR,
+      const { stockBySize, statusMessage } = await smartCheckNumber(selectedClubId, num, {
+        seasonYear: 2025,
         yearOfBirth: yobNum,
         cohortWindowYears: 0,
       });
 
-      setStockBySize(result.stockBySize);
-
-      const sameAgeClash = result.clashes.length > 0;
-      const sizeStock = getStockForSelectedSize(result.stockBySize);
-
-      if (sameAgeClash) {
-        setStatusMessage(
-          "This number isn't available for your age group. Please choose a suggested number."
-        );
-        return;
-      }
-
-      if (sizeStock <= 0) {
-        setStatusMessage(
-          `This number has no available stock in size ${selectedSize}. Please choose a suggested number.`
-        );
-        return;
-      }
-
-      setStatusMessage("This number is available for your age group and size.");
+      setStockBySize(stockBySize);
+      setStatusMessage(statusMessage);
     } catch (err: any) {
       console.error("JerseyWidget handleCheckNumber error", err);
       setError(err.message ?? "Failed to check this number.");
@@ -307,51 +170,28 @@ const JerseyWidget: React.FC = () => {
 
   const handleSuggestNumbers = async () => {
     setError(null);
-    setStatusMessage("");
-    setSuggestions([]);
-    setStockBySize([]);
-    setUsedTeamFallback(false);
+    resetOutputs();
 
-    if (!selectedClubId) return setError("Please choose a club.");
-    if (!selectedSize) return setError("Please choose a size.");
-    if (!yearOfBirth) return setError("Year of birth is required to suggest numbers.");
-
-    if (!Number.isFinite(yobNum) || yobNum < 1900) {
-      return setError("Year of birth looks invalid.");
+    if (!selectedClubId) {
+      setError("Please choose a club.");
+      return;
+    }
+    if (!selectedSize) {
+      setError("Please choose a size.");
+      return;
     }
 
     setSuggesting(true);
     try {
-      // Persist YOB + team (best effort, non-blocking)
-      await upsertPlayerYobAndTeam();
+      const result = await suggestNumbersForClub(selectedClubId, selectedSize, 10);
+      setSuggestions(result);
 
-      const teamIdForLogic =
-        selectedTeamId === NOT_ASSIGNED_TEAM_ID ? null : selectedTeamId;
-
-      const { suggestions, usedTeamFallback } = await suggestNumbersForCohortSizeTeam({
-        clubId: selectedClubId,
-        size: selectedSize,
-        seasonYear: CURRENT_SEASON_YEAR,
-        yearOfBirth: yobNum,
-        teamId: teamIdForLogic,
-        limit: 10,
-      });
-
-      setSuggestions(suggestions);
-      setUsedTeamFallback(usedTeamFallback);
-
-      if (suggestions.length === 0) {
+      if (result.length === 0) {
         setStatusMessage(
-          `There are no suitable numbers with available stock for size ${selectedSize}. Please contact the club.`
-        );
-      } else if (usedTeamFallback) {
-        setStatusMessage(
-          "No age-group-safe numbers were available. Showing best fallback options based on your selected team."
+          `There are no clash-free numbers with available stock for size ${selectedSize} in this club.`
         );
       } else {
-        setStatusMessage(
-          `Recommended numbers for size ${selectedSize}, based on availability and future demand.`
-        );
+        setStatusMessage(`Here are clash-free numbers with stock in size ${selectedSize}.`);
       }
     } catch (err: any) {
       console.error("JerseyWidget handleSuggestNumbers error", err);
@@ -361,22 +201,63 @@ const JerseyWidget: React.FC = () => {
     }
   };
 
+  const handleReserve = async () => {
+    setError(null);
+    resetOutputs();
+
+    const validated = validateInputs();
+    if (!validated) return;
+
+    const { yobNum, num } = validated;
+
+    setReserving(true);
+    try {
+      const result = await reserveNumberForPurchase({
+        clubId: selectedClubId,
+        jerseyNumber: num,
+        size: selectedSize,
+        seasonYear: 2025,
+        yearOfBirth: yobNum,
+        expiresMinutes: 15,
+      });
+
+      if (!result.success) {
+        setError(result.message);
+        return;
+      }
+
+      setReservationResult({
+        pendingAllocationId: result.pendingAllocationId,
+        inventoryId: result.inventoryId,
+      });
+
+      setStatusMessage(
+        `Reserved jersey #${num} (${selectedSize}). Pending allocation created (15 min hold).`
+      );
+    } catch (err: any) {
+      console.error("JerseyWidget handleReserve error", err);
+      setError(err.message ?? "Failed to reserve this number.");
+    } finally {
+      setReserving(false);
+    }
+  };
+
   const handleUseSuggestion = (num: number) => {
     setPreferredNumber(String(num));
-    setStatusMessage(
-      `Using suggested number ${num}. You can now continue with this number.`
-    );
+    setStatusMessage(`Using suggested number ${num}. You can now reserve this number.`);
   };
+
+  const clubName = clubs.find((c) => c.id === selectedClubId)?.name ?? "Selected club";
 
   return (
     <div className="max-w-xl mx-auto">
       <h1 className="text-2xl font-bold mb-4">Widget Demo</h1>
       <p className="text-sm text-gray-600 mb-6">
-        Demo widget. In Shopify you will pass club + size automatically, and can pass player name.
+        This is an internal preview of the jersey number widget logic. In Shopify, the widget will
+        auto-detect club + size from the product; here you pick a club and size manually for testing.
       </p>
 
       <div className="bg-white rounded-xl shadow p-6 space-y-4">
-        {/* Demo club + size controls */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
@@ -416,33 +297,6 @@ const JerseyWidget: React.FC = () => {
           </div>
         </div>
 
-        {/* Player name */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-              Player first name
-            </label>
-            <input
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
-              className="w-full border rounded px-3 py-2 text-sm"
-              placeholder="e.g. Bella"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-              Player last name
-            </label>
-            <input
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-              className="w-full border rounded px-3 py-2 text-sm"
-              placeholder="e.g. Smith"
-            />
-          </div>
-        </div>
-
-        {/* YOB + Team */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
@@ -455,55 +309,22 @@ const JerseyWidget: React.FC = () => {
               placeholder="e.g. 2013"
               className="w-full border rounded px-3 py-2 text-sm"
             />
-            {computedAgeGroup && (
-              <div className="mt-1 text-[11px] text-gray-500">
-                Detected age group: {computedAgeGroup}
-              </div>
-            )}
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-              Team (filtered by age group)
+              Preferred jersey number
             </label>
-            <select
-              value={selectedTeamId}
-              onChange={(e) => setSelectedTeamId(e.target.value)}
+            <input
+              type="number"
+              value={preferredNumber}
+              onChange={(e) => setPreferredNumber(e.target.value)}
+              placeholder="e.g. 12"
               className="w-full border rounded px-3 py-2 text-sm"
-              disabled={!computedAgeGroup}
-            >
-              <option value={NOT_ASSIGNED_TEAM_ID}>
-                Team not listed / I am not yet assigned
-              </option>
-              {teamOptions.map((t) => (
-                <option key={t.team_id} value={t.team_id}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-            {!computedAgeGroup && (
-              <div className="mt-1 text-[11px] text-gray-500">
-                Enter YOB to load teams for the correct age group.
-              </div>
-            )}
+            />
           </div>
         </div>
 
-        {/* Preferred number */}
-        <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-            Preferred jersey number
-          </label>
-          <input
-            type="number"
-            value={preferredNumber}
-            onChange={(e) => setPreferredNumber(e.target.value)}
-            placeholder="e.g. 12 (0 allowed)"
-            className="w-full border rounded px-3 py-2 text-sm"
-          />
-        </div>
-
-        {/* Actions */}
         <div className="flex flex-col md:flex-row gap-3">
           <button
             type="button"
@@ -513,6 +334,7 @@ const JerseyWidget: React.FC = () => {
           >
             {checking ? "Checking…" : "Check this number"}
           </button>
+
           <button
             type="button"
             onClick={handleSuggestNumbers}
@@ -523,7 +345,17 @@ const JerseyWidget: React.FC = () => {
           </button>
         </div>
 
-        {/* Messages */}
+        <div className="flex flex-col md:flex-row gap-3">
+          <button
+            type="button"
+            onClick={handleReserve}
+            disabled={reserving}
+            className="flex-1 px-4 py-2 rounded bg-emerald-600 text-white text-sm font-semibold disabled:bg-gray-400"
+          >
+            {reserving ? "Reserving…" : "Confirm and Reserve (creates pending allocation)"}
+          </button>
+        </div>
+
         {error && (
           <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
             {error}
@@ -536,14 +368,23 @@ const JerseyWidget: React.FC = () => {
           </div>
         )}
 
-        {/* Suggestions */}
+        {(reservationResult.pendingAllocationId || reservationResult.inventoryId) && (
+          <div className="text-[12px] text-gray-700 bg-gray-50 border border-gray-200 rounded p-3">
+            <div>
+              <strong>Pending Allocation ID:</strong>{" "}
+              {reservationResult.pendingAllocationId ?? "—"}
+            </div>
+            <div>
+              <strong>Inventory ID:</strong> {reservationResult.inventoryId ?? "—"}
+            </div>
+          </div>
+        )}
+
         {suggestions.length > 0 && (
           <div>
-            {usedTeamFallback && (
-              <div className="mb-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
-                Fallback options: no age-group-safe numbers available.
-              </div>
-            )}
+            <h2 className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
+              Suggested clash-free numbers with stock ({clubName}, size {selectedSize || "—"})
+            </h2>
             <div className="flex flex-wrap gap-2">
               {suggestions.map((s) => (
                 <button
@@ -559,8 +400,7 @@ const JerseyWidget: React.FC = () => {
           </div>
         )}
 
-        {/* Optional internal debug */}
-        {stockBySize.length > 0 && preferredNumber !== "" && (
+        {stockBySize.length > 0 && preferredNumber.trim().length > 0 && (
           <div>
             <h2 className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
               Internal view: inventory for #{preferredNumber} in {clubName}
