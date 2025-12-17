@@ -69,6 +69,13 @@ const JerseyWidget: React.FC = () => {
     null
   );
 
+  // Tick state so the countdown updates every second
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const clubName = useMemo(
     () => clubs.find((c) => c.id === selectedClubId)?.name ?? "Selected club",
     [clubs, selectedClubId]
@@ -85,17 +92,24 @@ const JerseyWidget: React.FC = () => {
     if (!reservedMeta.expiresAtIso) return true;
     const exp = new Date(reservedMeta.expiresAtIso).getTime();
     if (!Number.isFinite(exp)) return true;
-    return Date.now() < exp;
-  }, [reservedMeta]);
+    return nowMs < exp;
+  }, [reservedMeta, nowMs]);
 
   const reservedCountdown = useMemo(() => {
     if (!reservedActive || !reservedMeta?.expiresAtIso) return null;
     const expMs = new Date(reservedMeta.expiresAtIso).getTime();
-    const diff = expMs - Date.now();
+    const diff = expMs - nowMs;
     const mins = Math.max(0, Math.floor(diff / 60000));
     const secs = Math.max(0, Math.floor((diff % 60000) / 1000));
     return `${mins}:${String(secs).padStart(2, "0")}`;
-  }, [reservedActive, reservedMeta]);
+  }, [reservedActive, reservedMeta, nowMs]);
+
+  const reservedExpiresLabel = useMemo(() => {
+    if (!reservedMeta?.expiresAtIso) return null;
+    const d = new Date(reservedMeta.expiresAtIso);
+    if (!Number.isFinite(d.getTime())) return null;
+    return d.toLocaleString();
+  }, [reservedMeta?.expiresAtIso]);
 
   const clearTransientOutputs = () => {
     setStatusMessage("");
@@ -380,7 +394,6 @@ const JerseyWidget: React.FC = () => {
 
       setStockBySize(result.stockBySize);
 
-      // HARD BLOCK LOGIC (UI decision)
       if (result.clashes.length > 0) {
         setStatusMessage(
           "This number is not available for this age group. Please choose one of the suggested numbers."
@@ -394,7 +407,6 @@ const JerseyWidget: React.FC = () => {
         return;
       }
 
-      // If no clash, still require stock in the selected size
       const hasStockInSelectedSize =
         result.stockBySize.find((s) => s.size === selectedSize)?.count ?? 0;
 
@@ -471,7 +483,6 @@ const JerseyWidget: React.FC = () => {
 
     const { yob, num } = validated;
 
-    // safety: do a hard-block check right before reserving
     setReserving(true);
     try {
       const check = await smartCheckNumber(selectedClubId, num, {
@@ -519,7 +530,6 @@ const JerseyWidget: React.FC = () => {
         inventoryId: result.inventoryId,
       });
 
-      // Store ONE active reservation for this session
       const expiresAtIso = new Date(Date.now() + 15 * 60 * 1000).toISOString();
       const stored: StoredReservation = {
         clubId: selectedClubId,
@@ -544,7 +554,6 @@ const JerseyWidget: React.FC = () => {
     }
   };
 
-  // Optional escape hatch: cancel reservation (best-effort)
   const handleClearReservation = async () => {
     setError(null);
 
@@ -558,13 +567,11 @@ const JerseyWidget: React.FC = () => {
     const inventoryId = reservedMeta.inventoryId;
 
     try {
-      // Mark pending allocation cancelled
       await supabase
         .from("pending_allocations")
         .update({ status: "cancelled" })
         .eq("id", pendingId);
 
-      // Put inventory back to Available (best-effort)
       await supabase
         .from("inventory")
         .update({
@@ -600,7 +607,6 @@ const JerseyWidget: React.FC = () => {
       </p>
 
       <div className="bg-white rounded-xl shadow p-6 space-y-4">
-        {/* Reservation banner (locks UI to ONE reservation) */}
         {reservedActive && reservedMeta && (
           <div className="text-sm bg-amber-50 border border-amber-200 rounded p-3">
             <div className="font-semibold text-amber-900">
@@ -614,6 +620,11 @@ const JerseyWidget: React.FC = () => {
                 </span>
               ) : null}
             </div>
+            {reservedExpiresLabel && (
+              <div className="text-[12px] text-amber-700 mt-1">
+                Expires at: {reservedExpiresLabel}
+              </div>
+            )}
             <div className="mt-2">
               <button
                 type="button"
