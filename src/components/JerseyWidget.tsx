@@ -7,8 +7,6 @@ import {
   NumberSuggestion,
   reserveNumberForPurchase,
   suggestNumbersForClubRanked,
-  cancelReservation,
-  finalizeReservationForOrder,
 } from "../services/allocation";
 
 interface Club {
@@ -24,13 +22,9 @@ interface TeamOption {
 }
 
 const SEASON_YEAR = 2025;
+const HOLD_MINUTES = 15;
 
-const formatMsAsMMSS = (ms: number) => {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-};
+type ReservationState = "idle" | "reserved" | "purchased";
 
 const JerseyWidget: React.FC = () => {
   // Demo-only controls
@@ -56,14 +50,15 @@ const JerseyWidget: React.FC = () => {
   const [checking, setChecking] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [reserving, setReserving] = useState(false);
-  const [finalizing, setFinalizing] = useState(false);
 
-  const [reservationResult, setReservationResult] = useState<{
+  // Reservation UI lock state
+  const [reservationState, setReservationState] = useState<ReservationState>("idle");
+  const [reservationMeta, setReservationMeta] = useState<{
     pendingAllocationId?: string;
     inventoryId?: string;
-    expiresAtIso?: string;
-    reservedNumber?: number;
-    reservedSize?: string;
+    expiresAtMs?: number; // local countdown source of truth
+    jerseyNumber?: number;
+    size?: string;
   }>({});
 
   const clubName = useMemo(
@@ -72,45 +67,19 @@ const JerseyWidget: React.FC = () => {
   );
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
-  const yobValid = useMemo(
-    () => Number.isFinite(yobNum) && yobNum >= 1900,
-    [yobNum]
-  );
-
-  const isReserved = useMemo(
-    () => Boolean(reservationResult.pendingAllocationId),
-    [reservationResult.pendingAllocationId]
-  );
-
-  const remainingMs = useMemo(() => {
-    if (!reservationResult.expiresAtIso) return 0;
-    const t = Date.parse(reservationResult.expiresAtIso);
-    if (!Number.isFinite(t)) return 0;
-    return Math.max(0, t - Date.now());
-  }, [reservationResult.expiresAtIso]);
-
-  // Tick countdown (UI only)
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!isReserved) return;
-    const id = window.setInterval(() => setTick((x) => x + 1), 250);
-    return () => window.clearInterval(id);
-  }, [isReserved]);
+  const yobValid = useMemo(() => Number.isFinite(yobNum) && yobNum >= 1900, [yobNum]);
 
   const resetOutputs = () => {
     setStatusMessage("");
     setStockBySize([]);
     setSuggestions([]);
-    // IMPORTANT: do not clear reservationResult here - we want the lock to persist
   };
 
-  const clearAll = () => {
-    setStatusMessage("");
-    setStockBySize([]);
-    setSuggestions([]);
-    setReservationResult({});
-    setPreferredNumber("");
-    setSelectedTeamId("");
+  const hardResetAll = () => {
+    setError(null);
+    resetOutputs();
+    setReservationState("idle");
+    setReservationMeta({});
   };
 
   // Load demo clubs (is_client = true)
@@ -189,7 +158,9 @@ const JerseyWidget: React.FC = () => {
 
       try {
         const targetAge = SEASON_YEAR - yobNum;
-        const minYob = SEASON_YEAR - targetAge; // exact cohort only
+
+        // Exact cohort only (same age group)
+        const minYob = SEASON_YEAR - targetAge;
         const maxYob = SEASON_YEAR - targetAge;
 
         const { data, error } = await supabase
@@ -214,8 +185,11 @@ const JerseyWidget: React.FC = () => {
           const label = labelRaw || teamId;
 
           const existing = counts.get(teamId);
-          if (!existing) counts.set(teamId, { value: teamId, label, count: 1 });
-          else existing.count += 1;
+          if (!existing) {
+            counts.set(teamId, { value: teamId, label, count: 1 });
+          } else {
+            existing.count += 1;
+          }
         }
 
         const list = Array.from(counts.values()).sort((a, b) => {
@@ -275,7 +249,6 @@ const JerseyWidget: React.FC = () => {
     });
 
     setSuggestions(ranked);
-
     if (ranked.length === 0) {
       setStatusMessage(
         `No available clash-free numbers found for size ${selectedSize} in this age group.`
@@ -306,7 +279,7 @@ const JerseyWidget: React.FC = () => {
 
       setStockBySize(result.stockBySize);
 
-      // HARD BLOCK LOGIC
+      // HARD BLOCK: clash in same cohort => not available
       if (result.clashes.length > 0) {
         setStatusMessage(
           "This number is not available for this age group. Please choose one of the suggested numbers."
@@ -320,7 +293,7 @@ const JerseyWidget: React.FC = () => {
         return;
       }
 
-      // Require stock in selected size
+      // Must have stock in selected size
       const hasStockInSelectedSize =
         result.stockBySize.find((s) => s.size === selectedSize)?.count ?? 0;
 
@@ -376,14 +349,7 @@ const JerseyWidget: React.FC = () => {
 
   const handleReserve = async () => {
     setError(null);
-    setStatusMessage("");
-    setStockBySize([]);
-    setSuggestions([]);
-
-    if (isReserved) {
-      setError("A number is already reserved. Please add to cart or change number.");
-      return;
-    }
+    resetOutputs();
 
     const validated = validateCore();
     if (!validated) return;
@@ -392,7 +358,7 @@ const JerseyWidget: React.FC = () => {
 
     setReserving(true);
     try {
-      // Safety: hard-block check right before reserving
+      // Re-check immediately before reserving
       const check = await smartCheckNumber(selectedClubId, num, {
         seasonYear: SEASON_YEAR,
         yearOfBirth: yob,
@@ -400,9 +366,7 @@ const JerseyWidget: React.FC = () => {
       });
 
       if (check.clashes.length > 0) {
-        setError(
-          "That number is not available for this age group. Please pick a suggested number."
-        );
+        setError("That number is not available for this age group. Please pick a suggested number.");
         await runRankedSuggestions();
         return;
       }
@@ -411,9 +375,7 @@ const JerseyWidget: React.FC = () => {
         check.stockBySize.find((s) => s.size === selectedSize)?.count ?? 0;
 
       if (hasStockInSelectedSize <= 0) {
-        setError(
-          "That number has no available stock in this size. Please pick a suggested number."
-        );
+        setError("That number has no available stock in this size. Please pick a suggested number.");
         await runRankedSuggestions();
         return;
       }
@@ -425,7 +387,7 @@ const JerseyWidget: React.FC = () => {
         seasonYear: SEASON_YEAR,
         yearOfBirth: yob,
         teamId: selectedTeamId ? selectedTeamId : null,
-        expiresMinutes: 15,
+        expiresMinutes: HOLD_MINUTES,
       });
 
       if (!result.success) {
@@ -433,16 +395,18 @@ const JerseyWidget: React.FC = () => {
         return;
       }
 
-      setReservationResult({
+      // Lock widget after 1 reservation
+      setReservationState("reserved");
+      setReservationMeta({
         pendingAllocationId: result.pendingAllocationId,
         inventoryId: result.inventoryId,
-        expiresAtIso: result.expiresAtIso,
-        reservedNumber: num,
-        reservedSize: selectedSize,
+        expiresAtMs: Date.now() + HOLD_MINUTES * 60_000, // local countdown (fixes 00:00 bug)
+        jerseyNumber: num,
+        size: selectedSize,
       });
 
       setStatusMessage(
-        `Reserved jersey #${num} (${selectedSize}). Hold created for 15 minutes.`
+        `Reserved jersey #${num} (${selectedSize}). Please click add to cart.`
       );
     } catch (err: any) {
       console.error("JerseyWidget handleReserve error", err);
@@ -452,75 +416,81 @@ const JerseyWidget: React.FC = () => {
     }
   };
 
-  const handleCancelReservation = async () => {
-    setError(null);
-    setStatusMessage("");
-
-    if (!reservationResult.pendingAllocationId) {
-      setError("No active reservation to cancel.");
-      return;
-    }
-
-    const pendingId = reservationResult.pendingAllocationId;
-
-    setReserving(true);
-    try {
-      const result = await cancelReservation({ pendingAllocationId: pendingId });
-
-      if (!result.success) {
-        setError(result.message ?? "Failed to cancel reservation.");
-        return;
-      }
-
-      setReservationResult({});
-      setStatusMessage("Reservation cancelled. You can choose another number.");
-    } catch (err: any) {
-      console.error("handleCancelReservation error", err);
-      setError(err.message ?? "Failed to cancel reservation.");
-    } finally {
-      setReserving(false);
-    }
-  };
-
-  const handleSimulateAddToCart = async () => {
-    setError(null);
-    setStatusMessage("");
-
-    if (!reservationResult.pendingAllocationId) {
-      setError("No active reservation. Please reserve a number first.");
-      return;
-    }
-
-    setFinalizing(true);
-    try {
-      const orderRef = `demo-${Date.now()}`;
-      const result = await finalizeReservationForOrder({
-        pendingAllocationId: reservationResult.pendingAllocationId,
-        orderRef,
-      });
-
-      if (!result.success) {
-        setError(result.message ?? "Failed to finalize reservation.");
-        return;
-      }
-
-      setStatusMessage(
-        `Simulated Add to Cart complete. Reservation marked purchased (orderRef: ${orderRef}).`
-      );
-    } catch (err: any) {
-      console.error("handleSimulateAddToCart error", err);
-      setError(err.message ?? "Failed to simulate add to cart.");
-    } finally {
-      setFinalizing(false);
-    }
-  };
-
   const handleUseSuggestion = (num: number) => {
     setPreferredNumber(String(num));
     setStatusMessage(`Selected #${num}. Now click Confirm and Reserve.`);
   };
 
-  const lockInputs = isReserved;
+  // Countdown UI
+  const [countdownLabel, setCountdownLabel] = useState<string>("");
+
+  useEffect(() => {
+    if (reservationState !== "reserved") {
+      setCountdownLabel("");
+      return;
+    }
+
+    const tick = () => {
+      const expiresAtMs = reservationMeta.expiresAtMs;
+      if (!expiresAtMs) {
+        setCountdownLabel("");
+        return;
+      }
+
+      const remainingMs = Math.max(0, expiresAtMs - Date.now());
+      const totalSeconds = Math.floor(remainingMs / 1000);
+      const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+      const ss = String(totalSeconds % 60).padStart(2, "0");
+      setCountdownLabel(`${mm}:${ss}`);
+
+      if (remainingMs <= 0) {
+        // UI-only: backend cron actually expires/returns stock
+        // We just show the timer at 00:00 until user refreshes / changes flow.
+      }
+    };
+
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [reservationState, reservationMeta.expiresAtMs]);
+
+  // Demo "Simulate add to cart" (marks pending allocation as purchased)
+  const handleSimulateAddToCart = async () => {
+    setError(null);
+
+    if (!reservationMeta.pendingAllocationId) {
+      setError("No pending allocation found. Reserve a number first.");
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from("pending_allocations")
+        .update({ status: "purchased" })
+        .eq("id", reservationMeta.pendingAllocationId);
+
+      if (error) {
+        console.error("simulate add-to-cart update error", error);
+        setError("Failed to mark pending allocation as purchased.");
+        return;
+      }
+
+      setReservationState("purchased");
+      setStatusMessage("Simulated add-to-cart: reservation marked as purchased. Inventory remains allocated.");
+    } catch (err: any) {
+      console.error("handleSimulateAddToCart error", err);
+      setError(err.message ?? "Failed to simulate add to cart.");
+    }
+  };
+
+  // Allow user to cancel the reservation in-demo (UI only - real cancel would update DB)
+  const handleChangeNumber = () => {
+    // In production, we'd explicitly cancel pending_allocations row and return inventory.
+    // In demo, keep it simple: allow a new flow after manual expiry/cancel tooling.
+    hardResetAll();
+  };
+
+  const inputsLocked = reservationState !== "idle";
 
   return (
     <div className="max-w-xl mx-auto">
@@ -530,35 +500,52 @@ const JerseyWidget: React.FC = () => {
       </p>
 
       <div className="bg-white rounded-xl shadow p-6 space-y-4">
-        {/* Amber banner when reserved */}
-        {isReserved && (
-          <div className="text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded p-3">
-            <div className="font-semibold">
-              Reserved: #{reservationResult.reservedNumber} ({reservationResult.reservedSize})
+        {/* Amber banner - after a reservation */}
+        {reservationState === "reserved" && (
+          <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded p-3">
+            <div className="font-semibold">Reserved - ready to add to cart</div>
+            <div className="mt-1">
+              Jersey #{reservationMeta.jerseyNumber} ({reservationMeta.size})
             </div>
-            <div className="text-[13px] mt-1">
-              Hold expires in <strong>{formatMsAsMMSS(remainingMs)}</strong>. Please click Add to Cart.
+            <div className="mt-1">
+              Hold expires in <span className="font-semibold">{countdownLabel || "—"}</span>
             </div>
-
-            <div className="mt-3 flex flex-col sm:flex-row gap-2">
+            <div className="mt-2 flex gap-2">
               <button
                 type="button"
                 onClick={handleSimulateAddToCart}
-                disabled={finalizing}
-                className="px-3 py-2 rounded bg-amber-600 text-white text-sm font-semibold disabled:bg-gray-400"
+                className="px-3 py-1.5 rounded bg-amber-600 text-white text-xs font-semibold"
               >
-                {finalizing ? "Simulating…" : "Simulate Add to Cart (demo)"}
+                Simulate add to cart (demo)
               </button>
-
               <button
                 type="button"
-                onClick={handleCancelReservation}
-                disabled={reserving}
-                className="px-3 py-2 rounded bg-white border border-amber-300 text-amber-900 text-sm font-semibold disabled:opacity-60"
+                onClick={handleChangeNumber}
+                className="px-3 py-1.5 rounded bg-white border border-amber-300 text-amber-900 text-xs font-semibold"
               >
-                {reserving ? "Working…" : "Change number (cancel reservation)"}
+                Change number (cancel in demo)
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Green banner - after purchase */}
+        {reservationState === "purchased" && (
+          <div className="text-sm text-emerald-900 bg-emerald-50 border border-emerald-200 rounded p-3">
+            <div className="font-semibold">Purchased (simulated)</div>
+            <div className="mt-1">
+              Pending allocation marked as purchased. Inventory remains allocated.
+            </div>
+            <div className="mt-2">
+              You can now refresh / start a new test.
+            </div>
+            <button
+              type="button"
+              onClick={hardResetAll}
+              className="mt-2 px-3 py-1.5 rounded bg-emerald-600 text-white text-xs font-semibold"
+            >
+              Start new test
+            </button>
           </div>
         )}
 
@@ -571,12 +558,11 @@ const JerseyWidget: React.FC = () => {
             <select
               value={selectedClubId}
               onChange={(e) => {
-                if (lockInputs) return;
                 setSelectedClubId(e.target.value);
-                clearAll();
+                hardResetAll();
               }}
-              className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
-              disabled={lockInputs}
+              className="w-full border rounded px-3 py-2 text-sm"
+              disabled={inputsLocked}
             >
               {clubs.length === 0 && <option value="">No client clubs found</option>}
               {clubs.map((c) => (
@@ -594,12 +580,11 @@ const JerseyWidget: React.FC = () => {
             <select
               value={selectedSize}
               onChange={(e) => {
-                if (lockInputs) return;
                 setSelectedSize(e.target.value);
-                resetOutputs();
+                hardResetAll();
               }}
-              className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
-              disabled={lockInputs || sizes.length === 0}
+              className="w-full border rounded px-3 py-2 text-sm"
+              disabled={sizes.length === 0 || inputsLocked}
             >
               {sizes.length === 0 && <option value="">No sizes in inventory</option>}
               {sizes.map((s) => (
@@ -621,13 +606,12 @@ const JerseyWidget: React.FC = () => {
               type="number"
               value={yearOfBirth}
               onChange={(e) => {
-                if (lockInputs) return;
                 setYearOfBirth(e.target.value);
-                resetOutputs();
+                hardResetAll();
               }}
               placeholder="e.g. 2013"
-              className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
-              disabled={lockInputs}
+              className="w-full border rounded px-3 py-2 text-sm"
+              disabled={inputsLocked}
             />
           </div>
 
@@ -637,20 +621,14 @@ const JerseyWidget: React.FC = () => {
             </label>
             <select
               value={selectedTeamId}
-              onChange={(e) => {
-                if (lockInputs) return;
-                setSelectedTeamId(e.target.value);
-              }}
-              className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
-              disabled={lockInputs || !yobValid || teamsLoading}
+              onChange={(e) => setSelectedTeamId(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm"
+              disabled={!yobValid || teamsLoading || inputsLocked}
             >
               {!yobValid && <option value="">Enter YOB to see teams</option>}
               {yobValid && teamsLoading && <option value="">Loading teams…</option>}
               {yobValid && !teamsLoading && (
                 <>
-                  {teams.length === 0 && (
-                    <option value="">Team not listed / not assigned yet</option>
-                  )}
                   {teams.map((t) => (
                     <option key={t.value} value={t.value}>
                       {t.label} ({t.count})
@@ -671,22 +649,21 @@ const JerseyWidget: React.FC = () => {
             type="number"
             value={preferredNumber}
             onChange={(e) => {
-              if (lockInputs) return;
               setPreferredNumber(e.target.value);
               resetOutputs();
             }}
             placeholder="e.g. 12"
-            className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
-            disabled={lockInputs}
+            className="w-full border rounded px-3 py-2 text-sm"
+            disabled={inputsLocked}
           />
         </div>
 
-        {/* Actions (disabled when reserved) */}
+        {/* Actions */}
         <div className="flex flex-col md:flex-row gap-3">
           <button
             type="button"
             onClick={handleCheckNumber}
-            disabled={checking || lockInputs}
+            disabled={checking || inputsLocked}
             className="flex-1 px-4 py-2 rounded bg-indigo-600 text-white text-sm font-semibold disabled:bg-gray-400"
           >
             {checking ? "Checking…" : "Check this number"}
@@ -695,7 +672,7 @@ const JerseyWidget: React.FC = () => {
           <button
             type="button"
             onClick={handleSuggestNumbers}
-            disabled={suggesting || lockInputs}
+            disabled={suggesting || inputsLocked}
             className="flex-1 px-4 py-2 rounded bg-slate-800 text-white text-sm font-semibold disabled:bg-gray-400"
           >
             {suggesting ? "Finding options…" : "Suggest recommended numbers"}
@@ -706,10 +683,10 @@ const JerseyWidget: React.FC = () => {
           <button
             type="button"
             onClick={handleReserve}
-            disabled={reserving || lockInputs}
+            disabled={reserving || inputsLocked}
             className="flex-1 px-4 py-2 rounded bg-emerald-600 text-white text-sm font-semibold disabled:bg-gray-400"
           >
-            {reserving ? "Reserving…" : "Confirm and Reserve (15 min hold)"}
+            {reserving ? "Reserving…" : `Confirm and Reserve (${HOLD_MINUTES} min hold)`}
           </button>
         </div>
 
@@ -720,30 +697,14 @@ const JerseyWidget: React.FC = () => {
           </div>
         )}
 
-        {statusMessage && (
+        {statusMessage && reservationState === "idle" && (
           <div className="text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 rounded p-3">
             {statusMessage}
           </div>
         )}
 
-        {/* Reservation debug */}
-        {(reservationResult.pendingAllocationId || reservationResult.inventoryId) && (
-          <div className="text-[12px] text-gray-700 bg-gray-50 border border-gray-200 rounded p-3">
-            <div>
-              <strong>Pending Allocation ID:</strong>{" "}
-              {reservationResult.pendingAllocationId ?? "—"}
-            </div>
-            <div>
-              <strong>Inventory ID:</strong> {reservationResult.inventoryId ?? "—"}
-            </div>
-            <div>
-              <strong>Expires At:</strong> {reservationResult.expiresAtIso ?? "—"}
-            </div>
-          </div>
-        )}
-
         {/* Suggestions */}
-        {suggestions.length > 0 && (
+        {suggestions.length > 0 && reservationState === "idle" && (
           <div>
             <h2 className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
               Recommended numbers ({clubName}, size {selectedSize || "—"})
@@ -754,8 +715,7 @@ const JerseyWidget: React.FC = () => {
                   key={s.jersey_number}
                   type="button"
                   onClick={() => handleUseSuggestion(s.jersey_number)}
-                  className="px-3 py-1 rounded-full text-xs border border-emerald-500 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60"
-                  disabled={lockInputs}
+                  className="px-3 py-1 rounded-full text-xs border border-emerald-500 text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
                   title={typeof s.score === "number" ? `Score: ${s.score}` : undefined}
                 >
                   #{s.jersey_number} · {s.total_stock} in stock
@@ -766,7 +726,7 @@ const JerseyWidget: React.FC = () => {
         )}
 
         {/* Stock debug */}
-        {stockBySize.length > 0 && preferredNumber.trim().length > 0 && (
+        {stockBySize.length > 0 && preferredNumber.trim().length > 0 && reservationState === "idle" && (
           <div>
             <h2 className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
               Internal view: inventory for #{preferredNumber} in {clubName}
