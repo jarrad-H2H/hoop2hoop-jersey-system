@@ -194,15 +194,6 @@ export async function suggestNumbersForClub(
 
 /**
  * NEW: Ranked suggestions (size-aware + cohort-aware + reservation-aware).
- *
- * Rules:
- * - Must have Available stock in selected size.
- * - Must not clash in SAME age group (cohortWindowYears applies).
- * - Must not already be RESERVED (pending_allocations) in same cohort.
- * Ranking:
- * - Prefer numbers with more stock depth in that size.
- * - Avoid numbers heavily used in adjacent cohorts (spillover risk).
- * - Light penalty for "popular low numbers" (encourage entropy).
  */
 export async function suggestNumbersForClubRanked(input: {
   clubId: string;
@@ -242,7 +233,6 @@ export async function suggestNumbersForClubRanked(input: {
   const candidateNums = Array.from(stockCounts.keys());
   if (candidateNums.length === 0) return [];
 
-  // Helper to compute YOB range for an age range
   const yobForAge = (age: number) => input.seasonYear - age;
 
   // 2) Players in same cohort window (hard block list)
@@ -343,13 +333,8 @@ export async function suggestNumbersForClubRanked(input: {
     const stockDepth = stockCounts.get(n) ?? 0;
     const adjUse = adjCounts.get(n) ?? 0;
 
-    // Mild penalty for low numbers (popular picks) to improve entropy
     const lowNumberPenalty = n >= 0 && n <= 10 ? 2 : 0;
 
-    // Score design:
-    // - adjacent usage is the biggest risk driver (x100)
-    // - low-number penalty small
-    // - higher stock depth reduces score
     const score = adjUse * 100 + lowNumberPenalty * 10 - stockDepth * 2;
 
     scored.push({ jersey_number: n, total_stock: stockDepth, score });
@@ -400,7 +385,8 @@ export async function allocateNumberForClub(
       status: "Allocated",
       allocation_date: new Date().toISOString(),
     })
-    .eq("id", inventoryId);
+    .eq("id", inventoryId)
+    .eq("status", "Available"); // guard against race
 
   if (updateError) {
     console.error("allocateNumberForClub update error", updateError);
@@ -552,6 +538,163 @@ export async function reserveNumberForPurchase(input: {
     pendingAllocationId: pending.row.id,
     inventoryId: alloc.inventoryId,
   };
+}
+
+/**
+ * NEW: Cancel a reservation (used by "Change number" in widget demo).
+ * - Marks pending_allocation cancelled (only if still reserved and unexpired)
+ * - Returns the inventory row to Available
+ */
+export async function cancelReservation(input: {
+  pendingAllocationId: string;
+}): Promise<{ success: boolean; message: string }> {
+  const { data: pending, error: pErr } = await supabase
+    .from("pending_allocations")
+    .select("*")
+    .eq("id", input.pendingAllocationId)
+    .limit(1);
+
+  if (pErr) {
+    console.error("cancelReservation pending load error", pErr);
+    return { success: false, message: "Failed to load pending allocation." };
+  }
+
+  const row = (pending ?? [])[0] as PendingAllocationRow | undefined;
+  if (!row) return { success: false, message: "Pending allocation not found." };
+
+  const expiresAt = Date.parse(String(row.expires_at));
+  const now = Date.now();
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+    return { success: false, message: "This reservation has already expired." };
+  }
+  if (row.status !== "reserved") {
+    return { success: false, message: `This reservation is not cancellable (status: ${row.status}).` };
+  }
+
+  // Mark pending cancelled
+  const { error: updPendingErr } = await supabase
+    .from("pending_allocations")
+    .update({ status: "cancelled" })
+    .eq("id", row.id)
+    .eq("status", "reserved");
+
+  if (updPendingErr) {
+    console.error("cancelReservation pending update error", updPendingErr);
+    return { success: false, message: "Failed to cancel the reservation record." };
+  }
+
+  // Return inventory to available
+  const { error: invErr } = await supabase
+    .from("inventory")
+    .update({
+      status: "Available",
+      allocated_player_id: null,
+      allocation_date: null,
+      return_date_due: null,
+    })
+    .eq("id", row.inventory_id);
+
+  if (invErr) {
+    console.error("cancelReservation inventory update error", invErr);
+    return { success: false, message: "Reservation cancelled, but failed to return inventory to available." };
+  }
+
+  await logAllocationEvent({
+    allocation_type: "return",
+    club_id: row.club_id,
+    player_id: null,
+    jersey_number: row.jersey_number,
+    size: row.size,
+    note: "Reservation cancelled (widget demo) - returned to stock",
+  });
+
+  return { success: true, message: "Reservation cancelled. Inventory returned to available." };
+}
+
+/**
+ * NEW: Finalize a reservation as "Purchased" (simulates Add to Cart completion).
+ * - Marks pending_allocation purchased (only if still reserved and unexpired)
+ * - Keeps inventory Allocated (do NOT return to stock)
+ * - Logs an audit event (note only - we keep allocation_type = 'new' already recorded at reserve time)
+ *
+ * Later, when Shopify is wired in, this is the function we'll call at Add-to-Cart (or Order Created).
+ */
+export async function finalizeReservationForOrder(input: {
+  pendingAllocationId: string;
+  orderRef?: string | null; // optional demo reference
+}): Promise<{ success: boolean; message: string }> {
+  const { data: pending, error: pErr } = await supabase
+    .from("pending_allocations")
+    .select("*")
+    .eq("id", input.pendingAllocationId)
+    .limit(1);
+
+  if (pErr) {
+    console.error("finalizeReservationForOrder pending load error", pErr);
+    return { success: false, message: "Failed to load pending allocation." };
+  }
+
+  const row = (pending ?? [])[0] as PendingAllocationRow | undefined;
+  if (!row) return { success: false, message: "Pending allocation not found." };
+
+  const expiresAt = Date.parse(String(row.expires_at));
+  const now = Date.now();
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+    return { success: false, message: "This reservation has expired. Please reserve again." };
+  }
+  if (row.status !== "reserved") {
+    return { success: false, message: `This reservation cannot be finalized (status: ${row.status}).` };
+  }
+
+  // Mark pending as purchased
+  const { error: updPendingErr } = await supabase
+    .from("pending_allocations")
+    .update({ status: "purchased" })
+    .eq("id", row.id)
+    .eq("status", "reserved");
+
+  if (updPendingErr) {
+    console.error("finalizeReservationForOrder pending update error", updPendingErr);
+    return { success: false, message: "Failed to mark reservation as purchased." };
+  }
+
+  // Ensure inventory is still allocated (guard)
+  const { data: invRow, error: invReadErr } = await supabase
+    .from("inventory")
+    .select("id, status")
+    .eq("id", row.inventory_id)
+    .limit(1);
+
+  if (invReadErr) {
+    console.error("finalizeReservationForOrder inventory read error", invReadErr);
+    return { success: false, message: "Purchased, but failed to verify inventory status." };
+  }
+
+  const inv = (invRow ?? [])[0] as any;
+  if (!inv) {
+    return { success: false, message: "Purchased, but inventory row not found." };
+  }
+
+  if (String(inv.status) !== "Allocated") {
+    // We don't auto-fix here - safer to alert than to mutate unexpectedly
+    return {
+      success: false,
+      message: `Reservation marked purchased, but inventory status is '${inv.status}'. Check for manual intervention.`,
+    };
+  }
+
+  await logAllocationEvent({
+    allocation_type: "new",
+    club_id: row.club_id,
+    player_id: null,
+    jersey_number: row.jersey_number,
+    size: row.size,
+    note: input.orderRef
+      ? `Purchased (simulated) - orderRef: ${input.orderRef}`
+      : "Purchased (simulated) - finalize reservation",
+  });
+
+  return { success: true, message: "Reservation finalized as purchased. Inventory remains allocated." };
 }
 
 /**
