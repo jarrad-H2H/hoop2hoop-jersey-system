@@ -488,7 +488,7 @@ const BulkStockUpload: React.FC = () => {
                 Size Manager
               </h2>
               <p className="text-xs text-gray-500">
-                Rename sizes to match Shopify labels (eg Youth 12 -> Y12) or add new sizes for this club.
+                Rename sizes to match Shopify labels (eg Youth 12 &rarr; Y12) or add new sizes for this club.
                 Renames update inventory + allocations + pending allocations.
               </p>
             </div>
