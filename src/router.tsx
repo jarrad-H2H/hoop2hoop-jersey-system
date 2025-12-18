@@ -26,6 +26,9 @@ const AppRouter: React.FC = () => {
       {/* Public route */}
       <Route path="/login" element={<Login />} />
 
+      {/* ✅ Public embed route (NO login) */}
+      <Route path="/embed/widget-demo" element={<WidgetDemo />} />
+
       {/* Protected admin area */}
       <Route
         path="/admin"
@@ -59,11 +62,8 @@ const AppRouter: React.FC = () => {
         {/* Stock Planner */}
         <Route path="stock-planner" element={<StockPlanner />} />
 
-        {/* 🔥 NEW BULK UPLOAD ROUTE */}
-        <Route
-          path="inventory/bulk-upload/:clubId"
-          element={<BulkStockUpload />}
-        />
+        {/* Bulk upload */}
+        <Route path="inventory/bulk-upload/:clubId" element={<BulkStockUpload />} />
 
         {/* Widget Demo */}
         <Route path="widget-demo" element={<WidgetDemo />} />
