@@ -1,50 +1,830 @@
-const moveSizeRow = (rowId: string, direction: "up" | "down") => {
-  setSizeRows((prev) => {
-    const idx = prev.findIndex((r) => r.id === rowId);
-    if (idx === -1) return prev;
+// FILE: src/pages/BulkStockUpload.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import { supabase } from "../services/supabase";
 
-    const targetIdx = direction === "up" ? idx - 1 : idx + 1;
-    if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+interface Club {
+  id: string;
+  name: string;
+  is_client: boolean;
+}
 
-    const next = [...prev];
-    const tmp = next[idx];
-    next[idx] = next[targetIdx];
-    next[targetIdx] = tmp;
+interface ClubSizeRow {
+  id: string;
+  size_label: string;
+  sort_order: number | null;
 
-    // keep sort_order aligned in UI immediately (1..N)
-    return next.map((r, i) => ({ ...r, sort_order: i + 1 }));
-  });
+  // UI-only fields for stock upload:
+  numbersInput: string;
+  quantityInput: string;
 
-  setSuccessMessage("");
-  setError(null);
-};
+  // UI-only fields for editing size labels:
+  isEditing?: boolean;
+  draftLabel?: string;
+}
 
-const saveSizeOrder = async () => {
-  if (!selectedClubId) return;
+const BulkStockUpload: React.FC = () => {
+  const [clubs, setClubs] = useState<Club[]>([]);
+  const [selectedClubId, setSelectedClubId] = useState<string>("");
 
-  setSubmitting(true);
-  setError(null);
-  setSuccessMessage("");
+  const [sizeRows, setSizeRows] = useState<ClubSizeRow[]>([]);
 
-  try {
-    // Persist sort_order for each club_size row
-    const updates = sizeRows.map((r, index) => ({
-      id: r.id,
-      sort_order: index + 1,
-    }));
+  const [loadingClubs, setLoadingClubs] = useState(false);
+  const [loadingSizes, setLoadingSizes] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-    const { error } = await supabase.from("club_sizes").upsert(updates, {
-      onConflict: "id",
-    });
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string>("");
 
-    if (error) {
-      console.error("saveSizeOrder error", error);
-      setError("Failed to save size order.");
+  // Add-size UI
+  const [newSizeLabel, setNewSizeLabel] = useState<string>("");
+
+  const selectedClubName = useMemo(
+    () => clubs.find((c) => c.id === selectedClubId)?.name ?? "",
+    [clubs, selectedClubId]
+  );
+
+  // Load client clubs
+  useEffect(() => {
+    const loadClubs = async () => {
+      setLoadingClubs(true);
+      setError(null);
+
+      try {
+        const { data, error } = await supabase
+          .from("clubs")
+          .select("id, name, is_client")
+          .eq("is_client", true)
+          .order("name", { ascending: true });
+
+        if (error) {
+          console.error("BulkStockUpload loadClubs error", error);
+          setError("Failed to load clubs.");
+          return;
+        }
+
+        const list = (data ?? []) as Club[];
+        setClubs(list);
+        if (list.length > 0) {
+          setSelectedClubId(list[0].id);
+        }
+      } finally {
+        setLoadingClubs(false);
+      }
+    };
+
+    void loadClubs();
+  }, []);
+
+  // Load club_sizes for selected club
+  useEffect(() => {
+    const loadSizes = async () => {
+      if (!selectedClubId) {
+        setSizeRows([]);
+        return;
+      }
+
+      setLoadingSizes(true);
+      setError(null);
+      setSuccessMessage("");
+
+      try {
+        const { data, error } = await supabase
+          .from("club_sizes")
+          .select("id, size_label, sort_order")
+          .eq("club_id", selectedClubId)
+          .order("sort_order", { ascending: true })
+          .order("size_label", { ascending: true });
+
+        if (error) {
+          console.error("BulkStockUpload loadSizes error", error);
+          setError("Failed to load size configuration for this club.");
+          return;
+        }
+
+        const list = (data ?? []) as {
+          id: string;
+          size_label: string;
+          sort_order: number | null;
+        }[];
+
+        if (list.length === 0) {
+          setSizeRows([]);
+          setError(
+            "No size configuration found for this club. Please set up club_sizes first."
+          );
+          return;
+        }
+
+        const rows: ClubSizeRow[] = list
+          .map((row, idx) => ({
+            id: row.id,
+            size_label: row.size_label,
+            sort_order: row.sort_order ?? idx + 1,
+            numbersInput: "",
+            quantityInput: "",
+            isEditing: false,
+            draftLabel: row.size_label,
+          }))
+          // ensure stable ordering even if sort_order nulls exist
+          .sort((a, b) => (a.sort_order ?? 9999) - (b.sort_order ?? 9999));
+
+        setSizeRows(rows);
+      } finally {
+        setLoadingSizes(false);
+      }
+    };
+
+    void loadSizes();
+  }, [selectedClubId]);
+
+  const handleClubChange = (clubId: string) => {
+    setSelectedClubId(clubId);
+    setSizeRows([]);
+    setError(null);
+    setSuccessMessage("");
+    setNewSizeLabel("");
+  };
+
+  const handleNumbersChange = (id: string, value: string) => {
+    setSizeRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, numbersInput: value } : r))
+    );
+  };
+
+  const handleQuantityChange = (id: string, value: string) => {
+    setSizeRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, quantityInput: value } : r))
+    );
+  };
+
+  const handleClear = () => {
+    setSizeRows((prev) =>
+      prev.map((r) => ({
+        ...r,
+        numbersInput: "",
+        quantityInput: "",
+      }))
+    );
+    setError(null);
+    setSuccessMessage("");
+  };
+
+  // ----------------------------
+  // Size label editing + adding
+  // ----------------------------
+  const startEditSize = (id: string) => {
+    setError(null);
+    setSuccessMessage("");
+    setSizeRows((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? { ...r, isEditing: true, draftLabel: r.size_label }
+          : r
+      )
+    );
+  };
+
+  const cancelEditSize = (id: string) => {
+    setSizeRows((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? { ...r, isEditing: false, draftLabel: r.size_label }
+          : r
+      )
+    );
+  };
+
+  const setDraftLabel = (id: string, value: string) => {
+    setSizeRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, draftLabel: value } : r))
+    );
+  };
+
+  const saveSizeLabel = async (row: ClubSizeRow) => {
+    setError(null);
+    setSuccessMessage("");
+
+    if (!selectedClubId) {
+      setError("No club selected.");
       return;
     }
 
-    setSuccessMessage("Size order saved.");
-  } finally {
-    setSubmitting(false);
-  }
+    const oldLabel = (row.size_label ?? "").trim();
+    const newLabel = (row.draftLabel ?? "").trim();
+
+    if (!oldLabel) {
+      setError("Old size label is missing.");
+      return;
+    }
+    if (!newLabel) {
+      setError("New size label cannot be blank.");
+      return;
+    }
+    if (newLabel === oldLabel) {
+      // nothing to do
+      setSizeRows((prev) =>
+        prev.map((r) =>
+          r.id === row.id ? { ...r, isEditing: false } : r
+        )
+      );
+      return;
+    }
+
+    // prevent duplicates within this club
+    const dup = sizeRows.some(
+      (r) =>
+        r.id !== row.id &&
+        (r.size_label ?? "").trim().toLowerCase() === newLabel.toLowerCase()
+    );
+    if (dup) {
+      setError(`A size label "${newLabel}" already exists for this club.`);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      // 1) Update club_sizes label
+      const { error: csErr } = await supabase
+        .from("club_sizes")
+        .update({ size_label: newLabel })
+        .eq("id", row.id);
+
+      if (csErr) {
+        console.error("saveSizeLabel club_sizes error", csErr);
+        setError("Failed to rename size label in club_sizes.");
+        return;
+      }
+
+      // 2) Propagate rename across inventory/allocations/pending_allocations
+      // These updates are scoped to the club and old size label.
+      const { error: invErr } = await supabase
+        .from("inventory")
+        .update({ size: newLabel })
+        .eq("club_id", selectedClubId)
+        .eq("size", oldLabel);
+
+      if (invErr) {
+        console.error("saveSizeLabel inventory error", invErr);
+        setError(
+          "Size label updated in club_sizes, but failed to update inventory. Please contact support / re-run."
+        );
+        return;
+      }
+
+      const { error: allocErr } = await supabase
+        .from("allocations")
+        .update({ size: newLabel })
+        .eq("club_id", selectedClubId)
+        .eq("size", oldLabel);
+
+      if (allocErr) {
+        console.error("saveSizeLabel allocations error", allocErr);
+        setError(
+          "Size label updated in club_sizes, but failed to update allocations. Please contact support / re-run."
+        );
+        return;
+      }
+
+      const { error: pendErr } = await supabase
+        .from("pending_allocations")
+        .update({ size: newLabel })
+        .eq("club_id", selectedClubId)
+        .eq("size", oldLabel);
+
+      // pending_allocations may not exist in some environments - but yours does.
+      if (pendErr) {
+        console.error("saveSizeLabel pending_allocations error", pendErr);
+        setError(
+          "Size label updated in club_sizes, but failed to update pending allocations. Please contact support / re-run."
+        );
+        return;
+      }
+
+      // Update local UI
+      setSizeRows((prev) =>
+        prev.map((r) =>
+          r.id === row.id
+            ? {
+                ...r,
+                size_label: newLabel,
+                draftLabel: newLabel,
+                isEditing: false,
+              }
+            : r
+        )
+      );
+
+      setSuccessMessage(
+        `Renamed size "${oldLabel}" to "${newLabel}" and updated linked records.`
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const addNewSize = async () => {
+    setError(null);
+    setSuccessMessage("");
+
+    if (!selectedClubId) {
+      setError("Please select a club first.");
+      return;
+    }
+
+    const label = newSizeLabel.trim();
+    if (!label) {
+      setError("Please enter a size label to add.");
+      return;
+    }
+
+    const dup = sizeRows.some(
+      (r) => (r.size_label ?? "").trim().toLowerCase() === label.toLowerCase()
+    );
+    if (dup) {
+      setError(`Size "${label}" already exists for this club.`);
+      return;
+    }
+
+    const nextSort =
+      (Math.max(
+        0,
+        ...sizeRows.map((r) => (typeof r.sort_order === "number" ? r.sort_order : 0))
+      ) || 0) + 1;
+
+    setSubmitting(true);
+    try {
+      const payload = {
+        club_id: selectedClubId,
+        size_label: label,
+        sort_order: nextSort,
+      };
+
+      const { data, error } = await supabase
+        .from("club_sizes")
+        .insert(payload)
+        .select("id, size_label, sort_order")
+        .limit(1);
+
+      if (error) {
+        console.error("addNewSize error", error);
+        setError(error.message || "Failed to add new size.");
+        return;
+      }
+
+      const inserted = (data ?? [])[0] as
+        | { id: string; size_label: string; sort_order: number | null }
+        | undefined;
+
+      if (!inserted) {
+        setError("Insert succeeded but returned no row.");
+        return;
+      }
+
+      setSizeRows((prev) => [
+        ...prev,
+        {
+          id: inserted.id,
+          size_label: inserted.size_label,
+          sort_order: inserted.sort_order ?? nextSort,
+          numbersInput: "",
+          quantityInput: "",
+          isEditing: false,
+          draftLabel: inserted.size_label,
+        },
+      ]);
+
+      setNewSizeLabel("");
+      setSuccessMessage(`Added new size "${label}".`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ----------------------------
+  // Re-order sizes (sort_order)
+  // ----------------------------
+  const moveSizeRow = (rowId: string, direction: "up" | "down") => {
+    setError(null);
+    setSuccessMessage("");
+
+    setSizeRows((prev) => {
+      const idx = prev.findIndex((r) => r.id === rowId);
+      if (idx === -1) return prev;
+
+      const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+
+      const next = [...prev];
+      const tmp = next[idx];
+      next[idx] = next[targetIdx];
+      next[targetIdx] = tmp;
+
+      // update sort_order in UI immediately (1..N)
+      return next.map((r, i) => ({ ...r, sort_order: i + 1 }));
+    });
+  };
+
+  const saveSizeOrder = async () => {
+    setError(null);
+    setSuccessMessage("");
+
+    if (!selectedClubId) {
+      setError("Please select a club first.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const updates = sizeRows.map((r, index) => ({
+        id: r.id,
+        sort_order: index + 1,
+      }));
+
+      const { error } = await supabase.from("club_sizes").upsert(updates, {
+        onConflict: "id",
+      });
+
+      if (error) {
+        console.error("saveSizeOrder error", error);
+        setError("Failed to save size order.");
+        return;
+      }
+
+      setSuccessMessage("Size order saved.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ----------------------------
+  // Bulk stock upload
+  // ----------------------------
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccessMessage("");
+
+    if (!selectedClubId) {
+      setError("Please select a club before uploading stock.");
+      return;
+    }
+
+    // Build inventory rows
+    const inventoryRows: {
+      jersey_number: number;
+      size: string;
+      status: string;
+      condition: string;
+      club_id: string;
+    }[] = [];
+
+    for (const row of sizeRows) {
+      const rawQty = row.quantityInput.trim();
+      if (rawQty === "") continue; // no quantity = skip this size
+
+      const qtyNum = Number(rawQty);
+      if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+        console.warn(
+          `Skipping size ${row.size_label} due to invalid quantity: "${row.quantityInput}"`
+        );
+        continue;
+      }
+
+      // Parse numbers; allow "0" as a valid number.
+      const numberStrings = row.numbersInput
+        .split(",")
+        .map((n) => n.trim())
+        .filter((n) => n !== "" && !isNaN(Number(n)));
+
+      if (numberStrings.length === 0) {
+        console.warn(
+          `Skipping size ${row.size_label} because no valid numbers were provided.`
+        );
+        continue;
+      }
+
+      // Round-robin assign numbers so total rows == qtyNum
+      for (let i = 0; i < qtyNum; i++) {
+        const idx = i % numberStrings.length;
+        const nStr = numberStrings[idx];
+        const jerseyNumber = Number(nStr); // 0 is valid
+
+        inventoryRows.push({
+          jersey_number: jerseyNumber,
+          size: row.size_label,
+          status: "Available",
+          condition: "New",
+          club_id: selectedClubId,
+        });
+      }
+    }
+
+    if (inventoryRows.length === 0) {
+      setError(
+        "No valid inventory rows to insert. Please check numbers and quantities."
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const { error: insertError, count } = await supabase
+        .from("inventory")
+        .insert(inventoryRows, { count: "exact" });
+
+      if (insertError) {
+        console.error("BulkStockUpload insert error", insertError);
+        setError(
+          insertError.message ||
+            "Failed to insert inventory rows. Please try again."
+        );
+        return;
+      }
+
+      setSuccessMessage(
+        `Successfully added ${count ?? inventoryRows.length} inventory rows for this club.`
+      );
+
+      // Clear inputs but keep size list
+      setSizeRows((prev) =>
+        prev.map((r) => ({
+          ...r,
+          numbersInput: "",
+          quantityInput: "",
+        }))
+      );
+    } catch (err: any) {
+      console.error("BulkStockUpload handleSubmit error", err);
+      setError(err.message ?? "Unexpected error during bulk upload.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-4">Bulk Stock Upload</h1>
+      <p className="text-sm text-gray-600 mb-6">
+        Seed or adjust jersey inventory for a club in bulk. Sizes are linked to
+        that club&apos;s configured labels to keep everything consistent.
+        Enter comma-separated jersey numbers and a total quantity per size.
+      </p>
+
+      {/* Club selector */}
+      <div className="mb-4">
+        <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+          Club
+        </label>
+        <select
+          value={selectedClubId}
+          onChange={(e) => handleClubChange(e.target.value)}
+          className="border rounded px-3 py-2 min-w-[220px]"
+          disabled={loadingClubs || submitting}
+        >
+          {loadingClubs && <option value="">Loading clubs...</option>}
+          {!loadingClubs && clubs.length === 0 && (
+            <option value="">No client clubs found</option>
+          )}
+          {!loadingClubs &&
+            clubs.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+        </select>
+      </div>
+
+      {/* Errors / status */}
+      {error && (
+        <div className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
+          {error}
+        </div>
+      )}
+      {successMessage && (
+        <div className="mb-4 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-3">
+          {successMessage}
+        </div>
+      )}
+
+      {/* Size management panel */}
+      {!loadingSizes && selectedClubId && (
+        <div className="mb-6 border border-gray-200 rounded-lg bg-white p-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800">
+                Size management for {selectedClubName || "selected club"}
+              </h2>
+              <p className="text-xs text-gray-500">
+                Rename sizes to match Shopify labels (eg Youth 12 {"->"} Y12) or add new sizes for this club.
+                Renames update inventory, allocations, and pending allocations for this club.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newSizeLabel}
+                onChange={(e) => setNewSizeLabel(e.target.value)}
+                placeholder="Add new size (eg YL)"
+                className="border rounded px-3 py-2 text-sm w-[220px]"
+                disabled={submitting}
+              />
+              <button
+                type="button"
+                onClick={addNewSize}
+                disabled={submitting}
+                className="px-3 py-2 rounded bg-indigo-600 text-white text-sm font-semibold disabled:bg-gray-400"
+              >
+                Add size
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Loading or empty state */}
+      {loadingSizes && (
+        <div className="text-sm text-gray-600">Loading sizes…</div>
+      )}
+
+      {!loadingSizes && sizeRows.length === 0 && !error && (
+        <div className="text-sm text-gray-500">
+          No size configuration found for this club.
+        </div>
+      )}
+
+      {/* Size grid + form */}
+      {!loadingSizes && sizeRows.length > 0 && (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-2 mb-2">
+            <h2 className="text-sm font-semibold">
+              Sizes for {selectedClubName || "selected club"}
+            </h2>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={saveSizeOrder}
+                disabled={submitting}
+                className="text-xs px-3 py-1 border rounded text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Save size order
+              </button>
+
+              <button
+                type="button"
+                onClick={handleClear}
+                disabled={submitting}
+                className="text-xs px-3 py-1 border rounded text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Clear All Inputs
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto border rounded bg-white">
+            <table className="min-w-full text-xs">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-3 py-2 text-left w-32">Size</th>
+                  <th className="px-3 py-2 text-left w-40">Manage</th>
+                  <th className="px-3 py-2 text-left w-28">Order</th>
+                  <th className="px-3 py-2 text-left">
+                    Jersey Numbers (comma-separated)
+                  </th>
+                  <th className="px-3 py-2 text-left w-28">Total Quantity</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sizeRows.map((row) => (
+                  <tr
+                    key={row.id}
+                    className="border-t border-gray-100 odd:bg-white even:bg-gray-50"
+                  >
+                    {/* Size label + inline edit */}
+                    <td className="px-3 py-2 align-top font-semibold">
+                      {!row.isEditing && <span>{row.size_label}</span>}
+                      {row.isEditing && (
+                        <input
+                          type="text"
+                          value={row.draftLabel ?? ""}
+                          onChange={(e) => setDraftLabel(row.id, e.target.value)}
+                          className="w-full border rounded px-2 py-1 text-xs"
+                          disabled={submitting}
+                        />
+                      )}
+                    </td>
+
+                    {/* Manage buttons */}
+                    <td className="px-3 py-2 align-top">
+                      {!row.isEditing ? (
+                        <button
+                          type="button"
+                          onClick={() => startEditSize(row.id)}
+                          className="text-xs px-3 py-1 border rounded hover:bg-gray-50"
+                          disabled={submitting}
+                        >
+                          Rename
+                        </button>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => saveSizeLabel(row)}
+                            className="text-xs px-3 py-1 rounded bg-emerald-600 text-white disabled:bg-gray-400"
+                            disabled={submitting}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => cancelEditSize(row.id)}
+                            className="text-xs px-3 py-1 border rounded hover:bg-gray-50 disabled:opacity-50"
+                            disabled={submitting}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </td>
+
+                    {/* Order buttons */}
+                    <td className="px-3 py-2 align-top">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="px-2 py-1 border rounded text-xs hover:bg-gray-50 disabled:opacity-50"
+                          onClick={() => moveSizeRow(row.id, "up")}
+                          disabled={submitting}
+                          title="Move up"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="px-2 py-1 border rounded text-xs hover:bg-gray-50 disabled:opacity-50"
+                          onClick={() => moveSizeRow(row.id, "down")}
+                          disabled={submitting}
+                          title="Move down"
+                        >
+                          ↓
+                        </button>
+                        <span className="text-[11px] text-gray-500">
+                          {row.sort_order ?? "—"}
+                        </span>
+                      </div>
+                    </td>
+
+                    {/* Stock numbers input */}
+                    <td className="px-3 py-2 align-top">
+                      <input
+                        type="text"
+                        value={row.numbersInput}
+                        onChange={(e) =>
+                          handleNumbersChange(row.id, e.target.value)
+                        }
+                        placeholder="e.g. 4, 5, 6, 0"
+                        className="w-full border rounded px-2 py-1 text-xs"
+                        disabled={submitting}
+                      />
+                      <p className="text-[10px] text-gray-500 mt-1">
+                        0 is allowed. Invalid entries will be ignored.
+                      </p>
+                    </td>
+
+                    {/* Stock quantity input */}
+                    <td className="px-3 py-2 align-top">
+                      <input
+                        type="number"
+                        min={0}
+                        value={row.quantityInput}
+                        onChange={(e) =>
+                          handleQuantityChange(row.id, e.target.value)
+                        }
+                        placeholder="e.g. 10"
+                        className="w-full border rounded px-2 py-1 text-xs"
+                        disabled={submitting}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={submitting}
+              className="px-4 py-2 bg-emerald-600 text-white rounded text-sm disabled:bg-gray-400"
+            >
+              {submitting ? "Uploading…" : "Upload Stock to Inventory"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
 };
+
+export default BulkStockUpload;
