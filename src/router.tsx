@@ -26,7 +26,7 @@ const AppRouter: React.FC = () => {
       {/* Public route */}
       <Route path="/login" element={<Login />} />
 
-      {/* ✅ Public embed route (NO login) */}
+      {/* ✅ PUBLIC EMBED ROUTE (Shopify iframe loads this) */}
       <Route path="/embed/widget-demo" element={<WidgetDemo />} />
 
       {/* Protected admin area */}
@@ -65,7 +65,7 @@ const AppRouter: React.FC = () => {
         {/* Bulk upload */}
         <Route path="inventory/bulk-upload/:clubId" element={<BulkStockUpload />} />
 
-        {/* Widget Demo */}
+        {/* Widget Demo (admin view) */}
         <Route path="widget-demo" element={<WidgetDemo />} />
       </Route>
 
