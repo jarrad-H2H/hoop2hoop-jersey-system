@@ -1,31 +1,40 @@
-import React, { useEffect, useState } from 'react';
-import { supabase } from '../services/supabase';
-import { Club } from '../types';
-import { Plus, Check, X, Building2, Search } from 'lucide-react';
+// FILE: src/pages/ClubManager.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import { supabase } from "../services/supabase";
+import { Club } from "../types";
+import { Plus, Check, X, Building2, Search, Pencil } from "lucide-react";
 
 const ClubManager: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [loading, setLoading] = useState(true);
-  const [newClubName, setNewClubName] = useState('');
+
+  const [newClubName, setNewClubName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
+
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // Edit state
+  const [editingClubId, setEditingClubId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const fetchClubs = async () => {
+    setLoading(true);
     const { data, error } = await supabase
-      .from('clubs')
-      .select('*')
-      .order('name', { ascending: true });
+      .from("clubs")
+      .select("*")
+      .order("name", { ascending: true });
 
     if (error) {
-      console.error('Error fetching clubs:', error);
+      console.error("Error fetching clubs:", error);
     } else {
-      setClubs(data || []);
+      setClubs((data || []) as Club[]);
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchClubs();
+    void fetchClubs();
   }, []);
 
   const handleCreateClub = async (e: React.FormEvent) => {
@@ -33,38 +42,84 @@ const ClubManager: React.FC = () => {
     if (!newClubName.trim()) return;
     setIsSubmitting(true);
 
-    const { error } = await supabase.from('clubs').insert([
-      { name: newClubName.trim(), is_client: false }
+    const { error } = await supabase.from("clubs").insert([
+      { name: newClubName.trim(), is_client: false },
     ]);
 
     if (!error) {
-      setNewClubName('');
-      fetchClubs();
+      setNewClubName("");
+      await fetchClubs();
     } else {
-      alert('Error creating club: ' + error.message);
+      alert("Error creating club: " + error.message);
     }
     setIsSubmitting(false);
   };
 
   const toggleClientStatus = async (id: string, currentStatus: boolean) => {
     // Optimistic UI update
-    setClubs(clubs.map(c => c.id === id ? { ...c, is_client: !currentStatus } : c));
+    setClubs((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, is_client: !currentStatus } : c))
+    );
 
     const { error } = await supabase
-      .from('clubs')
+      .from("clubs")
       .update({ is_client: !currentStatus })
-      .eq('id', id);
+      .eq("id", id);
 
     if (error) {
-      console.error('Error updating status:', error);
+      console.error("Error updating status:", error);
       // Revert if error
-      fetchClubs();
+      await fetchClubs();
     }
   };
 
-  const filteredClubs = clubs.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredClubs = useMemo(() => {
+    const needle = searchTerm.trim().toLowerCase();
+    if (!needle) return clubs;
+    return clubs.filter((c) => c.name.toLowerCase().includes(needle));
+  }, [clubs, searchTerm]);
+
+  const startEdit = (club: Club) => {
+    setEditingClubId(club.id);
+    setEditingName(club.name ?? "");
+  };
+
+  const cancelEdit = () => {
+    setEditingClubId(null);
+    setEditingName("");
+    setSavingEdit(false);
+  };
+
+  const saveEdit = async () => {
+    if (!editingClubId) return;
+
+    const nextName = editingName.trim();
+    if (!nextName) return;
+
+    // No-op
+    const existing = clubs.find((c) => c.id === editingClubId);
+    if (existing && (existing.name ?? "").trim() === nextName) {
+      cancelEdit();
+      return;
+    }
+
+    setSavingEdit(true);
+
+    const { error } = await supabase
+      .from("clubs")
+      .update({ name: nextName })
+      .eq("id", editingClubId);
+
+    if (error) {
+      console.error("Error updating club name:", error);
+      alert("Error updating club name: " + error.message);
+      setSavingEdit(false);
+      return;
+    }
+
+    await fetchClubs();
+    cancelEdit();
+  };
 
   return (
     <div className="space-y-6">
@@ -73,6 +128,7 @@ const ClubManager: React.FC = () => {
           <Building2 className="mr-3 text-indigo-600" size={32} />
           Club Manager
         </h1>
+
         <div className="relative">
           <input
             type="text"
@@ -94,7 +150,7 @@ const ClubManager: React.FC = () => {
               {clubs.length} Total
             </span>
           </div>
-          
+
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -104,32 +160,101 @@ const ClubManager: React.FC = () => {
                   <th className="p-4 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr><td colSpan={3} className="p-8 text-center text-gray-500">Loading clubs...</td></tr>
+                  <tr>
+                    <td colSpan={3} className="p-8 text-center text-gray-500">
+                      Loading clubs...
+                    </td>
+                  </tr>
                 ) : filteredClubs.length === 0 ? (
-                  <tr><td colSpan={3} className="p-8 text-center text-gray-500">No clubs found.</td></tr>
+                  <tr>
+                    <td colSpan={3} className="p-8 text-center text-gray-500">
+                      No clubs found.
+                    </td>
+                  </tr>
                 ) : (
-                  filteredClubs.map((club) => (
-                    <tr key={club.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="p-4 font-medium text-gray-900">{club.name}</td>
-                      <td className="p-4 text-center">
-                        <button
-                          onClick={() => toggleClientStatus(club.id, club.is_client)}
-                          className={`inline-flex items-center justify-center w-12 h-6 rounded-full transition-colors ${
-                            club.is_client ? 'bg-green-100' : 'bg-gray-200'
-                          }`}
-                        >
-                          <span className={`transform transition-transform duration-200 ${
-                            club.is_client ? 'translate-x-3 bg-green-500' : '-translate-x-3 bg-gray-400'
-                          } w-4 h-4 rounded-full shadow-sm`}></span>
-                        </button>
-                      </td>
-                      <td className="p-4 text-right">
-                        <button className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">Edit</button>
-                      </td>
-                    </tr>
-                  ))
+                  filteredClubs.map((club) => {
+                    const isEditing = editingClubId === club.id;
+
+                    return (
+                      <tr
+                        key={club.id}
+                        className="hover:bg-gray-50 transition-colors"
+                      >
+                        <td className="p-4 font-medium text-gray-900">
+                          {!isEditing ? (
+                            club.name
+                          ) : (
+                            <input
+                              value={editingName}
+                              onChange={(e) => setEditingName(e.target.value)}
+                              className="w-full max-w-md border border-gray-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                              placeholder="Club name"
+                              autoFocus
+                            />
+                          )}
+                        </td>
+
+                        <td className="p-4 text-center">
+                          <button
+                            onClick={() =>
+                              toggleClientStatus(club.id, club.is_client)
+                            }
+                            className={`inline-flex items-center justify-center w-12 h-6 rounded-full transition-colors ${
+                              club.is_client ? "bg-green-100" : "bg-gray-200"
+                            }`}
+                            title="Toggle client status"
+                          >
+                            <span
+                              className={`transform transition-transform duration-200 ${
+                                club.is_client
+                                  ? "translate-x-3 bg-green-500"
+                                  : "-translate-x-3 bg-gray-400"
+                              } w-4 h-4 rounded-full shadow-sm`}
+                            ></span>
+                          </button>
+                        </td>
+
+                        <td className="p-4 text-right">
+                          {!isEditing ? (
+                            <button
+                              type="button"
+                              onClick={() => startEdit(club)}
+                              className="inline-flex items-center gap-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                            >
+                              <Pencil size={16} />
+                              Edit
+                            </button>
+                          ) : (
+                            <div className="inline-flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={saveEdit}
+                                disabled={savingEdit}
+                                className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-emerald-600 text-white text-sm font-semibold disabled:bg-gray-400"
+                                title="Save"
+                              >
+                                <Check size={16} />
+                                {savingEdit ? "Saving..." : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelEdit}
+                                disabled={savingEdit}
+                                className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-gray-200 text-gray-800 text-sm font-semibold hover:bg-gray-300 disabled:opacity-60"
+                                title="Cancel"
+                              >
+                                <X size={16} />
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -144,7 +269,9 @@ const ClubManager: React.FC = () => {
           <div className="p-6">
             <form onSubmit={handleCreateClub} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Club Name</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Club Name
+                </label>
                 <input
                   type="text"
                   required
@@ -154,6 +281,7 @@ const ClubManager: React.FC = () => {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 />
               </div>
+
               <button
                 type="submit"
                 disabled={isSubmitting}
