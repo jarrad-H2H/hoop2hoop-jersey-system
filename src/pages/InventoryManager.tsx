@@ -1,5 +1,5 @@
 // FILE: src/pages/InventoryManager.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 import { Link } from "react-router-dom";
 
@@ -15,6 +15,12 @@ interface InventoryRow {
   jersey_number: number;
   status: string;
   allocated_player_id: string | null;
+}
+
+interface InventoryBySizeRow {
+  size: string;
+  numbers: number[]; // duplicates preserved
+  totalQty: number;
 }
 
 const InventoryManager: React.FC = () => {
@@ -63,6 +69,47 @@ const InventoryManager: React.FC = () => {
     loadInventory();
   }, [selectedClubId]);
 
+  // Group into one row per size
+  const groupedBySize: InventoryBySizeRow[] = useMemo(() => {
+    const map = new Map<string, number[]>();
+
+    for (const row of inventory) {
+      const size = String(row.size ?? "").trim();
+      if (!size) continue;
+
+      const n = Number(row.jersey_number);
+      if (!Number.isFinite(n)) continue; // allow 0
+
+      const existing = map.get(size);
+      if (!existing) {
+        map.set(size, [n]);
+      } else {
+        existing.push(n);
+      }
+    }
+
+    const rows: InventoryBySizeRow[] = [];
+    for (const [size, numbers] of map.entries()) {
+      numbers.sort((a, b) => a - b);
+      rows.push({
+        size,
+        numbers,
+        totalQty: numbers.length,
+      });
+    }
+
+    // Keep size ordering stable (matches previous .order("size"))
+    rows.sort((a, b) => a.size.localeCompare(b.size, undefined, { numeric: true }));
+
+    return rows;
+  }, [inventory]);
+
+  const renderNumbersCell = (nums: number[]) => {
+    // duplicates preserved e.g. "2, 2, 2, 4, 4"
+    const text = nums.join(", ");
+    return <span className="whitespace-normal break-words">{text}</span>;
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">Inventory Manager</h1>
@@ -107,17 +154,17 @@ const InventoryManager: React.FC = () => {
           <table className="min-w-full text-xs">
             <thead className="bg-gray-100">
               <tr>
-                <th className="px-3 py-2 text-left">Size</th>
-                <th className="px-3 py-2 text-left">Number</th>
-                <th className="px-3 py-2 text-left">Status</th>
+                <th className="px-3 py-2 text-left w-28">Size</th>
+                <th className="px-3 py-2 text-left">Playing numbers in stock</th>
+                <th className="px-3 py-2 text-left w-28">Total qty</th>
               </tr>
             </thead>
             <tbody>
-              {inventory.map((row) => (
-                <tr key={row.id} className="border-t odd:bg-white even:bg-gray-50">
-                  <td className="px-3 py-2">{row.size}</td>
-                  <td className="px-3 py-2">{row.jersey_number}</td>
-                  <td className="px-3 py-2">{row.status}</td>
+              {groupedBySize.map((row) => (
+                <tr key={row.size} className="border-t odd:bg-white even:bg-gray-50 align-top">
+                  <td className="px-3 py-2 font-semibold">{row.size}</td>
+                  <td className="px-3 py-2">{renderNumbersCell(row.numbers)}</td>
+                  <td className="px-3 py-2">{row.totalQty}</td>
                 </tr>
               ))}
             </tbody>
