@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 import {
+  smartCheckNumber,
   suggestNumbersForClubRanked,
   reserveNumberForPurchase,
 } from "../services/allocation";
@@ -30,37 +31,39 @@ function getQueryParam(name: string): string {
 }
 
 const JerseyWidget: React.FC = () => {
-  // If loaded in Shopify iframe, we pass ?club=... (from public/widget.js)
   const clubFromUrl = useMemo(() => getQueryParam("club"), []);
-  const isEmbed = useMemo(() => {
-    // Embed route is /embed/widget-demo (or similar)
-    return window.location.pathname.includes("/embed/");
-  }, []);
+  const isEmbed = useMemo(() => window.location.pathname.includes("/embed/"), []);
 
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
 
-  const [sizes, setSizes] = useState<string[]>([]);
+  // Size must come from Shopify
   const [selectedSize, setSelectedSize] = useState<string>("");
 
   const [yearOfBirth, setYearOfBirth] = useState("");
   const [preferredNumber, setPreferredNumber] = useState("");
 
+  const [teamOptions, setTeamOptions] = useState<string[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<string>("Not sure / not assigned yet");
+
   const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
+  const [pickedNumber, setPickedNumber] = useState<number | null>(null);
+
   const [statusMessage, setStatusMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const [checking, setChecking] = useState(false);
   const [reserving, setReserving] = useState(false);
-  const [reservedNumber, setReservedNumber] = useState<number | null>(null);
+
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [reservedNumber, setReservedNumber] = useState<number | null>(null);
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum > 1900;
 
-  // Styles (so embed looks decent even without Tailwind/Layout)
   const ui = {
     wrap: {
-      maxWidth: 520,
+      maxWidth: 560,
       fontFamily:
         'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"',
       color: "#111827",
@@ -136,9 +139,17 @@ const JerseyWidget: React.FC = () => {
       fontSize: 13,
       cursor: "pointer",
     } as React.CSSProperties,
+    pillActive: {
+      border: "1px solid #111827",
+      background: "#111827",
+      color: "#ffffff",
+    } as React.CSSProperties,
   };
 
-  // Load clubs
+  const selectedClubName =
+    clubs.find((c) => c.id === selectedClubId)?.name ?? "";
+
+  // 1) Load clubs and auto-select from ?club=
   useEffect(() => {
     const loadClubs = async () => {
       const { data, error } = await supabase
@@ -155,7 +166,6 @@ const JerseyWidget: React.FC = () => {
       const list = (data ?? []) as Club[];
       setClubs(list);
 
-      // Auto-select club in embed by matching club name (case-insensitive)
       if (list.length > 0) {
         if (clubFromUrl) {
           const match = list.find(
@@ -171,38 +181,60 @@ const JerseyWidget: React.FC = () => {
     void loadClubs();
   }, [clubFromUrl]);
 
-  // Load sizes for club
+  // 2) Listen for Shopify variant/size updates (sent from public/widget.js)
   useEffect(() => {
-    if (!selectedClubId) return;
+    const onMessage = (event: MessageEvent) => {
+      try {
+        const data: any = event?.data;
+        if (!data || data.type !== "h2h:variantChanged") return;
 
-    const loadSizes = async () => {
-      setError(null);
+        const size = String(data.size || "").trim();
+        setSelectedSize(size);
 
-      const { data, error } = await supabase
-        .from("inventory")
-        .select("size")
-        .eq("club_id", selectedClubId)
-        .eq("status", "Available");
-
-      if (error) {
-        setSizes([]);
-        setSelectedSize("");
-        setError("Unable to load available sizes for this club.");
-        return;
-      }
-
-      const unique = Array.from(
-        new Set((data ?? []).map((r: any) => String(r.size)))
-      ).sort();
-
-      setSizes(unique);
-      setSelectedSize(unique[0] ?? "");
+        // Changing size should clear suggestions/selection
+        setSuggestions([]);
+        setPickedNumber(null);
+        setError(null);
+      } catch (_) {}
     };
 
-    void loadSizes();
-  }, [selectedClubId]);
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
-  // Countdown + auto-expire
+  // 3) Team dropdown (optional) - attempts to load based on club + YOB
+  useEffect(() => {
+    const loadTeams = async () => {
+      setTeamOptions([]);
+
+      if (!selectedClubId || !yobValid) return;
+
+      // Best-effort: if you have a players table with team_name, this will work.
+      // If not, it fails silently and the dropdown still shows "Not sure".
+      try {
+        const { data, error } = await supabase
+          .from("players")
+          .select("team_name")
+          .eq("club_id", selectedClubId)
+          .eq("season_year", SEASON_YEAR)
+          .eq("year_of_birth", yobNum);
+
+        if (error) return;
+
+        const unique = Array.from(
+          new Set((data ?? []).map((r: any) => String(r.team_name || "").trim()).filter(Boolean))
+        ).sort();
+
+        setTeamOptions(unique);
+      } catch (_) {
+        // ignore
+      }
+    };
+
+    void loadTeams();
+  }, [selectedClubId, yobValid, yobNum]);
+
+  // Countdown + auto-expire (reservation hold)
   useEffect(() => {
     if (!expiresAt) return;
 
@@ -211,8 +243,8 @@ const JerseyWidget: React.FC = () => {
         setReservedNumber(null);
         setExpiresAt(null);
         setStatusMessage("");
+        setPickedNumber(null);
 
-        // Tell parent (Shopify) to re-lock ATC
         try {
           window.parent?.postMessage({ type: "h2h:reservation:cleared" }, "*");
         } catch (_) {}
@@ -226,27 +258,80 @@ const JerseyWidget: React.FC = () => {
     ? Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))
     : 0;
 
-  const selectedClubName =
-    clubs.find((c) => c.id === selectedClubId)?.name ?? "";
-
-  const handleSuggest = async () => {
+  // Single primary action: check availability + suggest
+  const handleCheckAndSuggest = async () => {
     setError(null);
+    setStatusMessage("");
     setSuggestions([]);
+    setPickedNumber(null);
 
-    if (!selectedClubId || !selectedSize || !yobValid) {
-      setError("Please select a size and enter year of birth.");
+    if (!selectedClubId) {
+      setError("Club could not be detected for this product.");
       return;
     }
 
-    const ranked = await suggestNumbersForClubRanked({
-      clubId: selectedClubId,
-      size: selectedSize,
-      seasonYear: SEASON_YEAR,
-      yearOfBirth: yobNum,
-      limit: 10,
-    });
+    if (!selectedSize) {
+      setError("Please select a size above first.");
+      return;
+    }
 
-    setSuggestions(ranked);
+    if (!yobValid) {
+      setError("Please enter a valid year of birth.");
+      return;
+    }
+
+    setChecking(true);
+    try {
+      // 1) Suggestions (based on club + size + YOB)
+      const ranked = await suggestNumbersForClubRanked({
+        clubId: selectedClubId,
+        size: selectedSize,
+        seasonYear: SEASON_YEAR,
+        yearOfBirth: yobNum,
+        limit: 10,
+      });
+
+      setSuggestions(ranked);
+
+      // 2) If user typed a preferred number, check it and auto-pick if available
+      const pref = Number(preferredNumber);
+      if (Number.isFinite(pref)) {
+        const check = await smartCheckNumber({
+          clubId: selectedClubId,
+          jerseyNumber: pref,
+          size: selectedSize,
+          seasonYear: SEASON_YEAR,
+          yearOfBirth: yobNum,
+        });
+
+        if (check.available) {
+          setPickedNumber(pref);
+          setStatusMessage(`Nice - #${pref} is available for size ${selectedSize}.`);
+          return;
+        }
+
+        // Not available: auto pick best suggestion if we have any
+        if (ranked.length > 0) {
+          setPickedNumber(ranked[0].jersey_number);
+          setStatusMessage(
+            `#${pref} is not available. We picked the best available option: #${ranked[0].jersey_number}.`
+          );
+          return;
+        }
+
+        setStatusMessage(`#${pref} is not available and there are no suggestions for this size.`);
+        return;
+      }
+
+      // If no preferred number entered, just show suggestions
+      if (ranked.length === 0) {
+        setStatusMessage("No numbers available for this club/size combination.");
+      } else {
+        setStatusMessage("Select a number below, then confirm to reserve.");
+      }
+    } finally {
+      setChecking(false);
+    }
   };
 
   const handleReserve = async () => {
@@ -254,13 +339,12 @@ const JerseyWidget: React.FC = () => {
     setStatusMessage("");
 
     if (!selectedClubId || !selectedSize || !yobValid) {
-      setError("Please select a size and enter year of birth.");
+      setError("Missing required information.");
       return;
     }
 
-    const num = Number(preferredNumber);
-    if (!Number.isFinite(num)) {
-      setError("Please enter a valid preferred number.");
+    if (pickedNumber === null) {
+      setError("Please choose a number first.");
       return;
     }
 
@@ -268,12 +352,13 @@ const JerseyWidget: React.FC = () => {
     try {
       const result = await reserveNumberForPurchase({
         clubId: selectedClubId,
-        jerseyNumber: num,
+        jerseyNumber: pickedNumber,
         size: selectedSize,
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
         expiresMinutes: 15,
-      });
+        // NOTE: team is not wired into services yet - we’ll do that next after size is correct.
+      } as any);
 
       if (!result.success) {
         setError(result.message);
@@ -281,15 +366,13 @@ const JerseyWidget: React.FC = () => {
       }
 
       const expiry = Date.now() + 15 * 60 * 1000;
-
-      setReservedNumber(num);
+      setReservedNumber(pickedNumber);
       setExpiresAt(expiry);
-      setStatusMessage(`Jersey #${num} reserved.`);
+      setStatusMessage(`Jersey #${pickedNumber} reserved.`);
 
-      // Tell parent (Shopify) to unlock ATC + set hidden property
       try {
         window.parent?.postMessage(
-          { type: "h2h:reservation:ready", jerseyNumber: num },
+          { type: "h2h:reservation:ready", jerseyNumber: pickedNumber },
           "*"
         );
       } catch (_) {}
@@ -298,15 +381,10 @@ const JerseyWidget: React.FC = () => {
     }
   };
 
-  const handleUseSuggestion = (num: number) => {
-    setPreferredNumber(String(num));
-  };
-
   return (
     <div style={ui.wrap}>
       <div style={ui.title}>Choose your jersey number</div>
 
-      {/* Show club name in embed (read-only) */}
       {isEmbed && selectedClubName && (
         <div style={{ marginBottom: 10 }}>
           <div style={ui.label}>Club</div>
@@ -314,23 +392,16 @@ const JerseyWidget: React.FC = () => {
         </div>
       )}
 
-      {/* Keep club selector in admin demo (non-embed) */}
-      {!isEmbed && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={ui.label}>Club</div>
-          <select
-            style={ui.select}
-            value={selectedClubId}
-            onChange={(e) => setSelectedClubId(e.target.value)}
-          >
-            {clubs.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+      {/* Size readout (no dropdown - comes from Shopify pills) */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={ui.label}>Selected size</div>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>
+          {selectedSize ? selectedSize : "Please select a size above."}
         </div>
-      )}
+        <div style={ui.helper}>
+          Size is read from the product’s size buttons.
+        </div>
+      </div>
 
       {error && <div style={ui.error}>{error}</div>}
 
@@ -364,28 +435,28 @@ const JerseyWidget: React.FC = () => {
           />
         </div>
 
+        {/* Team dropdown (optional) */}
         <div>
-          <div style={ui.label}>Size</div>
+          <div style={ui.label}>Team (optional)</div>
           <select
             style={ui.select}
-            value={selectedSize}
-            onChange={(e) => setSelectedSize(e.target.value)}
+            value={selectedTeam}
+            onChange={(e) => setSelectedTeam(e.target.value)}
           >
-            {sizes.length === 0 ? (
-              <option value="">No sizes available</option>
-            ) : (
-              sizes.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))
-            )}
+            <option value="Not sure / not assigned yet">Not sure / not assigned yet</option>
+            {teamOptions.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
           </select>
-          <div style={ui.helper}>Only sizes currently in stock are shown.</div>
+          <div style={ui.helper}>
+            If you know your team it helps us allocate better when stock is tight.
+          </div>
         </div>
 
         <div>
-          <div style={ui.label}>Preferred number</div>
+          <div style={ui.label}>Preferred number (optional)</div>
           <input
             style={ui.input}
             type="number"
@@ -394,37 +465,57 @@ const JerseyWidget: React.FC = () => {
             value={preferredNumber}
             onChange={(e) => setPreferredNumber(e.target.value)}
           />
+          <div style={ui.helper}>
+            Enter one if you have a preference - we’ll validate it and auto-suggest if unavailable.
+          </div>
         </div>
 
         <button
-          onClick={handleReserve}
-          disabled={reserving}
+          onClick={handleCheckAndSuggest}
+          disabled={checking}
           style={{
             ...ui.btnPrimary,
-            opacity: reserving ? 0.7 : 1,
-            cursor: reserving ? "not-allowed" : "pointer",
+            opacity: checking ? 0.7 : 1,
+            cursor: checking ? "not-allowed" : "pointer",
           }}
         >
-          {reserving ? "Reserving…" : "Confirm & Reserve"}
+          {checking ? "Checking…" : "Check & Suggest Playing Numbers"}
         </button>
 
-        <button onClick={handleSuggest} style={ui.btnSecondary}>
-          Suggest numbers
-        </button>
+        {/* Only show reserve once a number is chosen */}
+        {pickedNumber !== null && (
+          <button
+            onClick={handleReserve}
+            disabled={reserving}
+            style={{
+              ...ui.btnSecondary,
+              opacity: reserving ? 0.7 : 1,
+              cursor: reserving ? "not-allowed" : "pointer",
+            }}
+          >
+            {reserving ? "Reserving…" : `Confirm & Reserve #${pickedNumber}`}
+          </button>
+        )}
       </div>
 
       {suggestions.length > 0 && (
         <div style={ui.pillRow}>
-          {suggestions.map((s) => (
-            <button
-              key={s.jersey_number}
-              style={ui.pill}
-              onClick={() => handleUseSuggestion(s.jersey_number)}
-              type="button"
-            >
-              #{s.jersey_number}
-            </button>
-          ))}
+          {suggestions.map((s) => {
+            const active = pickedNumber === s.jersey_number;
+            return (
+              <button
+                key={s.jersey_number}
+                style={{
+                  ...ui.pill,
+                  ...(active ? ui.pillActive : null),
+                }}
+                type="button"
+                onClick={() => setPickedNumber(s.jersey_number)}
+              >
+                #{s.jersey_number}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
