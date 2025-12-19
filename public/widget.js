@@ -107,9 +107,8 @@
     } catch (_) {}
   }
 
-  // ---------- ATC BUTTON FIX (forces label to "Add to cart" when unlocked) ----------
+  // ---------- ATC BUTTON FIX ----------
   function findAtcButton(scope) {
-    // Prefer our tagged button
     return (
       $('button[data-h2h-atc="true"]', scope) ||
       $('button[name="add"][type="submit"]', scope) ||
@@ -119,7 +118,6 @@
 
   function getAtcLabelNode(btn) {
     if (!btn) return null;
-    // Dawn uses a <span> inside the button for label
     var span = $("span", btn);
     return span || btn;
   }
@@ -143,14 +141,12 @@
     var node = getAtcLabelNode(btn);
     if (!node) return;
 
-    // Store original once
     if (originalAtcLabel === null) {
       var current = (node.textContent || "").trim();
       if (current) originalAtcLabel = current;
     }
 
     node.textContent = label;
-    // Also update aria-label if present
     try {
       btn.setAttribute("aria-label", label);
     } catch (_) {}
@@ -160,8 +156,7 @@
     if (!originalAtcLabel) return;
     forceAtcLabel(scope, originalAtcLabel);
   }
-
-  // -------------------------------------------------------------------------------
+  // -----------------------------------
 
   function mount() {
     var host = findHost();
@@ -178,7 +173,6 @@
       productId = (host.getAttribute("data-product-id") || "").trim();
     } catch (_) {}
 
-    // Snapshot the ATC label early (often "Sold out" - we’ll override on unlock)
     snapshotOriginalAtcLabel(scope);
 
     var iframe = document.createElement("iframe");
@@ -205,7 +199,6 @@
         variantId: variantId,
       });
 
-      // Refresh original label snapshot after variant changes too (apps/themes sometimes swap DOM)
       snapshotOriginalAtcLabel(scope);
     }
 
@@ -213,7 +206,6 @@
       sendVariantState();
     });
 
-    // Globo pills often don't fire change
     scope.addEventListener("click", function (e) {
       var t = e && e.target;
       if (!t) return;
@@ -227,7 +219,6 @@
       }
     });
 
-    // MutationObserver because apps modify selection state via DOM changes
     try {
       var mo = new MutationObserver(function () {
         setTimeout(sendVariantState, 0);
@@ -246,19 +237,25 @@
         var data = event.data;
 
         if (data.type === "h2h:reservation:ready") {
-          // Keep your existing event bridge
-          window.dispatchEvent(new CustomEvent("h2h:reservation:ready"));
+          var jerseyNum = data.jerseyNumber;
 
-          // Set hidden input property
+          // ✅ CRITICAL FIX: dispatch CustomEvent with detail so buy-buttons.liquid unlocks
+          window.dispatchEvent(
+            new CustomEvent("h2h:reservation:ready", {
+              detail: { jerseyNumber: jerseyNum },
+            })
+          );
+
+          // Set hidden input property too (belt + braces)
           var input = document.getElementById("h2h_jersey_number");
-          if (input) input.value = String(data.jerseyNumber);
+          if (input) input.value = String(jerseyNum);
 
           if (input) {
             input.dispatchEvent(new Event("input", { bubbles: true }));
             input.dispatchEvent(new Event("change", { bubbles: true }));
           }
 
-          // ✅ FORCE ATC LABEL to "Add to cart" once reservation is ready
+          // Force label once unlocked
           forceAtcLabel(scope, "Add to cart");
         }
 
@@ -272,7 +269,6 @@
             input2.dispatchEvent(new Event("change", { bubbles: true }));
           }
 
-          // Optional: restore original label (often "Sold out" or localized label)
           restoreAtcLabel(scope);
         }
       } catch (_) {}
