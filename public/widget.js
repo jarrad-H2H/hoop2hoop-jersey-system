@@ -7,6 +7,7 @@
       if (variantSelects) {
         var selects = variantSelects.querySelectorAll("select");
         if (selects && selects.length) {
+          // Prefer the select whose name looks like Size
           for (var i = 0; i < selects.length; i++) {
             var sel = selects[i];
             var name = (sel.getAttribute("name") || "").toLowerCase();
@@ -19,16 +20,36 @@
       // 2) variant-radios buttons (Dawn size pills)
       var variantRadios = document.querySelector("variant-radios");
       if (variantRadios) {
+        // A) Try to find the "Size" fieldset via legend text or input name
         var fieldsets = variantRadios.querySelectorAll("fieldset");
         for (var f = 0; f < fieldsets.length; f++) {
           var fs = fieldsets[f];
+
           var legend = fs.querySelector("legend");
-          var legendText = (legend && legend.textContent ? legend.textContent : "").toLowerCase();
-          if (legendText.indexOf("size") !== -1) {
+          var legendText = (legend && legend.textContent ? legend.textContent : "")
+            .toLowerCase()
+            .replace(/\s+/g, " ")
+            .trim();
+
+          var anyRadio = fs.querySelector('input[type="radio"]');
+          var radioName = (anyRadio && anyRadio.getAttribute("name") ? anyRadio.getAttribute("name") : "")
+            .toLowerCase();
+
+          var looksLikeSize = legendText.indexOf("size") !== -1 || radioName.indexOf("size") !== -1;
+
+          if (looksLikeSize) {
             var checked = fs.querySelector('input[type="radio"]:checked');
             if (checked) return (checked.value || "").trim();
           }
         }
+
+        // B) Fallback: checked radio with name containing Size/size
+        var checkedByName =
+          variantRadios.querySelector('input[type="radio"]:checked[name*="Size"]') ||
+          variantRadios.querySelector('input[type="radio"]:checked[name*="size"]');
+        if (checkedByName) return (checkedByName.value || "").trim();
+
+        // C) Fallback: any checked radio inside variant-radios
         var anyChecked = variantRadios.querySelector('input[type="radio"]:checked');
         if (anyChecked) return (anyChecked.value || "").trim();
       }
@@ -59,19 +80,19 @@
 
     var baseUrl = new URL(document.currentScript.src).origin;
 
-    // Shopify productId (set in main-product.liquid placeholder)
+    // Shopify productId from placeholder
     var productId = "";
     try {
       productId = (host.getAttribute("data-product-id") || "").trim();
     } catch (_) {}
 
-    // Optional legacy club handle (safe to pass, but widget will prefer mapping table)
+    // Optional legacy club handle
     var clubHandle = "";
     try {
       clubHandle = (host.getAttribute("data-club-handle") || "").trim();
     } catch (_) {}
 
-    // Embed the widget
+    // Embed widget
     var iframe = document.createElement("iframe");
     iframe.src =
       baseUrl +
@@ -105,26 +126,46 @@
       } catch (_) {}
     }
 
-    iframe.addEventListener("load", function () {
-      sendVariantState();
-    });
-
-    document.addEventListener("change", function (e) {
-      var t = e && e.target;
-      if (!t) return;
-
-      var inVariantArea =
-        t.closest("variant-radios") ||
-        t.closest("variant-selects") ||
-        t.closest(".product-form") ||
-        t.closest("product-info");
-
-      if (inVariantArea) {
+    // Dawn sometimes updates checked state slightly after the event
+    var sendTimer = null;
+    function scheduleSendVariantState() {
+      try {
+        if (sendTimer) clearTimeout(sendTimer);
+        sendTimer = setTimeout(function () {
+          sendVariantState();
+        }, 180);
+      } catch (_) {
         sendVariantState();
       }
+    }
+
+    iframe.addEventListener("load", function () {
+      // Give the product form time to fully initialise
+      setTimeout(sendVariantState, 250);
     });
 
-    // Listen for widget -> Shopify page messages (reservation ready/cleared)
+    function isInVariantArea(target) {
+      if (!target || !target.closest) return false;
+      return (
+        target.closest("variant-radios") ||
+        target.closest("variant-selects") ||
+        target.closest(".product-form") ||
+        target.closest("product-info")
+      );
+    }
+
+    // Listen to both change + click so pills are captured reliably
+    document.addEventListener("change", function (e) {
+      var t = e && e.target;
+      if (isInVariantArea(t)) scheduleSendVariantState();
+    });
+
+    document.addEventListener("click", function (e) {
+      var t = e && e.target;
+      if (isInVariantArea(t)) scheduleSendVariantState();
+    });
+
+    // Widget -> Shopify messages
     window.addEventListener("message", function (event) {
       try {
         if (!event || !event.data) return;
