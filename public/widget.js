@@ -1,6 +1,7 @@
 // FILE: public/widget.js
 (function () {
   var lastSentKey = "";
+  var sendTimer = null;
 
   function $(sel, root) {
     try {
@@ -18,23 +19,19 @@
   }
 
   function findHost() {
-    return (
-      $('[data-h2h-widget]') ||
-      document.getElementById("h2h-jersey-widget")
-    );
+    return $('[data-h2h-widget]') || document.getElementById("h2h-jersey-widget");
   }
 
   function findProductScope(host) {
-    // Keep queries limited near the product section if possible
     return host.closest('section[id^="MainProduct-"]') || host.closest("main") || document;
   }
 
   function findSelectedVariantId(scope) {
-    // Dawn buy-buttons sets this input and keeps it updated.
-    var input = $('.product-variant-id:not([disabled])', scope) || $('.product-variant-id', scope);
+    // Dawn keeps this updated
+    var input = $(".product-variant-id:not([disabled])", scope) || $(".product-variant-id", scope);
     if (input && input.value) return String(input.value).trim();
 
-    // Fallback: any add-to-cart form hidden input
+    // Fallback
     var fallback = $('form[action^="/cart/add"] input[name="id"]', scope);
     return fallback && fallback.value ? String(fallback.value).trim() : "";
   }
@@ -69,8 +66,7 @@
       if (anyChecked && anyChecked.value) return (anyChecked.value || "").trim();
     }
 
-    // 3) Globo swatches (your store shows label.swatch-anchor ...)
-    // Common patterns: aria-pressed="true", or active/selected classes
+    // 3) Globo swatches (your store)
     var globoActive =
       $('.swatch-anchor[aria-pressed="true"]', scope) ||
       $('.swatch-anchor.active', scope) ||
@@ -82,7 +78,7 @@
       return globoActive.textContent.trim();
     }
 
-    // 3b) Globo uses label[for=...] + an input that becomes checked
+    // 3b) Globo input checked
     var checkedSwatch = $('input[id^="swatch-detail-"]:checked', scope);
     if (checkedSwatch) {
       var lbl = $('label[for="' + checkedSwatch.id + '"]', scope);
@@ -90,26 +86,28 @@
       if (checkedSwatch.value) return String(checkedSwatch.value).trim();
     }
 
-    // 4) Fallback: parse visible "Size: YL" line (as in your screenshot)
+    // 4) Conservative fallback: "Size: YL"
     var info = $(".product__info-container", scope) || scope;
     var text = info && info.innerText ? info.innerText : "";
-    // This is intentionally conservative to avoid random matches
     var m = text.match(/Size:\s*([A-Za-z0-9]+)/);
     if (m && m[1]) return String(m[1]).trim();
 
     return "";
   }
 
-  function scheduleSend(iframe, payload) {
-    // Avoid spamming iframe, send only when something actually changes
-    var key = (payload.productId || "") + "|" + (payload.variantId || "") + "|" + (payload.size || "");
-    if (key === lastSentKey) return;
-    lastSentKey = key;
+  function debouncedSend(iframe, payload) {
+    // Avoid CPU spikes and spam
+    if (sendTimer) clearTimeout(sendTimer);
+    sendTimer = setTimeout(function () {
+      try {
+        var key =
+          (payload.productId || "") + "|" + (payload.variantId || "") + "|" + (payload.size || "");
+        if (key === lastSentKey) return;
+        lastSentKey = key;
 
-    try {
-      iframe.contentWindow &&
-        iframe.contentWindow.postMessage(payload, "*");
-    } catch (_) {}
+        iframe.contentWindow && iframe.contentWindow.postMessage(payload, "*");
+      } catch (_) {}
+    }, 60);
   }
 
   function mount() {
@@ -129,10 +127,7 @@
 
     var iframe = document.createElement("iframe");
     iframe.src =
-      baseUrl +
-      "/embed/widget-demo" +
-      "?productId=" +
-      encodeURIComponent(productId || "");
+      baseUrl + "/embed/widget-demo" + "?productId=" + encodeURIComponent(productId || "");
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -144,7 +139,7 @@
       var size = findSelectedSizeValue(scope);
       var variantId = findSelectedVariantId(scope);
 
-      scheduleSend(iframe, {
+      debouncedSend(iframe, {
         type: "h2h:variantChanged",
         productId: productId,
         size: size,
@@ -152,40 +147,35 @@
       });
     }
 
-    // Initial send
     iframe.addEventListener("load", function () {
       sendVariantState();
     });
 
-    // Clicks catch Globo pills that don't fire change
+    // Clicks catch Globo pills that sometimes don't fire "change"
     scope.addEventListener("click", function (e) {
       var t = e && e.target;
       if (!t) return;
 
-      // If the click is on a swatch label/pill (Globo), re-read state
       if (
         (t.classList && t.classList.contains("swatch-anchor")) ||
         (t.closest && t.closest(".swatch-anchor")) ||
         (t.tagName === "LABEL" && (t.getAttribute("for") || "").indexOf("swatch-detail-") === 0)
       ) {
-        // Allow DOM to update first
         setTimeout(sendVariantState, 0);
       }
     });
 
-    // Also watch DOM mutations (Globo often updates classes/checked state)
-    try {
-      var mo = new MutationObserver(function () {
-        // tiny debounce via setTimeout
-        setTimeout(sendVariantState, 0);
-      });
-      mo.observe(scope, { subtree: true, attributes: true, childList: true });
-    } catch (_) {}
-
-    // Still keep change listener for native Dawn behaviour
     scope.addEventListener("change", function () {
       setTimeout(sendVariantState, 0);
     });
+
+    // Lightweight mutation observer (debounced) for Globo DOM updates
+    try {
+      var mo = new MutationObserver(function () {
+        sendVariantState();
+      });
+      mo.observe(scope, { subtree: true, attributes: true, childList: true });
+    } catch (_) {}
 
     // Widget -> Shopify messages
     window.addEventListener("message", function (event) {
@@ -194,23 +184,39 @@
         var data = event.data;
 
         if (data.type === "h2h:reservation:ready") {
-          window.dispatchEvent(new CustomEvent("h2h:reservation:ready"));
+          var jerseyNum = data.jerseyNumber;
+
+          // 1) Set hidden line item property (if present)
           var input = document.getElementById("h2h_jersey_number");
-          if (input) input.value = String(data.jerseyNumber);
+          if (input) input.value = String(jerseyNum);
+
           if (input) {
             input.dispatchEvent(new Event("input", { bubbles: true }));
             input.dispatchEvent(new Event("change", { bubbles: true }));
           }
+
+          // 2) Dispatch unlock event WITH detail (this is the key fix)
+          window.dispatchEvent(
+            new CustomEvent("h2h:reservation:ready", {
+              detail: { jerseyNumber: jerseyNum },
+            })
+          );
         }
 
         if (data.type === "h2h:reservation:cleared") {
-          window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
           var input2 = document.getElementById("h2h_jersey_number");
           if (input2) input2.value = "";
+
           if (input2) {
             input2.dispatchEvent(new Event("input", { bubbles: true }));
             input2.dispatchEvent(new Event("change", { bubbles: true }));
           }
+
+          window.dispatchEvent(
+            new CustomEvent("h2h:reservation:cleared", {
+              detail: {},
+            })
+          );
         }
       } catch (_) {}
     });
