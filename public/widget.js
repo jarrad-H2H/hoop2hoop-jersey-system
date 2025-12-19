@@ -3,22 +3,14 @@
   var lastSentKey = "";
 
   function $(sel, root) {
-    try {
-      return (root || document).querySelector(sel);
-    } catch (_) {
-      return null;
-    }
+    try { return (root || document).querySelector(sel); } catch (_) { return null; }
   }
   function $all(sel, root) {
-    try {
-      return Array.prototype.slice.call((root || document).querySelectorAll(sel));
-    } catch (_) {
-      return [];
-    }
+    try { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); } catch (_) { return []; }
   }
 
   function findHost() {
-    return $('[data-h2h-widget]') || document.getElementById("h2h-jersey-widget");
+    return ($('[data-h2h-widget]') || document.getElementById("h2h-jersey-widget"));
   }
 
   function findProductScope(host) {
@@ -26,9 +18,8 @@
   }
 
   function findSelectedVariantId(scope) {
-    var input = $(".product-variant-id:not([disabled])", scope) || $(".product-variant-id", scope);
+    var input = $('.product-variant-id:not([disabled])', scope) || $('.product-variant-id', scope);
     if (input && input.value) return String(input.value).trim();
-
     var fallback = $('form[action^="/cart/add"] input[name="id"]', scope);
     return fallback && fallback.value ? String(fallback.value).trim() : "";
   }
@@ -61,7 +52,6 @@
       if (anyChecked && anyChecked.value) return (anyChecked.value || "").trim();
     }
 
-    // Globo swatches
     var globoActive =
       $('.swatch-anchor[aria-pressed="true"]', scope) ||
       $('.swatch-anchor.active', scope) ||
@@ -90,7 +80,6 @@
     var key = (payload.productId || "") + "|" + (payload.variantId || "") + "|" + (payload.size || "");
     if (key === lastSentKey) return;
     lastSentKey = key;
-
     try {
       iframe.contentWindow && iframe.contentWindow.postMessage(payload, "*");
     } catch (_) {}
@@ -107,9 +96,7 @@
     var baseUrl = new URL(document.currentScript.src).origin;
 
     var productId = "";
-    try {
-      productId = (host.getAttribute("data-product-id") || "").trim();
-    } catch (_) {}
+    try { productId = (host.getAttribute("data-product-id") || "").trim(); } catch (_) {}
 
     var iframe = document.createElement("iframe");
     iframe.src = baseUrl + "/embed/widget-demo" + "?productId=" + encodeURIComponent(productId || "");
@@ -132,13 +119,12 @@
       });
     }
 
-    iframe.addEventListener("load", function () {
-      sendVariantState();
-    });
+    iframe.addEventListener("load", function () { sendVariantState(); });
 
     scope.addEventListener("click", function (e) {
       var t = e && e.target;
       if (!t) return;
+
       if (
         (t.classList && t.classList.contains("swatch-anchor")) ||
         (t.closest && t.closest(".swatch-anchor")) ||
@@ -149,15 +135,11 @@
     });
 
     try {
-      var mo = new MutationObserver(function () {
-        setTimeout(sendVariantState, 0);
-      });
+      var mo = new MutationObserver(function () { setTimeout(sendVariantState, 0); });
       mo.observe(scope, { subtree: true, attributes: true, childList: true });
     } catch (_) {}
 
-    scope.addEventListener("change", function () {
-      setTimeout(sendVariantState, 0);
-    });
+    scope.addEventListener("change", function () { setTimeout(sendVariantState, 0); });
 
     // Widget -> Shopify messages
     window.addEventListener("message", function (event) {
@@ -166,41 +148,17 @@
         var data = event.data;
 
         if (data.type === "h2h:reservation:ready") {
-          window.dispatchEvent(new CustomEvent("h2h:reservation:ready", { detail: data }));
-
-          var jersey = document.getElementById("h2h_jersey_number");
-          if (jersey) jersey.value = String(data.jerseyNumber);
-
-          var pending = document.getElementById("h2h_pending_allocation_id");
-          if (pending && data.pendingAllocationId) pending.value = String(data.pendingAllocationId);
-
-          if (jersey) {
-            jersey.dispatchEvent(new Event("input", { bubbles: true }));
-            jersey.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-          if (pending) {
-            pending.dispatchEvent(new Event("input", { bubbles: true }));
-            pending.dispatchEvent(new Event("change", { bubbles: true }));
-          }
+          // forward as a DOM event with detail so theme code can fill hidden inputs
+          window.dispatchEvent(new CustomEvent("h2h:reservation:ready", {
+            detail: {
+              jerseyNumber: data.jerseyNumber,
+              pendingAllocationId: data.pendingAllocationId || ""
+            }
+          }));
         }
 
         if (data.type === "h2h:reservation:cleared") {
-          window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
-
-          var jersey2 = document.getElementById("h2h_jersey_number");
-          if (jersey2) jersey2.value = "";
-
-          var pending2 = document.getElementById("h2h_pending_allocation_id");
-          if (pending2) pending2.value = "";
-
-          if (jersey2) {
-            jersey2.dispatchEvent(new Event("input", { bubbles: true }));
-            jersey2.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-          if (pending2) {
-            pending2.dispatchEvent(new Event("input", { bubbles: true }));
-            pending2.dispatchEvent(new Event("change", { bubbles: true }));
-          }
+          window.dispatchEvent(new CustomEvent("h2h:reservation:cleared", { detail: {} }));
         }
       } catch (_) {}
     });
