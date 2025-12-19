@@ -2,6 +2,7 @@
 (function () {
   function findSelectedSizeValue() {
     try {
+      // 1) variant-selects dropdowns
       var variantSelects = document.querySelector("variant-selects");
       if (variantSelects) {
         var selects = variantSelects.querySelectorAll("select");
@@ -15,6 +16,7 @@
         }
       }
 
+      // 2) variant-radios buttons (Dawn size pills)
       var variantRadios = document.querySelector("variant-radios");
       if (variantRadios) {
         var fieldsets = variantRadios.querySelectorAll("fieldset");
@@ -57,19 +59,27 @@
 
     var baseUrl = new URL(document.currentScript.src).origin;
 
-    // ✅ Product ID comes from the placeholder (rendered in main-product.liquid)
+    // Shopify productId (set in main-product.liquid placeholder)
     var productId = "";
     try {
       productId = (host.getAttribute("data-product-id") || "").trim();
     } catch (_) {}
 
+    // Optional legacy club handle (safe to pass, but widget will prefer mapping table)
+    var clubHandle = "";
+    try {
+      clubHandle = (host.getAttribute("data-club-handle") || "").trim();
+    } catch (_) {}
+
+    // Embed the widget
     var iframe = document.createElement("iframe");
     iframe.src =
       baseUrl +
       "/embed/widget-demo" +
       "?productId=" +
-      encodeURIComponent(productId || "");
-
+      encodeURIComponent(productId || "") +
+      "&club=" +
+      encodeURIComponent(clubHandle || "");
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -88,6 +98,7 @@
               type: "h2h:variantChanged",
               size: size,
               variantId: variantId,
+              productId: productId || "",
             },
             "*"
           );
@@ -108,10 +119,12 @@
         t.closest(".product-form") ||
         t.closest("product-info");
 
-      if (inVariantArea) sendVariantState();
+      if (inVariantArea) {
+        sendVariantState();
+      }
     });
 
-    // Widget -> Shopify page messages
+    // Listen for widget -> Shopify page messages (reservation ready/cleared)
     window.addEventListener("message", function (event) {
       try {
         if (!event || !event.data) return;
