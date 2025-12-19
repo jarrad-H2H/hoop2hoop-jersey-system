@@ -1,4 +1,3 @@
-// FILE: src/router.tsx
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 
@@ -13,6 +12,7 @@ import AllocationHistory from "./pages/AllocationHistory";
 import ClubOverview from "./pages/ClubOverview";
 import StockPlanner from "./pages/StockPlanner";
 import BulkStockUpload from "./pages/BulkStockUpload";
+import ProductClubMapping from "./pages/ProductClubMapping";
 
 // Components
 import Importer from "./components/Importer";
@@ -47,6 +47,9 @@ const AppRouter: React.FC = () => {
         {/* Managers */}
         <Route path="clubs" element={<ClubManager />} />
         <Route path="inventory" element={<InventoryManager />} />
+
+        {/* NEW: Product mapping */}
+        <Route path="product-mapping" element={<ProductClubMapping />} />
 
         {/* Players / Allocation */}
         <Route path="players" element={<Players />} />
