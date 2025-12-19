@@ -1,3 +1,4 @@
+// FILE: public/widget.js
 (function () {
   function findSelectedSizeValue() {
     try {
@@ -8,9 +9,7 @@
           for (var i = 0; i < selects.length; i++) {
             var sel = selects[i];
             var name = (sel.getAttribute("name") || "").toLowerCase();
-            if (name.indexOf("size") !== -1) {
-              return (sel.value || "").trim();
-            }
+            if (name.indexOf("size") !== -1) return (sel.value || "").trim();
           }
           return (selects[0].value || "").trim();
         }
@@ -53,26 +52,24 @@
       document.getElementById("h2h-jersey-widget");
 
     if (!host) return;
-
     if (host.getAttribute("data-h2h-mounted") === "true") return;
     host.setAttribute("data-h2h-mounted", "true");
 
     var baseUrl = new URL(document.currentScript.src).origin;
 
-    // Pull productId from placeholder (you render data-product-id in main-product.liquid)
+    // ✅ Product ID comes from the placeholder (rendered in main-product.liquid)
     var productId = "";
     try {
       productId = (host.getAttribute("data-product-id") || "").trim();
     } catch (_) {}
 
-    // Pull club handle too (optional fallback if you ever want it)
-    var club = "";
-    try {
-      club = (host.getAttribute("data-club-handle") || "").trim();
-    } catch (_) {}
-
     var iframe = document.createElement("iframe");
-    iframe.src = baseUrl + "/embed/widget-demo";
+    iframe.src =
+      baseUrl +
+      "/embed/widget-demo" +
+      "?productId=" +
+      encodeURIComponent(productId || "");
+
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -80,31 +77,25 @@
 
     host.appendChild(iframe);
 
-    function postToWidget(payload) {
-      try {
-        if (!iframe.contentWindow) return;
-        iframe.contentWindow.postMessage(payload, "*");
-      } catch (_) {}
-    }
-
-    function sendState() {
+    function sendVariantState() {
       try {
         var size = findSelectedSizeValue();
         var variantId = findSelectedVariantId();
 
-        postToWidget({
-          type: "h2h:variantChanged",
-          productId: productId,
-          club: club,
-          size: size,
-          variantId: variantId,
-        });
+        iframe.contentWindow &&
+          iframe.contentWindow.postMessage(
+            {
+              type: "h2h:variantChanged",
+              size: size,
+              variantId: variantId,
+            },
+            "*"
+          );
       } catch (_) {}
     }
 
     iframe.addEventListener("load", function () {
-      // Send initial state as soon as iframe is ready
-      sendState();
+      sendVariantState();
     });
 
     document.addEventListener("change", function (e) {
@@ -117,9 +108,7 @@
         t.closest(".product-form") ||
         t.closest("product-info");
 
-      if (inVariantArea) {
-        sendState();
-      }
+      if (inVariantArea) sendVariantState();
     });
 
     // Widget -> Shopify page messages
