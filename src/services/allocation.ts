@@ -40,16 +40,15 @@ export interface PendingAllocationRow {
   id: string;
   club_id: string;
   inventory_id: string;
-  jersey_number: number;
   size: string;
   season_year: number;
   year_of_birth: number;
-  team_id: string | null;
   status: "reserved" | "purchased" | "expired" | "cancelled" | "reconciled";
   created_at: string;
   expires_at: string;
 
-  // Optional future purchase-reconciliation fields (safe to exist or not)
+  // Optional columns (safe if they exist)
+  team_id?: string | null;
   order_id?: string | null;
   order_number?: string | null;
   shopify_line_item_id?: string | null;
@@ -202,6 +201,9 @@ export async function suggestNumbersForClub(
 
 /**
  * NEW: Ranked suggestions (size-aware + cohort-aware + reservation-aware).
+ *
+ * IMPORTANT: Reservation blocking is done via pending_allocations.inventory_id
+ * so we do NOT rely on pending_allocations having jersey_number columns.
  */
 export async function suggestNumbersForClubRanked(input: {
   clubId: string;
@@ -217,11 +219,12 @@ export async function suggestNumbersForClubRanked(input: {
   const adjacentCohortYears = Math.max(0, input.adjacentCohortYears ?? 1);
 
   const targetAge = input.seasonYear - input.yearOfBirth;
+  const yobForAge = (age: number) => input.seasonYear - age;
 
   // 1) Available inventory in this size -> candidate counts
   const { data: invRows, error: invErr } = await supabase
     .from("inventory")
-    .select("jersey_number")
+    .select("id, jersey_number")
     .eq("club_id", input.clubId)
     .eq("status", "Available")
     .eq("size", input.size);
@@ -240,8 +243,6 @@ export async function suggestNumbersForClubRanked(input: {
 
   const candidateNums = Array.from(stockCounts.keys());
   if (candidateNums.length === 0) return [];
-
-  const yobForAge = (age: number) => input.seasonYear - age;
 
   // 2) Players in same cohort window (hard block list)
   const minAgeBlock = targetAge - cohortWindowYears;
@@ -269,10 +270,10 @@ export async function suggestNumbersForClubRanked(input: {
     blockedNums.add(n);
   }
 
-  // 3) Reservations in same cohort window should also block
-  const { data: resBlock, error: rbErr } = await supabase
+  // 3) Reservations in same cohort window should also block (inventory_id -> jersey_number)
+  const { data: resRows, error: rbErr } = await supabase
     .from("pending_allocations")
-    .select("jersey_number, year_of_birth, season_year, expires_at, status, size")
+    .select("inventory_id, year_of_birth, expires_at, status, size, season_year")
     .eq("club_id", input.clubId)
     .eq("size", input.size)
     .eq("season_year", input.seasonYear)
@@ -284,14 +285,40 @@ export async function suggestNumbersForClubRanked(input: {
   }
 
   const now = Date.now();
-  for (const r of resBlock ?? []) {
-    const expiresAt = Date.parse(String((r as any).expires_at));
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+  const activeRes = (resRows ?? []).filter((r: any) => {
+    const exp = Date.parse(String(r.expires_at));
+    return Number.isFinite(exp) && exp > now;
+  });
+
+  const reservedInventoryIds = activeRes.map((r: any) => String(r.inventory_id)).filter(Boolean);
+
+  // Pull jersey numbers for reserved inventory rows (so we can block numbers)
+  let reservedInventoryToNumber = new Map<string, number>();
+  if (reservedInventoryIds.length > 0) {
+    const { data: invRes, error: invResErr } = await supabase
+      .from("inventory")
+      .select("id, jersey_number")
+      .in("id", reservedInventoryIds);
+
+    if (invResErr) {
+      console.error("reservations inventory lookup error", invResErr);
+      throw new Error("Failed to resolve reserved inventory numbers.");
+    }
+
+    for (const r of invRes ?? []) {
+      reservedInventoryToNumber.set(String((r as any).id), Number((r as any).jersey_number));
+    }
+  }
+
+  for (const r of activeRes) {
     const yob = Number((r as any).year_of_birth);
-    const n = Number((r as any).jersey_number);
-    if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
+    if (!Number.isFinite(yob)) continue;
     const age = input.seasonYear - yob;
-    if (age >= minAgeBlock && age <= maxAgeBlock) blockedNums.add(n);
+    if (age < minAgeBlock || age > maxAgeBlock) continue;
+
+    const invId = String((r as any).inventory_id);
+    const n = reservedInventoryToNumber.get(invId);
+    if (Number.isFinite(n as any)) blockedNums.add(n as number);
   }
 
   // 4) Adjacent cohort usage (spillover risk)
@@ -302,7 +329,7 @@ export async function suggestNumbersForClubRanked(input: {
 
   const { data: playersAdj, error: paErr } = await supabase
     .from("players")
-    .select("final_shirt")
+    .select("final_shirt, year_of_birth")
     .eq("club_id", input.clubId)
     .in("final_shirt", candidateNums)
     .gte("year_of_birth", minYobAdj)
@@ -320,17 +347,18 @@ export async function suggestNumbersForClubRanked(input: {
     adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
   }
 
-  // Reservations in adjacent cohorts count too
-  for (const r of resBlock ?? []) {
-    const expiresAt = Date.parse(String((r as any).expires_at));
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+  // Reservations in adjacent cohorts count too (same reserved inventory mapping)
+  for (const r of activeRes) {
     const yob = Number((r as any).year_of_birth);
-    const n = Number((r as any).jersey_number);
-    if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
+    if (!Number.isFinite(yob)) continue;
     const age = input.seasonYear - yob;
-    if (age >= minAgeAdj && age <= maxAgeAdj) {
-      adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
-    }
+    if (age < minAgeAdj || age > maxAgeAdj) continue;
+
+    const invId = String((r as any).inventory_id);
+    const n = reservedInventoryToNumber.get(invId);
+    if (!Number.isFinite(n as any)) continue;
+
+    adjCounts.set(n as number, (adjCounts.get(n as number) ?? 0) + 1);
   }
 
   // 5) Score each candidate (lower is better)
@@ -340,10 +368,9 @@ export async function suggestNumbersForClubRanked(input: {
 
     const stockDepth = stockCounts.get(n) ?? 0;
     const adjUse = adjCounts.get(n) ?? 0;
-
     const lowNumberPenalty = n >= 0 && n <= 10 ? 2 : 0;
-    const score = adjUse * 100 + lowNumberPenalty * 10 - stockDepth * 2;
 
+    const score = adjUse * 100 + lowNumberPenalty * 10 - stockDepth * 2;
     scored.push({ jersey_number: n, total_stock: stockDepth, score });
   }
 
@@ -359,25 +386,32 @@ export async function suggestNumbersForClubRanked(input: {
 
 /**
  * Reserve a specific inventory row for a club/number/size.
- * (This marks inventory Allocated - it’s your “hard lock”.)
+ *
+ * IMPORTANT:
+ * - This sets inventory.status = 'Reserved' (NOT Allocated)
+ * - Allocated only happens on "paid order" finalization (webhook)
  */
-export async function allocateNumberForClub(
-  clubId: string,
-  jerseyNumber: number,
-  size: string
-): Promise<{ success: boolean; inventoryId?: string; message?: string }> {
+export async function reserveInventoryForClub(input: {
+  clubId: string;
+  jerseyNumber: number;
+  size: string;
+  expiresMinutes?: number;
+}): Promise<{ success: boolean; inventoryId?: string; message?: string; expiresAtIso?: string }> {
+  const expiresMinutes = Math.max(1, input.expiresMinutes ?? 15);
+  const expiresAtIso = new Date(Date.now() + expiresMinutes * 60_000).toISOString();
+
   const { data, error } = await supabase
     .from("inventory")
     .select("id")
-    .eq("club_id", clubId)
+    .eq("club_id", input.clubId)
     .eq("status", "Available")
-    .eq("jersey_number", jerseyNumber)
-    .eq("size", size)
+    .eq("jersey_number", input.jerseyNumber)
+    .eq("size", input.size)
     .limit(1);
 
   if (error) {
-    console.error("allocateNumberForClub select error", error);
-    return { success: false, message: "Failed to read inventory while allocating." };
+    console.error("reserveInventoryForClub select error", error);
+    return { success: false, message: "Failed to read inventory while reserving." };
   }
 
   const row = (data ?? [])[0];
@@ -387,21 +421,26 @@ export async function allocateNumberForClub(
 
   const inventoryId = row.id as string;
 
+  // return_date_due is a DATE column in your schema. We store expiry date (not time) as a helper only.
+  const expiryDateOnly = expiresAtIso.slice(0, 10);
+
   const { error: updateError } = await supabase
     .from("inventory")
     .update({
-      status: "Allocated",
-      allocation_date: new Date().toISOString(),
+      status: "Reserved",
+      return_date_due: expiryDateOnly,
+      allocation_date: null,
+      allocated_player_id: null,
     })
     .eq("id", inventoryId)
     .eq("status", "Available"); // guard against race
 
   if (updateError) {
-    console.error("allocateNumberForClub update error", updateError);
-    return { success: false, message: "Failed to mark inventory row as allocated." };
+    console.error("reserveInventoryForClub update error", updateError);
+    return { success: false, message: "Failed to mark inventory row as reserved." };
   }
 
-  return { success: true, inventoryId };
+  return { success: true, inventoryId, expiresAtIso };
 }
 
 /**
@@ -441,11 +480,14 @@ export async function logAllocationEvent(payload: {
 
 /**
  * Create a pending allocation record (reservation) in Supabase.
+ *
+ * NOTE:
+ * Some installs may not have team_id column yet.
+ * We attempt insert with team_id, then retry without if needed.
  */
 export async function createPendingAllocation(input: {
   clubId: string;
   inventoryId: string;
-  jerseyNumber: number;
   size: string;
   seasonYear: number;
   yearOfBirth: number;
@@ -455,10 +497,9 @@ export async function createPendingAllocation(input: {
   const expiresMinutes = Math.max(1, input.expiresMinutes ?? 15);
   const expiresAtIso = new Date(Date.now() + expiresMinutes * 60_000).toISOString();
 
-  const payload = {
+  const payloadWithTeam: any = {
     club_id: input.clubId,
     inventory_id: input.inventoryId,
-    jersey_number: input.jerseyNumber,
     size: input.size,
     season_year: input.seasonYear,
     year_of_birth: input.yearOfBirth,
@@ -467,18 +508,49 @@ export async function createPendingAllocation(input: {
     expires_at: expiresAtIso,
   };
 
-  const { data, error } = await supabase
-    .from("pending_allocations")
-    .insert(payload)
-    .select("*")
-    .limit(1);
+  const payloadNoTeam: any = {
+    club_id: input.clubId,
+    inventory_id: input.inventoryId,
+    size: input.size,
+    season_year: input.seasonYear,
+    year_of_birth: input.yearOfBirth,
+    status: "reserved",
+    expires_at: expiresAtIso,
+  };
 
-  if (error) {
-    console.error("createPendingAllocation insert error", error);
+  // Try with team_id first
+  let insertData: any[] | null = null;
+  let insertError: any = null;
+
+  {
+    const { data, error } = await supabase
+      .from("pending_allocations")
+      .insert(payloadWithTeam)
+      .select("*")
+      .limit(1);
+
+    insertData = data ?? null;
+    insertError = error ?? null;
+  }
+
+  // If team_id column doesn't exist, retry without it
+  if (insertError && String(insertError.message || "").toLowerCase().includes('column "team_id"')) {
+    const { data, error } = await supabase
+      .from("pending_allocations")
+      .insert(payloadNoTeam)
+      .select("*")
+      .limit(1);
+
+    insertData = data ?? null;
+    insertError = error ?? null;
+  }
+
+  if (insertError) {
+    console.error("createPendingAllocation insert error", insertError);
     return { success: false, message: "Failed to create pending allocation record." };
   }
 
-  const row = (data ?? [])[0] as PendingAllocationRow | undefined;
+  const row = (insertData ?? [])[0] as PendingAllocationRow | undefined;
   if (!row) return { success: false, message: "Pending allocation insert returned no row." };
 
   return { success: true, row };
@@ -486,9 +558,9 @@ export async function createPendingAllocation(input: {
 
 /**
  * One-call helper for the widget:
- * - allocate inventory row (hard lock)
+ * - reserve inventory row (status -> Reserved)
  * - create pending allocation record
- * - log allocation event
+ * - log event
  *
  * IMPORTANT: If pending allocation fails, we ROLLBACK the inventory row to Available.
  */
@@ -505,16 +577,22 @@ export async function reserveNumberForPurchase(input: {
   message: string;
   pendingAllocationId?: string;
   inventoryId?: string;
+  expiresAtIso?: string;
 }> {
-  const alloc = await allocateNumberForClub(input.clubId, input.jerseyNumber, input.size);
-  if (!alloc.success || !alloc.inventoryId) {
-    return { success: false, message: alloc.message ?? "Failed to reserve inventory." };
+  const reserved = await reserveInventoryForClub({
+    clubId: input.clubId,
+    jerseyNumber: input.jerseyNumber,
+    size: input.size,
+    expiresMinutes: input.expiresMinutes,
+  });
+
+  if (!reserved.success || !reserved.inventoryId) {
+    return { success: false, message: reserved.message ?? "Failed to reserve inventory." };
   }
 
   const pending = await createPendingAllocation({
     clubId: input.clubId,
-    inventoryId: alloc.inventoryId,
-    jerseyNumber: input.jerseyNumber,
+    inventoryId: reserved.inventoryId,
     size: input.size,
     seasonYear: input.seasonYear,
     yearOfBirth: input.yearOfBirth,
@@ -523,7 +601,7 @@ export async function reserveNumberForPurchase(input: {
   });
 
   if (!pending.success || !pending.row) {
-    // Roll back inventory immediately so stock isn’t stranded in Allocated
+    // Roll back inventory immediately so stock isn’t stranded in Reserved
     try {
       await supabase
         .from("inventory")
@@ -533,16 +611,15 @@ export async function reserveNumberForPurchase(input: {
           allocation_date: null,
           return_date_due: null,
         })
-        .eq("id", alloc.inventoryId);
+        .eq("id", reserved.inventoryId);
     } catch (e) {
-      // If rollback fails, we still return a clear error - admin can fix manually
       console.error("reserveNumberForPurchase rollback failed", e);
     }
 
     return {
       success: false,
       message: "Pending allocation failed to save - inventory was returned to Available. Please try again.",
-      inventoryId: alloc.inventoryId,
+      inventoryId: reserved.inventoryId,
     };
   }
 
@@ -561,7 +638,8 @@ export async function reserveNumberForPurchase(input: {
     success: true,
     message: `Reserved jersey #${input.jerseyNumber} (${input.size}).`,
     pendingAllocationId: pending.row.id,
-    inventoryId: alloc.inventoryId,
+    inventoryId: reserved.inventoryId,
+    expiresAtIso: reserved.expiresAtIso,
   };
 }
 
@@ -626,7 +704,7 @@ export async function cancelReservation(input: {
     allocation_type: "return",
     club_id: row.club_id,
     player_id: null,
-    jersey_number: row.jersey_number,
+    jersey_number: null,
     size: row.size,
     note: "Reservation cancelled (widget) - returned to stock",
   });
@@ -635,7 +713,9 @@ export async function cancelReservation(input: {
 }
 
 /**
- * Finalize a reservation as "Purchased" (used later by webhook/order flow).
+ * Finalize a reservation on PAID checkout:
+ * - Sets inventory.status = 'Allocated'
+ * - Deletes pending_allocations row (your requirement)
  */
 export async function finalizeReservationForOrder(input: {
   pendingAllocationId: string;
@@ -664,54 +744,47 @@ export async function finalizeReservationForOrder(input: {
     return { success: false, message: `This reservation cannot be finalized (status: ${row.status}).` };
   }
 
-  const { error: updPendingErr } = await supabase
-    .from("pending_allocations")
-    .update({ status: "purchased" })
-    .eq("id", row.id)
-    .eq("status", "reserved");
-
-  if (updPendingErr) {
-    console.error("finalizeReservationForOrder pending update error", updPendingErr);
-    return { success: false, message: "Failed to mark reservation as purchased." };
-  }
-
-  const { data: invRow, error: invReadErr } = await supabase
+  // Move inventory -> Allocated (guard: must currently be Reserved)
+  const { error: invUpdErr } = await supabase
     .from("inventory")
-    .select("id, status")
+    .update({
+      status: "Allocated",
+      allocation_date: new Date().toISOString(),
+    })
     .eq("id", row.inventory_id)
-    .limit(1);
+    .eq("status", "Reserved");
 
-  if (invReadErr) {
-    console.error("finalizeReservationForOrder inventory read error", invReadErr);
-    return { success: false, message: "Purchased, but failed to verify inventory status." };
+  if (invUpdErr) {
+    console.error("finalizeReservationForOrder inventory update error", invUpdErr);
+    return { success: false, message: "Failed to allocate inventory on purchase." };
   }
 
-  const inv = (invRow ?? [])[0] as any;
-  if (!inv) {
-    return { success: false, message: "Purchased, but inventory row not found." };
-  }
+  // Remove pending allocation record (your requirement)
+  const { error: delErr } = await supabase
+    .from("pending_allocations")
+    .delete()
+    .eq("id", row.id);
 
-  if (String(inv.status) !== "Allocated") {
-    return {
-      success: false,
-      message: `Reservation marked purchased, but inventory status is '${inv.status}'. Check for manual intervention.`,
-    };
+  if (delErr) {
+    console.error("finalizeReservationForOrder pending delete error", delErr);
+    // Inventory is already allocated; don't rollback. Just surface clear message.
+    return { success: false, message: "Inventory allocated, but failed to remove pending allocation record." };
   }
 
   await logAllocationEvent({
     allocation_type: "new",
     club_id: row.club_id,
     player_id: null,
-    jersey_number: row.jersey_number,
+    jersey_number: null,
     size: row.size,
     note: input.orderRef ? `Purchased - orderRef: ${input.orderRef}` : "Purchased - finalize reservation",
   });
 
-  return { success: true, message: "Reservation finalized as purchased. Inventory remains allocated." };
+  return { success: true, message: "Purchase finalized. Inventory moved to Allocated." };
 }
 
 /**
- * Return a jersey to stock (used by admin/warehouse).
+ * Return a jersey to stock (admin/warehouse).
  */
 export async function returnJerseyToStock(
   clubId: string,
@@ -724,7 +797,7 @@ export async function returnJerseyToStock(
     .eq("club_id", clubId)
     .eq("jersey_number", jerseyNumber)
     .eq("size", size)
-    .in("status", ["Allocated", "Available"])
+    .in("status", ["Allocated", "Reserved", "Available"])
     .limit(1);
 
   if (error) {
@@ -734,10 +807,7 @@ export async function returnJerseyToStock(
 
   const row = (data ?? [])[0];
   if (!row) {
-    return {
-      success: false,
-      message: "No matching inventory row found for that size/number. Nothing to return.",
-    };
+    return { success: false, message: "No matching inventory row found. Nothing to return." };
   }
 
   const inventoryId = row.id as string;
@@ -763,13 +833,8 @@ export async function returnJerseyToStock(
     player_id: null,
     jersey_number: jerseyNumber,
     size,
-    previous_jersey_number: null,
-    previous_size: null,
     note: "Warehouse return to stock",
   });
 
-  return {
-    success: true,
-    message: `Jersey #${jerseyNumber} (${size}) has been marked back as Available for this club.`,
-  };
+  return { success: true, message: `Jersey #${jerseyNumber} (${size}) marked back as Available.` };
 }
