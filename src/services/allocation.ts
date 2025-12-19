@@ -202,7 +202,7 @@ export async function suggestNumbersForClub(
 /**
  * NEW: Ranked suggestions (size-aware + cohort-aware + reservation-aware).
  *
- * IMPORTANT: Reservation blocking is done via pending_allocations.inventory_id
+ * Reservation blocking is done via pending_allocations.inventory_id -> inventory.jersey_number
  * so we do NOT rely on pending_allocations having jersey_number columns.
  */
 export async function suggestNumbersForClubRanked(input: {
@@ -292,7 +292,6 @@ export async function suggestNumbersForClubRanked(input: {
 
   const reservedInventoryIds = activeRes.map((r: any) => String(r.inventory_id)).filter(Boolean);
 
-  // Pull jersey numbers for reserved inventory rows (so we can block numbers)
   let reservedInventoryToNumber = new Map<string, number>();
   if (reservedInventoryIds.length > 0) {
     const { data: invRes, error: invResErr } = await supabase
@@ -347,7 +346,7 @@ export async function suggestNumbersForClubRanked(input: {
     adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
   }
 
-  // Reservations in adjacent cohorts count too (same reserved inventory mapping)
+  // Reservations in adjacent cohorts count too
   for (const r of activeRes) {
     const yob = Number((r as any).year_of_birth);
     if (!Number.isFinite(yob)) continue;
@@ -421,7 +420,7 @@ export async function reserveInventoryForClub(input: {
 
   const inventoryId = row.id as string;
 
-  // return_date_due is a DATE column in your schema. We store expiry date (not time) as a helper only.
+  // return_date_due is a DATE column. Store the date component only.
   const expiryDateOnly = expiresAtIso.slice(0, 10);
 
   const { error: updateError } = await supabase
@@ -441,6 +440,22 @@ export async function reserveInventoryForClub(input: {
   }
 
   return { success: true, inventoryId, expiresAtIso };
+}
+
+/**
+ * BACKWARD-COMPAT EXPORT:
+ * Old admin page imports allocateNumberForClub.
+ *
+ * We now treat "allocate" as "reserve" (status -> Reserved).
+ * Final allocation happens after PAID checkout via finalizeReservationForOrder.
+ */
+export async function allocateNumberForClub(
+  clubId: string,
+  jerseyNumber: number,
+  size: string
+): Promise<{ success: boolean; inventoryId?: string; message?: string }> {
+  const res = await reserveInventoryForClub({ clubId, jerseyNumber, size, expiresMinutes: 15 });
+  return { success: res.success, inventoryId: res.inventoryId, message: res.message };
 }
 
 /**
@@ -481,7 +496,6 @@ export async function logAllocationEvent(payload: {
 /**
  * Create a pending allocation record (reservation) in Supabase.
  *
- * NOTE:
  * Some installs may not have team_id column yet.
  * We attempt insert with team_id, then retry without if needed.
  */
@@ -518,7 +532,6 @@ export async function createPendingAllocation(input: {
     expires_at: expiresAtIso,
   };
 
-  // Try with team_id first
   let insertData: any[] | null = null;
   let insertError: any = null;
 
@@ -533,7 +546,6 @@ export async function createPendingAllocation(input: {
     insertError = error ?? null;
   }
 
-  // If team_id column doesn't exist, retry without it
   if (insertError && String(insertError.message || "").toLowerCase().includes('column "team_id"')) {
     const { data, error } = await supabase
       .from("pending_allocations")
@@ -601,7 +613,6 @@ export async function reserveNumberForPurchase(input: {
   });
 
   if (!pending.success || !pending.row) {
-    // Roll back inventory immediately so stock isn’t stranded in Reserved
     try {
       await supabase
         .from("inventory")
@@ -715,7 +726,7 @@ export async function cancelReservation(input: {
 /**
  * Finalize a reservation on PAID checkout:
  * - Sets inventory.status = 'Allocated'
- * - Deletes pending_allocations row (your requirement)
+ * - Deletes pending_allocations row (requirement)
  */
 export async function finalizeReservationForOrder(input: {
   pendingAllocationId: string;
@@ -744,7 +755,6 @@ export async function finalizeReservationForOrder(input: {
     return { success: false, message: `This reservation cannot be finalized (status: ${row.status}).` };
   }
 
-  // Move inventory -> Allocated (guard: must currently be Reserved)
   const { error: invUpdErr } = await supabase
     .from("inventory")
     .update({
@@ -759,7 +769,6 @@ export async function finalizeReservationForOrder(input: {
     return { success: false, message: "Failed to allocate inventory on purchase." };
   }
 
-  // Remove pending allocation record (your requirement)
   const { error: delErr } = await supabase
     .from("pending_allocations")
     .delete()
@@ -767,7 +776,6 @@ export async function finalizeReservationForOrder(input: {
 
   if (delErr) {
     console.error("finalizeReservationForOrder pending delete error", delErr);
-    // Inventory is already allocated; don't rollback. Just surface clear message.
     return { success: false, message: "Inventory allocated, but failed to remove pending allocation record." };
   }
 
