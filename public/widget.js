@@ -1,67 +1,125 @@
 // FILE: public/widget.js
 (function () {
-  function cssEscape(s) {
-    if (window.CSS && CSS.escape) return CSS.escape(s);
-    return String(s).replace(/[^a-zA-Z0-9_\-]/g, "\\$&");
-  }
+  var lastSentKey = "";
 
-  function findGloboSelected() {
+  function $(sel, root) {
     try {
-      var checked =
-        document.querySelector('input[type="radio"][id^="swatch-detail-"]:checked') ||
-        document.querySelector('input[type="radio"][id*="swatch-detail-"]:checked');
-
-      if (!checked) return { size: "", variantId: "" };
-
-      var id = checked.id || "";
-      var m = id.match(/swatch-detail-(\d+)/i);
-      var variantId = m && m[1] ? String(m[1]) : "";
-
-      var label = document.querySelector('label[for="' + cssEscape(id) + '"]');
-      var size = label && label.textContent ? label.textContent.trim() : "";
-
-      if (!size) size = (checked.value || "").trim();
-
-      return { size: size, variantId: variantId };
+      return (root || document).querySelector(sel);
     } catch (_) {
-      return { size: "", variantId: "" };
+      return null;
+    }
+  }
+  function $all(sel, root) {
+    try {
+      return Array.prototype.slice.call((root || document).querySelectorAll(sel));
+    } catch (_) {
+      return [];
     }
   }
 
-  function findVariantIdFromUrl() {
-    try {
-      var u = new URL(window.location.href);
-      var v = u.searchParams.get("variant");
-      return v ? String(v).trim() : "";
-    } catch (_) {
-      return "";
-    }
+  function findHost() {
+    return (
+      $('[data-h2h-widget]') ||
+      document.getElementById("h2h-jersey-widget")
+    );
   }
 
-  function syncShopifyVariantInputs(variantId) {
-    // IMPORTANT: set value ONLY - do NOT dispatch change/input events (prevents infinite loops)
+  function findProductScope(host) {
+    // Keep queries limited near the product section if possible
+    return host.closest('section[id^="MainProduct-"]') || host.closest("main") || document;
+  }
+
+  function findSelectedVariantId(scope) {
+    // Dawn buy-buttons sets this input and keeps it updated.
+    var input = $('.product-variant-id:not([disabled])', scope) || $('.product-variant-id', scope);
+    if (input && input.value) return String(input.value).trim();
+
+    // Fallback: any add-to-cart form hidden input
+    var fallback = $('form[action^="/cart/add"] input[name="id"]', scope);
+    return fallback && fallback.value ? String(fallback.value).trim() : "";
+  }
+
+  function findSelectedSizeValue(scope) {
+    // 1) Dawn variant-selects dropdowns
+    var variantSelects = $("variant-selects", scope);
+    if (variantSelects) {
+      var selects = $all("select", variantSelects);
+      for (var i = 0; i < selects.length; i++) {
+        var sel = selects[i];
+        var name = (sel.getAttribute("name") || "").toLowerCase();
+        if (name.indexOf("size") !== -1) return (sel.value || "").trim();
+      }
+      if (selects[0] && selects[0].value) return (selects[0].value || "").trim();
+    }
+
+    // 2) Dawn variant-radios (native size pills)
+    var variantRadios = $("variant-radios", scope);
+    if (variantRadios) {
+      var fieldsets = $all("fieldset", variantRadios);
+      for (var f = 0; f < fieldsets.length; f++) {
+        var fs = fieldsets[f];
+        var legend = $("legend", fs);
+        var legendText = (legend && legend.textContent ? legend.textContent : "").toLowerCase();
+        if (legendText.indexOf("size") !== -1) {
+          var checked = $('input[type="radio"]:checked', fs);
+          if (checked && checked.value) return (checked.value || "").trim();
+        }
+      }
+      var anyChecked = $('input[type="radio"]:checked', variantRadios);
+      if (anyChecked && anyChecked.value) return (anyChecked.value || "").trim();
+    }
+
+    // 3) Globo swatches (your store shows label.swatch-anchor ...)
+    // Common patterns: aria-pressed="true", or active/selected classes
+    var globoActive =
+      $('.swatch-anchor[aria-pressed="true"]', scope) ||
+      $('.swatch-anchor.active', scope) ||
+      $('.swatch-anchor.selected', scope) ||
+      $('.swatch-anchor.is-selected', scope) ||
+      $('.swatch-anchor.globo-active', scope);
+
+    if (globoActive && globoActive.textContent) {
+      return globoActive.textContent.trim();
+    }
+
+    // 3b) Globo uses label[for=...] + an input that becomes checked
+    var checkedSwatch = $('input[id^="swatch-detail-"]:checked', scope);
+    if (checkedSwatch) {
+      var lbl = $('label[for="' + checkedSwatch.id + '"]', scope);
+      if (lbl && lbl.textContent) return lbl.textContent.trim();
+      if (checkedSwatch.value) return String(checkedSwatch.value).trim();
+    }
+
+    // 4) Fallback: parse visible "Size: YL" line (as in your screenshot)
+    var info = $(".product__info-container", scope) || scope;
+    var text = info && info.innerText ? info.innerText : "";
+    // This is intentionally conservative to avoid random matches
+    var m = text.match(/Size:\s*([A-Za-z0-9]+)/);
+    if (m && m[1]) return String(m[1]).trim();
+
+    return "";
+  }
+
+  function scheduleSend(iframe, payload) {
+    // Avoid spamming iframe, send only when something actually changes
+    var key = (payload.productId || "") + "|" + (payload.variantId || "") + "|" + (payload.size || "");
+    if (key === lastSentKey) return;
+    lastSentKey = key;
+
     try {
-      if (!variantId) return;
-      var inputs = document.querySelectorAll(
-        'form[action^="/cart/add"] input[name="id"], input.product-variant-id'
-      );
-      inputs.forEach(function (inp) {
-        try {
-          if ((inp.value || "") !== variantId) inp.value = variantId;
-        } catch (_) {}
-      });
+      iframe.contentWindow &&
+        iframe.contentWindow.postMessage(payload, "*");
     } catch (_) {}
   }
 
   function mount() {
-    var host =
-      document.querySelector('[data-h2h-widget]') ||
-      document.getElementById("h2h-jersey-widget");
-
+    var host = findHost();
     if (!host) return;
+
     if (host.getAttribute("data-h2h-mounted") === "true") return;
     host.setAttribute("data-h2h-mounted", "true");
 
+    var scope = findProductScope(host);
     var baseUrl = new URL(document.currentScript.src).origin;
 
     var productId = "";
@@ -69,19 +127,12 @@
       productId = (host.getAttribute("data-product-id") || "").trim();
     } catch (_) {}
 
-    var clubHandle = "";
-    try {
-      clubHandle = (host.getAttribute("data-club-handle") || "").trim();
-    } catch (_) {}
-
     var iframe = document.createElement("iframe");
     iframe.src =
       baseUrl +
       "/embed/widget-demo" +
       "?productId=" +
-      encodeURIComponent(productId || "") +
-      "&club=" +
-      encodeURIComponent(clubHandle || "");
+      encodeURIComponent(productId || "");
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -89,78 +140,54 @@
 
     host.appendChild(iframe);
 
-    function getVariantState() {
-      var globo = findGloboSelected();
-      var variantId = findVariantIdFromUrl() || globo.variantId || "";
-      var size = globo.size || "";
-      return { size: size, variantId: variantId };
+    function sendVariantState() {
+      var size = findSelectedSizeValue(scope);
+      var variantId = findSelectedVariantId(scope);
+
+      scheduleSend(iframe, {
+        type: "h2h:variantChanged",
+        productId: productId,
+        size: size,
+        variantId: variantId,
+      });
     }
 
-    var scheduled = false;
-    function scheduleSend() {
-      if (scheduled) return;
-      scheduled = true;
-      setTimeout(function () {
-        scheduled = false;
-        sendNow();
-      }, 50);
-    }
-
-    function sendNow() {
-      try {
-        var st = getVariantState();
-
-        if (st.variantId) syncShopifyVariantInputs(st.variantId);
-
-        iframe.contentWindow &&
-          iframe.contentWindow.postMessage(
-            {
-              type: "h2h:variantChanged",
-              size: st.size,
-              variantId: st.variantId,
-              productId: productId || "",
-            },
-            "*"
-          );
-      } catch (_) {}
-    }
-
+    // Initial send
     iframe.addEventListener("load", function () {
-      scheduleSend();
+      sendVariantState();
     });
 
-    document.addEventListener("change", function (e) {
+    // Clicks catch Globo pills that don't fire change
+    scope.addEventListener("click", function (e) {
       var t = e && e.target;
       if (!t) return;
 
-      // Ignore our own hidden variant id inputs entirely
-      if (t.matches && (t.matches('input[name="id"]') || t.matches("input.product-variant-id"))) {
-        return;
-      }
-
+      // If the click is on a swatch label/pill (Globo), re-read state
       if (
-        t.closest('[id*="swatch"]') ||
-        t.closest('[class*="globo"]') ||
-        t.closest(".product-form") ||
-        t.closest("product-info")
+        (t.classList && t.classList.contains("swatch-anchor")) ||
+        (t.closest && t.closest(".swatch-anchor")) ||
+        (t.tagName === "LABEL" && (t.getAttribute("for") || "").indexOf("swatch-detail-") === 0)
       ) {
-        scheduleSend();
+        // Allow DOM to update first
+        setTimeout(sendVariantState, 0);
       }
     });
 
-    document.addEventListener("click", function (e) {
-      var t = e && e.target;
-      if (!t) return;
+    // Also watch DOM mutations (Globo often updates classes/checked state)
+    try {
+      var mo = new MutationObserver(function () {
+        // tiny debounce via setTimeout
+        setTimeout(sendVariantState, 0);
+      });
+      mo.observe(scope, { subtree: true, attributes: true, childList: true });
+    } catch (_) {}
 
-      if (
-        (t.tagName === "LABEL" && (t.getAttribute("for") || "").indexOf("swatch-detail-") !== -1) ||
-        t.closest('label[for^="swatch-detail-"]') ||
-        t.closest('[class*="globo"]')
-      ) {
-        scheduleSend();
-      }
+    // Still keep change listener for native Dawn behaviour
+    scope.addEventListener("change", function () {
+      setTimeout(sendVariantState, 0);
     });
 
+    // Widget -> Shopify messages
     window.addEventListener("message", function (event) {
       try {
         if (!event || !event.data) return;
@@ -168,23 +195,25 @@
 
         if (data.type === "h2h:reservation:ready") {
           window.dispatchEvent(new CustomEvent("h2h:reservation:ready"));
-
           var input = document.getElementById("h2h_jersey_number");
           if (input) input.value = String(data.jerseyNumber);
+          if (input) {
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          }
         }
 
         if (data.type === "h2h:reservation:cleared") {
           window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
-
           var input2 = document.getElementById("h2h_jersey_number");
           if (input2) input2.value = "";
+          if (input2) {
+            input2.dispatchEvent(new Event("input", { bubbles: true }));
+            input2.dispatchEvent(new Event("change", { bubbles: true }));
+          }
         }
       } catch (_) {}
     });
-
-    // initial sends (Globo sometimes loads late)
-    setTimeout(scheduleSend, 500);
-    setTimeout(scheduleSend, 1500);
   }
 
   if (document.readyState === "loading") {
