@@ -12,62 +12,62 @@ interface MappingRow {
   club_id: string;
 }
 
-interface TeamRow {
-  id: string;
-  name: string;
-}
-
 interface NumberSuggestion {
   jersey_number: number;
   total_stock: number;
   score?: number;
 }
 
-const SEASON_YEAR = 2025;
+interface TeamRow {
+  id: string;
+  name: string;
+  club_id: string;
+}
 
 const JerseyWidget: React.FC = () => {
-  // ---- Shopify context passed in via iframe query params / postMessage ----
+  const SEASON_YEAR = new Date().getFullYear();
+
+  // Shopify context
   const [shopifyProductId, setShopifyProductId] = useState<string>("");
   const [selectedSize, setSelectedSize] = useState<string>("");
 
-  // ---- Club detection (via mapping table) ----
+  // Club detection
   const [selectedClubId, setSelectedClubId] = useState<string>("");
   const [clubDetectError, setClubDetectError] = useState<string | null>(null);
 
-  // ---- Team dropdown ----
-  const [teams, setTeams] = useState<TeamRow[]>([]);
-  const [teamsError, setTeamsError] = useState<string | null>(null);
-  const [teamChoice, setTeamChoice] = useState<string>("not_sure"); // required (including "not sure")
-  const [suggestedTeamIds, setSuggestedTeamIds] = useState<string[]>([]);
-
-  // ---- Inputs ----
+  // Inputs
   const [yearOfBirth, setYearOfBirth] = useState<string>("");
+  const [teamChoice, setTeamChoice] = useState<string>("not_sure");
   const [preferredNumber, setPreferredNumber] = useState<string>("");
 
-  // ---- Suggestions / selection ----
+  // Teams
+  const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [suggestedTeamIds, setSuggestedTeamIds] = useState<string[]>([]);
+  const [loadingTeams, setLoadingTeams] = useState(false);
+
+  // Suggestions
   const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
   const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
 
-  // ---- UI state ----
+  // UI state
   const [loadingSuggest, setLoadingSuggest] = useState(false);
   const [reserving, setReserving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ---- Reservation status ----
+  // Reservation status
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [tick, setTick] = useState<number>(Date.now());
+
+  // Keep the current reservation id so we can pass it into Shopify line item properties
   const [pendingAllocationId, setPendingAllocationId] = useState<string>("");
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
 
-  const remainingSeconds = expiresAt
-    ? Math.max(0, Math.floor((expiresAt - tick) / 1000))
-    : 0;
-
+  const remainingSeconds = expiresAt ? Math.max(0, Math.floor((expiresAt - tick) / 1000)) : 0;
   const sizeSelected = Boolean((selectedSize || "").trim());
-  const teamSelected = Boolean((teamChoice || "").trim());
+  const teamSelected = Boolean((teamChoice || "").trim()); // includes "not_sure"
 
   const canSuggest =
     Boolean(selectedClubId) && sizeSelected && yobValid && teamSelected && !loadingSuggest && !reserving;
@@ -81,7 +81,6 @@ const JerseyWidget: React.FC = () => {
     !reserving &&
     !loadingSuggest;
 
-  // ---- Send events to Shopify (parent window) AND to local page (admin demo) ----
   const notifyShopify = (
     type: "h2h:reservation:ready" | "h2h:reservation:cleared",
     payload?: any
@@ -94,7 +93,7 @@ const JerseyWidget: React.FC = () => {
     } catch (_) {}
   };
 
-  // ---- 1) Read initial query params (best-effort) ----
+  // Read query params
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -104,7 +103,7 @@ const JerseyWidget: React.FC = () => {
     setTeamChoice("not_sure");
   }, []);
 
-  // ---- 2) Listen for Shopify variant changes from public/widget.js ----
+  // Listen for Shopify variant changes
   useEffect(() => {
     const onMsg = (event: MessageEvent) => {
       try {
@@ -128,15 +127,11 @@ const JerseyWidget: React.FC = () => {
     return () => window.removeEventListener("message", onMsg);
   }, []);
 
-  // ---- 3) Detect club via mapping table: shopify_product_club_map ----
+  // Detect club via mapping table
   useEffect(() => {
     const run = async () => {
       setClubDetectError(null);
       setSelectedClubId("");
-      setTeams([]);
-      setTeamsError(null);
-      setSuggestedTeamIds([]);
-      setTeamChoice("not_sure");
 
       const pid = (shopifyProductId || "").trim();
       if (!pid) return;
@@ -164,92 +159,17 @@ const JerseyWidget: React.FC = () => {
     void run();
   }, [shopifyProductId]);
 
-  // ---- 4) Load teams for detected club (if teams table exists) ----
-  useEffect(() => {
-    const loadTeams = async () => {
-      setTeams([]);
-      setTeamsError(null);
-      setSuggestedTeamIds([]);
-      setTeamChoice("not_sure");
-
-      if (!selectedClubId) return;
-
-      const { data, error } = await supabase
-        .from("teams")
-        .select("id, name")
-        .eq("club_id", selectedClubId)
-        .order("name");
-
-      if (error) {
-        // If teams table doesn't exist or RLS blocks it, don't break the widget.
-        setTeamsError(error.message);
-        return;
-      }
-
-      setTeams((data ?? []) as TeamRow[]);
-    };
-
-    void loadTeams();
-  }, [selectedClubId]);
-
-  // ---- 5) Suggest team ordering based on YOB (uses players table team_id frequency) ----
-  useEffect(() => {
-    const run = async () => {
-      setSuggestedTeamIds([]);
-      if (!selectedClubId || !yobValid) return;
-
-      // Try exact YOB first
-      const tryYobWindows: Array<{ min: number; max: number }> = [
-        { min: yobNum, max: yobNum },
-        { min: yobNum - 1, max: yobNum + 1 },
-      ];
-
-      for (const w of tryYobWindows) {
-        const { data, error } = await supabase
-          .from("players")
-          .select("team_id, year_of_birth")
-          .eq("club_id", selectedClubId)
-          .gte("year_of_birth", w.min)
-          .lte("year_of_birth", w.max);
-
-        if (error) {
-          // Don't block widget if players table has RLS issues; just skip.
-          return;
-        }
-
-        const rows = (data ?? []) as any[];
-        const counts = new Map<string, number>();
-
-        for (const r of rows) {
-          const tid = (r as any).team_id;
-          if (!tid) continue;
-          counts.set(String(tid), (counts.get(String(tid)) ?? 0) + 1);
-        }
-
-        const ranked = Array.from(counts.entries())
-          .sort((a, b) => b[1] - a[1])
-          .map(([id]) => id);
-
-        if (ranked.length > 0) {
-          setSuggestedTeamIds(ranked.slice(0, 6));
-          return;
-        }
-      }
-    };
-
-    void run();
-  }, [selectedClubId, yobValid, yobNum]);
-
-  // ---- 6) Countdown tick ----
+  // Tick for countdown display
   useEffect(() => {
     if (!expiresAt) return;
     const t = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(t);
   }, [expiresAt]);
 
-  // ---- 7) Auto-expire reservation (UI only) ----
+  // Auto-clear UI when expired (note: DB expiry needs server-side sweep too)
   useEffect(() => {
     if (!expiresAt) return;
+
     const timer = setInterval(() => {
       if (Date.now() >= expiresAt) {
         setExpiresAt(null);
@@ -259,29 +179,83 @@ const JerseyWidget: React.FC = () => {
         notifyShopify("h2h:reservation:cleared");
       }
     }, 1000);
+
     return () => clearInterval(timer);
   }, [expiresAt]);
+
+  // Load teams for club
+  useEffect(() => {
+    const load = async () => {
+      setTeams([]);
+      setSuggestedTeamIds([]);
+      if (!selectedClubId) return;
+
+      setLoadingTeams(true);
+      try {
+        const { data, error } = await supabase
+          .from("teams")
+          .select("id, name, club_id")
+          .eq("club_id", selectedClubId)
+          .order("name");
+
+        if (error) throw error;
+        setTeams((data ?? []) as TeamRow[]);
+      } catch (e: any) {
+        // Teams not mission-critical: we keep "not sure" available
+        console.warn("Failed to load teams", e?.message || e);
+      } finally {
+        setLoadingTeams(false);
+      }
+    };
+
+    void load();
+  }, [selectedClubId]);
+
+  // Suggest teams after YOB entry (based on players in that YOB for this club)
+  useEffect(() => {
+    const run = async () => {
+      setSuggestedTeamIds([]);
+      if (!selectedClubId || !yobValid) return;
+
+      try {
+        const { data, error } = await supabase
+          .from("players")
+          .select("team_id")
+          .eq("club_id", selectedClubId)
+          .eq("year_of_birth", yobNum);
+
+        if (error) throw error;
+
+        const counts = new Map<string, number>();
+        for (const r of data ?? []) {
+          const tid = (r as any).team_id as string | null;
+          if (!tid) continue;
+          counts.set(tid, (counts.get(tid) ?? 0) + 1);
+        }
+
+        const ranked = Array.from(counts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .map(([id]) => id);
+
+        setSuggestedTeamIds(ranked);
+
+        // If user hasn't picked a real team yet, auto-pick the top suggested team (if any)
+        if ((teamChoice === "not_sure" || teamChoice === "") && ranked.length > 0) {
+          setTeamChoice(ranked[0]);
+        }
+      } catch (e: any) {
+        console.warn("Failed to suggest teams", e?.message || e);
+      }
+    };
+
+    void run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClubId, yobValid, yobNum]);
 
   const clearMessages = () => {
     setError(null);
     setStatusMessage("");
   };
-
-  // Order teams: suggested first, then the rest
-  const orderedTeams = useMemo(() => {
-    if (!teams.length) return { suggested: [] as TeamRow[], rest: [] as TeamRow[] };
-
-    const suggestedSet = new Set(suggestedTeamIds);
-    const suggested = teams.filter((t) => suggestedSet.has(t.id));
-    const rest = teams.filter((t) => !suggestedSet.has(t.id));
-
-    // keep suggested order based on suggestedTeamIds ranking
-    const rank = new Map<string, number>();
-    suggestedTeamIds.forEach((id, idx) => rank.set(id, idx));
-    suggested.sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
-
-    return { suggested, rest };
-  }, [teams, suggestedTeamIds]);
 
   const handleSuggest = async () => {
     clearMessages();
@@ -316,7 +290,7 @@ const JerseyWidget: React.FC = () => {
         limit: 12,
       });
 
-      // If preferred number entered, check if it's safe + stock exists for selected size
+      // If preferred number entered, check if it’s viable for THIS size (stock exists + no cohort clash)
       const pref = Number(preferredNumber);
       if (Number.isFinite(pref)) {
         try {
@@ -326,15 +300,16 @@ const JerseyWidget: React.FC = () => {
             cohortWindowYears: 0,
           });
 
-          const sizeStock = (check.stockBySize || []).find((s) => String(s.size) === String(selectedSize));
-          const hasSizeStock = Boolean(sizeStock && sizeStock.count > 0);
-          const noClash = (check.clashes || []).length === 0;
+          const hasStockForSize = (check.stockBySize ?? []).some(
+            (s) => String(s.size).toLowerCase() === String(selectedSize).toLowerCase() && s.count > 0
+          );
+          const noClash = (check.clashes ?? []).length === 0;
 
-          if (noClash && hasSizeStock) {
+          if (hasStockForSize && noClash) {
             const exists = ranked.some((r) => r.jersey_number === pref);
             const boosted: NumberSuggestion[] = exists
               ? ranked
-              : [{ jersey_number: pref, total_stock: sizeStock?.count ?? 1, score: -9999 }, ...ranked];
+              : [{ jersey_number: pref, total_stock: 1, score: -999 }, ...ranked];
             setSuggestions(boosted);
           } else {
             setSuggestions(ranked);
@@ -349,6 +324,8 @@ const JerseyWidget: React.FC = () => {
       if (!ranked || ranked.length === 0) {
         setError("No available numbers found for this size. Try another size or contact the club.");
       }
+    } catch (e: any) {
+      setError(e?.message || "Failed to suggest numbers.");
     } finally {
       setLoadingSuggest(false);
     }
@@ -386,15 +363,13 @@ const JerseyWidget: React.FC = () => {
 
     setReserving(true);
     try {
-      const teamId = teamChoice === "not_sure" ? null : teamChoice;
-
       const result = await reserveNumberForPurchase({
         clubId: selectedClubId,
         jerseyNumber: selectedNumber,
         size: selectedSize,
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
-        teamId,
+        teamId: teamChoice === "not_sure" ? null : teamChoice,
         expiresMinutes: 15,
       });
 
@@ -409,16 +384,35 @@ const JerseyWidget: React.FC = () => {
       const pid = result.pendingAllocationId || "";
       setPendingAllocationId(pid);
 
-      setStatusMessage(`Jersey #${selectedNumber} reserved. Hold expires in 15:00.`);
+      setStatusMessage(`Jersey #${selectedNumber} reserved.`);
 
+      // Tell Shopify: unlock ATC + set both hidden props (Jersey + Reservation ID)
       notifyShopify("h2h:reservation:ready", {
         jerseyNumber: selectedNumber,
         pendingAllocationId: pid,
       });
+    } catch (e: any) {
+      setError(e?.message || "Reservation failed.");
     } finally {
       setReserving(false);
     }
   };
+
+  const orderedTeamOptions = useMemo(() => {
+    const notSure = [{ id: "not_sure", name: "I don't know / Not assigned yet", club_id: selectedClubId } as TeamRow];
+
+    if (!teams.length) return notSure;
+
+    // If we have suggestedTeamIds, put them first (but still keep full list available below)
+    const suggested = suggestedTeamIds
+      .map((id) => teams.find((t) => t.id === id))
+      .filter(Boolean) as TeamRow[];
+
+    const suggestedSet = new Set(suggested.map((t) => t.id));
+    const rest = teams.filter((t) => !suggestedSet.has(t.id));
+
+    return [...notSure, ...suggested, ...rest];
+  }, [teams, suggestedTeamIds, selectedClubId]);
 
   return (
     <div className="w-full max-w-[440px]">
@@ -461,12 +455,7 @@ const JerseyWidget: React.FC = () => {
             className="border rounded px-3 py-2 w-full"
             placeholder="e.g. 2013"
             value={yearOfBirth}
-            onChange={(e) => {
-              setYearOfBirth(e.target.value);
-              setSuggestions([]);
-              setSelectedNumber(null);
-              setError(null);
-            }}
+            onChange={(e) => setYearOfBirth(e.target.value)}
           />
         </div>
 
@@ -474,43 +463,21 @@ const JerseyWidget: React.FC = () => {
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Team
           </label>
-
           <select
             className="border rounded px-3 py-2 w-full"
             value={teamChoice}
-            onChange={(e) => {
-              setTeamChoice(e.target.value);
-              setSuggestions([]);
-              setSelectedNumber(null);
-              setError(null);
-            }}
+            onChange={(e) => setTeamChoice(e.target.value)}
+            disabled={loadingTeams}
           >
-            <option value="not_sure">I don&apos;t know / Not assigned yet</option>
-
-            {orderedTeams.suggested.length > 0 && (
-              <optgroup label="Suggested teams">
-                {orderedTeams.suggested.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-
-            {orderedTeams.rest.length > 0 && (
-              <optgroup label="All teams">
-                {orderedTeams.rest.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
+            {orderedTeamOptions.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
           </select>
-
-          {teamsError && (
+          {yobValid && suggestedTeamIds.length > 0 && (
             <div className="text-xs text-gray-500 mt-1">
-              (Teams list unavailable: {teamsError})
+              Suggested teams shown at top based on players born {yobNum}.
             </div>
           )}
         </div>
@@ -584,8 +551,8 @@ const JerseyWidget: React.FC = () => {
               </div>
             )}
             {pendingAllocationId && (
-              <div className="text-[11px] mt-1 text-amber-800">
-                Reservation reference: {pendingAllocationId}
+              <div className="text-[11px] mt-1 text-amber-900/80 break-all">
+                Reservation ID saved for checkout.
               </div>
             )}
           </div>
