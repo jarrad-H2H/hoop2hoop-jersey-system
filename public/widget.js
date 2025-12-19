@@ -1,13 +1,45 @@
 // FILE: public/widget.js
 (function () {
+  function findSelectedVariantId() {
+    try {
+      var input = document.querySelector('form[action^="/cart/add"] input[name="id"]');
+      return input ? (input.value || "").trim() : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
   function findSelectedSizeValue() {
     try {
-      // 1) variant-selects dropdowns
+      // Globo swatches: label[for="swatch-detail-<variantId>-..."] contains the size text
+      var variantId = findSelectedVariantId();
+      if (variantId) {
+        var globoLabel = document.querySelector('label[for^="swatch-detail-' + variantId + '"]');
+        if (globoLabel && globoLabel.textContent) return globoLabel.textContent.trim();
+      }
+
+      // Fallback: Dawn variant-radios (if ever used)
+      var variantRadios = document.querySelector("variant-radios");
+      if (variantRadios) {
+        var fieldsets = variantRadios.querySelectorAll("fieldset");
+        for (var f = 0; f < fieldsets.length; f++) {
+          var fs = fieldsets[f];
+          var legend = fs.querySelector("legend");
+          var legendText = (legend && legend.textContent ? legend.textContent : "").toLowerCase();
+          if (legendText.indexOf("size") !== -1) {
+            var checked = fs.querySelector('input[type="radio"]:checked');
+            if (checked) return (checked.value || "").trim();
+          }
+        }
+        var anyChecked = variantRadios.querySelector('input[type="radio"]:checked');
+        if (anyChecked) return (anyChecked.value || "").trim();
+      }
+
+      // Fallback: variant-selects dropdowns
       var variantSelects = document.querySelector("variant-selects");
       if (variantSelects) {
         var selects = variantSelects.querySelectorAll("select");
         if (selects && selects.length) {
-          // Prefer the select whose name looks like Size
           for (var i = 0; i < selects.length; i++) {
             var sel = selects[i];
             var name = (sel.getAttribute("name") || "").toLowerCase();
@@ -17,53 +49,7 @@
         }
       }
 
-      // 2) variant-radios buttons (Dawn size pills)
-      var variantRadios = document.querySelector("variant-radios");
-      if (variantRadios) {
-        // A) Try to find the "Size" fieldset via legend text or input name
-        var fieldsets = variantRadios.querySelectorAll("fieldset");
-        for (var f = 0; f < fieldsets.length; f++) {
-          var fs = fieldsets[f];
-
-          var legend = fs.querySelector("legend");
-          var legendText = (legend && legend.textContent ? legend.textContent : "")
-            .toLowerCase()
-            .replace(/\s+/g, " ")
-            .trim();
-
-          var anyRadio = fs.querySelector('input[type="radio"]');
-          var radioName = (anyRadio && anyRadio.getAttribute("name") ? anyRadio.getAttribute("name") : "")
-            .toLowerCase();
-
-          var looksLikeSize = legendText.indexOf("size") !== -1 || radioName.indexOf("size") !== -1;
-
-          if (looksLikeSize) {
-            var checked = fs.querySelector('input[type="radio"]:checked');
-            if (checked) return (checked.value || "").trim();
-          }
-        }
-
-        // B) Fallback: checked radio with name containing Size/size
-        var checkedByName =
-          variantRadios.querySelector('input[type="radio"]:checked[name*="Size"]') ||
-          variantRadios.querySelector('input[type="radio"]:checked[name*="size"]');
-        if (checkedByName) return (checkedByName.value || "").trim();
-
-        // C) Fallback: any checked radio inside variant-radios
-        var anyChecked = variantRadios.querySelector('input[type="radio"]:checked');
-        if (anyChecked) return (anyChecked.value || "").trim();
-      }
-
       return "";
-    } catch (_) {
-      return "";
-    }
-  }
-
-  function findSelectedVariantId() {
-    try {
-      var input = document.querySelector('form[action^="/cart/add"] input[name="id"]');
-      return input ? (input.value || "").trim() : "";
     } catch (_) {
       return "";
     }
@@ -80,19 +66,16 @@
 
     var baseUrl = new URL(document.currentScript.src).origin;
 
-    // Shopify productId from placeholder
     var productId = "";
     try {
       productId = (host.getAttribute("data-product-id") || "").trim();
     } catch (_) {}
 
-    // Optional legacy club handle
     var clubHandle = "";
     try {
       clubHandle = (host.getAttribute("data-club-handle") || "").trim();
     } catch (_) {}
 
-    // Embed widget
     var iframe = document.createElement("iframe");
     iframe.src =
       baseUrl +
@@ -101,6 +84,7 @@
       encodeURIComponent(productId || "") +
       "&club=" +
       encodeURIComponent(clubHandle || "");
+
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -126,46 +110,25 @@
       } catch (_) {}
     }
 
-    // Dawn sometimes updates checked state slightly after the event
+    // Globo/Dawn often update variantId then label state a split-second later
     var sendTimer = null;
-    function scheduleSendVariantState() {
-      try {
-        if (sendTimer) clearTimeout(sendTimer);
-        sendTimer = setTimeout(function () {
-          sendVariantState();
-        }, 180);
-      } catch (_) {
-        sendVariantState();
-      }
+    function scheduleSend() {
+      if (sendTimer) clearTimeout(sendTimer);
+      sendTimer = setTimeout(sendVariantState, 200);
     }
 
     iframe.addEventListener("load", function () {
-      // Give the product form time to fully initialise
-      setTimeout(sendVariantState, 250);
+      setTimeout(sendVariantState, 300);
     });
 
-    function isInVariantArea(target) {
-      if (!target || !target.closest) return false;
-      return (
-        target.closest("variant-radios") ||
-        target.closest("variant-selects") ||
-        target.closest(".product-form") ||
-        target.closest("product-info")
-      );
-    }
-
-    // Listen to both change + click so pills are captured reliably
-    document.addEventListener("change", function (e) {
-      var t = e && e.target;
-      if (isInVariantArea(t)) scheduleSendVariantState();
+    document.addEventListener("change", function () {
+      scheduleSend();
     });
 
-    document.addEventListener("click", function (e) {
-      var t = e && e.target;
-      if (isInVariantArea(t)) scheduleSendVariantState();
+    document.addEventListener("click", function () {
+      scheduleSend();
     });
 
-    // Widget -> Shopify messages
     window.addEventListener("message", function (event) {
       try {
         if (!event || !event.data) return;
