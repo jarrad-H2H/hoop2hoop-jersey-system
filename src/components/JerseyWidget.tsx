@@ -10,7 +10,6 @@ import {
 interface MappingRow {
   shopify_product_id: string;
   club_id: string;
-  clubs?: { name: string } | null;
 }
 
 interface NumberSuggestion {
@@ -22,196 +21,190 @@ interface NumberSuggestion {
 const SEASON_YEAR = 2025;
 
 const JerseyWidget: React.FC = () => {
-  // Shopify context (sent from parent page)
+  // ---- Shopify context passed in via iframe query params / postMessage ----
   const [shopifyProductId, setShopifyProductId] = useState<string>("");
-  const [shopifyVariantId, setShopifyVariantId] = useState<string>("");
   const [selectedSize, setSelectedSize] = useState<string>("");
 
-  // Detected club (from mapping table)
-  const [clubId, setClubId] = useState<string>("");
-  const [clubName, setClubName] = useState<string>("");
+  // ---- Club detection (via mapping table) ----
+  const [selectedClubId, setSelectedClubId] = useState<string>("");
+  const [clubDetectError, setClubDetectError] = useState<string | null>(null);
 
-  // Inputs
-  const [yearOfBirth, setYearOfBirth] = useState("");
-  const [teamOptions, setTeamOptions] = useState<string[]>([]);
-  const [selectedTeam, setSelectedTeam] = useState<string>("I don't know / Not assigned yet");
-  const [preferredNumber, setPreferredNumber] = useState("");
+  // ---- Inputs ----
+  const [yearOfBirth, setYearOfBirth] = useState<string>("");
+  const [teamChoice, setTeamChoice] = useState<string>(""); // required (including "not sure")
+  const [preferredNumber, setPreferredNumber] = useState<string>("");
 
-  // Results
+  // ---- Suggestions / selection ----
   const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
-  const [pickedNumber, setPickedNumber] = useState<number | null>(null);
+  const [selectedNumber, setSelectedNumber] = useState<number | null>(null);
 
-  // UI states
-  const [loading, setLoading] = useState(false);
+  // ---- UI state ----
+  const [loadingSuggest, setLoadingSuggest] = useState(false);
   const [reserving, setReserving] = useState(false);
-  const [statusMessage, setStatusMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Hold timer
+  // ---- Reservation status ----
+  const [statusMessage, setStatusMessage] = useState<string>("");
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [tick, setTick] = useState<number>(Date.now());
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
-  const yobValid = Number.isFinite(yobNum) && yobNum > 1900 && yobNum < 2100;
+  const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
 
-  // Pull productId from query params (backup - primary is postMessage)
+  const remainingSeconds = expiresAt
+    ? Math.max(0, Math.floor((expiresAt - tick) / 1000))
+    : 0;
+
+  const sizeSelected = Boolean((selectedSize || "").trim());
+
+  // Require Team dropdown selection (including the "not sure" option)
+  const teamSelected = Boolean((teamChoice || "").trim());
+
+  const canSuggest =
+    Boolean(selectedClubId) && sizeSelected && yobValid && teamSelected && !loadingSuggest && !reserving;
+
+  const canConfirm =
+    Boolean(selectedClubId) &&
+    sizeSelected &&
+    yobValid &&
+    teamSelected &&
+    selectedNumber !== null &&
+    !reserving &&
+    !loadingSuggest;
+
+  // ---- Send events to Shopify (parent window) AND to local page (admin demo) ----
+  const notifyShopify = (
+    type: "h2h:reservation:ready" | "h2h:reservation:cleared",
+    payload?: any
+  ) => {
+    try {
+      // Shopify iframe usage
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type, ...(payload || {}) }, "*");
+      }
+      // Admin demo usage (same window)
+      window.dispatchEvent(new CustomEvent(type, { detail: payload || {} }));
+    } catch (_) {
+      // no-op
+    }
+  };
+
+  // ---- 1) Read initial query params (best-effort) ----
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const pid = (params.get("productId") || "").trim();
+      const pid = (params.get("productId") || params.get("product_id") || "").trim();
       if (pid) setShopifyProductId(pid);
-    } catch (_) {}
+    } catch (_) {
+      // ignore
+    }
+
+    // Default Team dropdown option (required)
+    setTeamChoice("not_sure");
   }, []);
 
-  // Listen for parent -> iframe messages (size pill + variant id)
+  // ---- 2) Listen for Shopify variant changes from public/widget.js ----
   useEffect(() => {
-    function onMessage(event: MessageEvent) {
+    const onMsg = (event: MessageEvent) => {
       try {
-        if (!event?.data) return;
-        const data = event.data;
+        const data: any = event?.data;
+        if (!data || data.type !== "h2h:variantChanged") return;
 
-        if (data.type === "h2h:variantChanged") {
-          const size = String(data.size || "").trim();
-          const variantId = String(data.variantId || "").trim();
-          const productId = String(data.productId || "").trim();
-
-          if (productId) setShopifyProductId(productId);
-          if (variantId) setShopifyVariantId(variantId);
+        const size = (data.size || "").trim();
+        if (size) {
           setSelectedSize(size);
 
-          // Reset flow when variant/size changes
+          // If user changes size after suggestions were loaded, reset downstream selections.
           setSuggestions([]);
-          setPickedNumber(null);
-          setStatusMessage("");
+          setSelectedNumber(null);
           setError(null);
-          setExpiresAt(null);
-
-          // Tell parent to re-lock ATC until we re-reserve
-          window.parent?.postMessage({ type: "h2h:reservation:cleared" }, "*");
         }
-      } catch (_) {}
-    }
 
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+        // If your widget.js is later updated to pass productId too, we’ll accept it.
+        const pid = (data.productId || data.product_id || "").toString().trim();
+        if (pid) setShopifyProductId(pid);
+      } catch (_) {
+        // ignore
+      }
+    };
+
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
   }, []);
 
-  // Resolve club from mapping table using Shopify productId
+  // ---- 3) Detect club via mapping table: shopify_product_club_map ----
   useEffect(() => {
-    if (!shopifyProductId) return;
+    const run = async () => {
+      setClubDetectError(null);
+      setSelectedClubId("");
 
-    void (async () => {
-      setError(null);
-      setStatusMessage("");
-      setClubId("");
-      setClubName("");
-
-      try {
-        const { data, error: mapErr } = await supabase
-          .from("shopify_product_club_map")
-          .select("shopify_product_id, club_id, clubs(name)")
-          .eq("shopify_product_id", shopifyProductId)
-          .maybeSingle();
-
-        if (mapErr) {
-          setError(mapErr.message);
-          return;
-        }
-
-        const row = (data as any) as MappingRow | null;
-        if (!row?.club_id) {
-          setError("Club could not be detected for this product.");
-          return;
-        }
-
-        setClubId(row.club_id);
-        setClubName(row.clubs?.name || "");
-      } catch (e: any) {
-        setError(e?.message || "Club could not be detected for this product.");
+      const pid = (shopifyProductId || "").trim();
+      if (!pid) {
+        // Don’t throw hard error yet - the size pill message often arrives first.
+        return;
       }
-    })();
+
+      const { data, error } = await supabase
+        .from("shopify_product_club_map")
+        .select("shopify_product_id, club_id")
+        .eq("shopify_product_id", pid)
+        .limit(1);
+
+      if (error) {
+        setClubDetectError(error.message);
+        return;
+      }
+
+      const row = (data?.[0] as MappingRow | undefined) ?? undefined;
+      if (!row?.club_id) {
+        setClubDetectError("Club could not be detected for this product.");
+        return;
+      }
+
+      setSelectedClubId(row.club_id);
+    };
+
+    void run();
   }, [shopifyProductId]);
 
-  // Load teams based on club + YOB (best-effort)
+  // ---- 4) Countdown tick ----
   useEffect(() => {
-    if (!clubId || !yobValid) {
-      setTeamOptions([]);
-      setSelectedTeam("I don't know / Not assigned yet");
-      return;
-    }
+    if (!expiresAt) return;
+    const t = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
 
-    void (async () => {
-      try {
-        // Best-effort assumption: players table exists (you have Players page)
-        // and includes club_id, season_year, year_of_birth, team_name.
-        const { data, error: teamErr } = await supabase
-          .from("players")
-          .select("team_name")
-          .eq("club_id", clubId)
-          .eq("season_year", SEASON_YEAR)
-          .eq("year_of_birth", yobNum);
-
-        if (teamErr) {
-          // If columns differ, we still provide the default option
-          setTeamOptions([]);
-          setSelectedTeam("I don't know / Not assigned yet");
-          return;
-        }
-
-        const uniqueTeams = Array.from(
-          new Set((data ?? []).map((r: any) => String(r.team_name || "").trim()).filter(Boolean))
-        ).sort((a, b) => a.localeCompare(b));
-
-        setTeamOptions(uniqueTeams);
-        setSelectedTeam("I don't know / Not assigned yet");
-      } catch (_) {
-        setTeamOptions([]);
-        setSelectedTeam("I don't know / Not assigned yet");
-      }
-    })();
-  }, [clubId, yobValid, yobNum]);
-
-  // Countdown + auto-expire hold
+  // ---- 5) Auto-expire reservation ----
   useEffect(() => {
     if (!expiresAt) return;
 
     const timer = setInterval(() => {
       if (Date.now() >= expiresAt) {
-        setPickedNumber(null);
         setExpiresAt(null);
         setStatusMessage("");
-        window.parent?.postMessage({ type: "h2h:reservation:cleared" }, "*");
+        setSelectedNumber(null);
+        notifyShopify("h2h:reservation:cleared");
       }
     }, 1000);
 
     return () => clearInterval(timer);
   }, [expiresAt]);
 
-  const remainingSeconds = expiresAt
-    ? Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))
-    : 0;
-
-  const teamSelected = Boolean((selectedTeam || "").trim().length > 0);
-
-  const canCheckSuggest = Boolean(
-    clubId && selectedSize && yobValid && teamSelected && !loading && !reserving
-  );
-
-  const canConfirmReserve = Boolean(
-    clubId && selectedSize && yobValid && teamSelected && pickedNumber !== null && !reserving
-  );
-
-  const handleCheckSuggest = async () => {
+  // ---- Helpers ----
+  const clearMessages = () => {
     setError(null);
     setStatusMessage("");
-    setSuggestions([]);
-    setPickedNumber(null);
+  };
 
-    if (!clubId) {
-      setError("Club could not be detected for this product.");
+  const handleSuggest = async () => {
+    clearMessages();
+
+    if (!selectedClubId) {
+      setError(clubDetectError || "Club could not be detected for this product.");
       return;
     }
-    if (!selectedSize) {
-      setError("Please select a size above.");
+    if (!sizeSelected) {
+      setError("Please select a size above to continue.");
       return;
     }
     if (!yobValid) {
@@ -219,87 +212,99 @@ const JerseyWidget: React.FC = () => {
       return;
     }
     if (!teamSelected) {
-      setError("Please select a team (or choose the Not assigned option).");
+      setError("Please select a team (or choose Not sure/Not assigned yet).");
       return;
     }
 
-    setLoading(true);
+    setLoadingSuggest(true);
+    setSuggestions([]);
+    setSelectedNumber(null);
+
     try {
-      // 1) Ranked suggestions
       const ranked = await suggestNumbersForClubRanked({
-        clubId,
+        clubId: selectedClubId,
         size: selectedSize,
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
-        limit: 10,
+        limit: 12,
+        // team is not enforced in allocation logic yet - captured for future improvements
       });
 
-      let merged = ranked || [];
-
-      // 2) If preferred number provided, check and (if available) include it
+      // Optional: if preferred number entered, check it and float it to the top if valid
       const pref = Number(preferredNumber);
-      const prefValid = Number.isFinite(pref);
-
-      if (prefValid) {
+      if (Number.isFinite(pref)) {
         try {
           const check = await smartCheckNumber({
-            clubId,
-            jerseyNumber: pref,
+            clubId: selectedClubId,
             size: selectedSize,
             seasonYear: SEASON_YEAR,
+            jerseyNumber: pref,
+            yearOfBirth: yobNum,
           });
 
-          // If available, ensure it appears at the top
-          if (check?.available) {
-            merged = [
-              { jersey_number: pref, total_stock: check.total_stock ?? 1, score: 9999 },
-              ...merged.filter((s) => s.jersey_number !== pref),
-            ];
+          // If smartCheck says "available", add it to the front if it isn't already present
+          if ((check as any)?.ok === true || (check as any)?.available === true) {
+            const exists = ranked.some((r: any) => r.jersey_number === pref);
+            const boosted: NumberSuggestion[] = exists
+              ? ranked
+              : [{ jersey_number: pref, total_stock: 1, score: 999 }, ...ranked];
+            setSuggestions(boosted);
           } else {
-            setStatusMessage(
-              `Preferred #${pref} is not available in size ${selectedSize}. Pick an alternative below.`
-            );
+            setSuggestions(ranked);
           }
         } catch (_) {
-          // If smartCheck fails, we still show ranked suggestions
+          // If smartCheck fails, just show ranked list
+          setSuggestions(ranked);
         }
+      } else {
+        setSuggestions(ranked);
       }
 
-      // De-dupe and keep order
-      const seen = new Set<number>();
-      const finalList: NumberSuggestion[] = [];
-      for (const s of merged) {
-        const n = Number(s.jersey_number);
-        if (!Number.isFinite(n) || seen.has(n)) continue;
-        seen.add(n);
-        finalList.push(s);
-      }
-
-      setSuggestions(finalList);
-
-      if (finalList.length === 0) {
-        setError("No available numbers found for this size. Try another size or contact the club.");
+      if (!ranked || ranked.length === 0) {
+        setError(
+          "No available numbers found for this size. Try another size or contact the club."
+        );
       }
     } finally {
-      setLoading(false);
+      setLoadingSuggest(false);
     }
   };
 
-  const handleConfirmReserve = async () => {
+  const handlePickSuggestion = (num: number) => {
+    setSelectedNumber(num);
+    setPreferredNumber(String(num));
     setError(null);
-    setStatusMessage("");
+  };
 
-    if (!clubId) return setError("Club could not be detected for this product.");
-    if (!selectedSize) return setError("Please select a size above.");
-    if (!yobValid) return setError("Please enter a valid year of birth.");
-    if (!teamSelected) return setError("Please select a team (or Not assigned).");
-    if (pickedNumber === null) return setError("Please select a suggested number first.");
+  const handleReserve = async () => {
+    clearMessages();
+
+    if (!selectedClubId) {
+      setError(clubDetectError || "Club could not be detected for this product.");
+      return;
+    }
+    if (!sizeSelected) {
+      setError("Please select a size above to continue.");
+      return;
+    }
+    if (!yobValid) {
+      setError("Please enter a valid year of birth.");
+      return;
+    }
+    if (!teamSelected) {
+      setError("Please select a team (or choose Not sure/Not assigned yet).");
+      return;
+    }
+    if (selectedNumber === null) {
+      setError("Please choose a suggested number before confirming.");
+      return;
+    }
 
     setReserving(true);
     try {
       const result = await reserveNumberForPurchase({
-        clubId,
-        jerseyNumber: pickedNumber,
+        clubId: selectedClubId,
+        jerseyNumber: selectedNumber,
         size: selectedSize,
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
@@ -307,61 +312,62 @@ const JerseyWidget: React.FC = () => {
       });
 
       if (!result.success) {
-        setError(result.message);
+        setError(result.message || "Could not reserve that number.");
         return;
       }
 
       const expiry = Date.now() + 15 * 60 * 1000;
       setExpiresAt(expiry);
 
-      setStatusMessage(`Jersey #${pickedNumber} reserved. Hold expires in 15:00.`);
+      // Put the success message at the bottom near the buttons (as requested)
+      setStatusMessage(`Jersey #${selectedNumber} reserved. Hold expires in 15:00.`);
 
-      // Tell parent page to unlock Add to Cart + write hidden property
-      window.parent?.postMessage(
-        { type: "h2h:reservation:ready", jerseyNumber: pickedNumber },
-        "*"
-      );
+      // IMPORTANT: tell Shopify parent page to unlock Add to cart
+      notifyShopify("h2h:reservation:ready", { jerseyNumber: selectedNumber });
     } finally {
       setReserving(false);
     }
   };
 
-  const headerLine = clubName
-    ? `${clubName} - Size ${selectedSize || "?"}`
-    : `Size ${selectedSize || "?"}`;
-
   return (
-    <div className="max-w-[460px]">
+    <div className="w-full max-w-[440px]">
       <div className="mb-3">
-        <h3 className="text-base font-semibold text-gray-900">Choose your jersey number</h3>
-        <div className="text-xs text-gray-600 mt-1">
-          {shopifyProductId ? (
-            <span className="font-medium">{headerLine}</span>
-          ) : (
-            <span className="font-medium">Loading product info…</span>
-          )}
-        </div>
+        <h3 className="text-base font-semibold">Choose your jersey number</h3>
+        <p className="text-xs text-gray-600 mt-1">
+          Select your size above, then enter details below to find an available playing number.
+        </p>
       </div>
 
+      {/* Errors */}
       {error && (
         <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3 mb-3">
           {error}
         </div>
       )}
 
-      {statusMessage && (
-        <div className="text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded p-3 mb-3">
-          <div>{statusMessage}</div>
-          {expiresAt && (
-            <div className="text-xs mt-1">
-              Hold expires in {Math.floor(remainingSeconds / 60)}:
-              {(remainingSeconds % 60).toString().padStart(2, "0")}
+      {/* Club detect issues (soft display) */}
+      {clubDetectError && !selectedClubId && (
+        <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-3 mb-3">
+          {clubDetectError}
+          {!shopifyProductId && (
+            <div className="mt-1">
+              (Waiting for product context from Shopify.)
             </div>
           )}
         </div>
       )}
 
       <div className="bg-white border rounded p-4 space-y-3">
+        {/* Size (read-only indicator, comes from Shopify size pills) */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+            Size
+          </label>
+          <div className="border rounded px-3 py-2 text-sm bg-gray-50">
+            {sizeSelected ? selectedSize : "Select a size above to continue"}
+          </div>
+        </div>
+
         {/* YOB */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
@@ -370,36 +376,28 @@ const JerseyWidget: React.FC = () => {
           <input
             type="number"
             className="border rounded px-3 py-2 w-full"
-            placeholder="e.g. 2012"
+            placeholder="e.g. 2013"
             value={yearOfBirth}
             onChange={(e) => setYearOfBirth(e.target.value)}
           />
         </div>
 
-        {/* Team */}
+        {/* Team dropdown (placeholder for now - we’ll wire it to real teams next) */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Team
           </label>
           <select
             className="border rounded px-3 py-2 w-full"
-            value={selectedTeam}
-            onChange={(e) => setSelectedTeam(e.target.value)}
-            disabled={!clubId || !yobValid}
+            value={teamChoice}
+            onChange={(e) => setTeamChoice(e.target.value)}
           >
-            <option value="I don't know / Not assigned yet">I don't know / Not assigned yet</option>
-            {teamOptions.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
+            <option value="">Select a team</option>
+            <option value="not_sure">I don&apos;t know / Not assigned yet</option>
           </select>
-          <p className="text-xs text-gray-500 mt-1">
-            Team list is suggested from your club and year of birth (if available).
-          </p>
         </div>
 
-        {/* Preferred number (optional) */}
+        {/* Preferred number (optional) - ABOVE suggest button */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Preferred number (optional)
@@ -407,76 +405,73 @@ const JerseyWidget: React.FC = () => {
           <input
             type="number"
             className="border rounded px-3 py-2 w-full"
-            placeholder="e.g. 12"
+            placeholder="e.g. 23"
             value={preferredNumber}
             onChange={(e) => setPreferredNumber(e.target.value)}
           />
         </div>
 
-        {/* Check & Suggest */}
+        {/* Suggest button */}
         <button
           type="button"
-          onClick={handleCheckSuggest}
-          disabled={!canCheckSuggest}
-          className="w-full px-4 py-2 rounded font-semibold bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:text-gray-600"
+          onClick={handleSuggest}
+          disabled={!canSuggest}
+          className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:text-gray-600"
         >
-          {loading ? "Checking…" : "Check & Suggest Playing Numbers"}
+          {loadingSuggest ? "Checking…" : "Check & Suggest Playing Numbers"}
         </button>
 
-        {/* Small helper if size missing */}
-        {!selectedSize && (
-          <div className="text-xs text-gray-600">
-            Select a <span className="font-semibold">Size</span> above to continue.
+        {/* Suggested numbers */}
+        {suggestions.length > 0 && (
+          <div className="pt-2">
+            <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
+              Suggested numbers
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {suggestions.map((s) => {
+                const active = selectedNumber === s.jersey_number;
+                return (
+                  <button
+                    key={s.jersey_number}
+                    type="button"
+                    onClick={() => handlePickSuggestion(s.jersey_number)}
+                    className={[
+                      "px-3 py-2 rounded border text-sm font-semibold",
+                      active
+                        ? "bg-emerald-600 border-emerald-700 text-white"
+                        : "bg-white border-gray-300 text-gray-900 hover:bg-gray-50",
+                    ].join(" ")}
+                  >
+                    #{s.jersey_number}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
-      </div>
 
-      {/* Suggestions */}
-      {suggestions.length > 0 && (
-        <div className="mt-4 bg-white border rounded p-4">
-          <div className="text-sm font-semibold text-gray-900 mb-2">Available options</div>
-          <div className="flex flex-wrap gap-2">
-            {suggestions.map((s) => {
-              const isPicked = pickedNumber === s.jersey_number;
-              return (
-                <button
-                  key={s.jersey_number}
-                  type="button"
-                  onClick={() => setPickedNumber(s.jersey_number)}
-                  className={
-                    "px-3 py-2 rounded border text-sm font-semibold " +
-                    (isPicked
-                      ? "bg-indigo-600 text-white border-indigo-600"
-                      : "bg-white text-gray-900 border-gray-300 hover:border-indigo-400")
-                  }
-                >
-                  #{s.jersey_number}
-                </button>
-              );
-            })}
+        {/* Confirm button (bottom, only meaningful once a number is selected) */}
+        <button
+          type="button"
+          onClick={handleReserve}
+          disabled={!canConfirm}
+          className="w-full px-4 py-2 rounded font-semibold text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300 disabled:text-gray-600"
+        >
+          {reserving ? "Reserving…" : "Confirm & Reserve"}
+        </button>
+
+        {/* Status message at the BOTTOM near actions (as requested) */}
+        {statusMessage && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded text-sm">
+            <div>{statusMessage}</div>
+            {expiresAt && (
+              <div className="text-xs mt-1">
+                Hold expires in {Math.floor(remainingSeconds / 60)}:
+                {(remainingSeconds % 60).toString().padStart(2, "0")}
+              </div>
+            )}
           </div>
-
-          {/* Confirm & Reserve */}
-          <button
-            type="button"
-            onClick={handleConfirmReserve}
-            disabled={!canConfirmReserve}
-            className="mt-4 w-full px-4 py-2 rounded font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300 disabled:text-gray-600"
-          >
-            {reserving ? "Reserving…" : "Confirm & Reserve"}
-          </button>
-
-          <p className="text-xs text-gray-500 mt-2">
-            Reserving holds the number for 15 minutes so you can complete checkout.
-          </p>
-        </div>
-      )}
-
-      {/* Debug (optional) */}
-      <div className="mt-3 text-[11px] text-gray-400">
-        <div>productId: {shopifyProductId || "-"}</div>
-        <div>variantId: {shopifyVariantId || "-"}</div>
-        <div>size: {selectedSize || "-"}</div>
+        )}
       </div>
     </div>
   );
