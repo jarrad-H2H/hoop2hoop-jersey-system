@@ -151,7 +151,7 @@ const ProductClubMapping: React.FC = () => {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold">Product -> Club Mapping</h1>
+        <h1 className="text-2xl font-bold">Product {"->"} Club Mapping</h1>
         <p className="text-sm text-gray-600 mt-1">
           Paste a Shopify <b>Admin product URL</b> (recommended) or a numeric <b>Product ID</b>, then assign it to a club.
           This is how the widget detects the club safely.
