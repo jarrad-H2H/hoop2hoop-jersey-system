@@ -1,3 +1,4 @@
+// FILE: src/router.tsx
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 
@@ -40,8 +41,6 @@ const AppRouter: React.FC = () => {
       >
         {/* Dashboard */}
         <Route index element={<ClubOverview />} />
-
-        {/* Club Overview */}
         <Route path="club-overview" element={<ClubOverview />} />
 
         {/* Managers */}
@@ -56,13 +55,9 @@ const AppRouter: React.FC = () => {
         <Route path="allocation" element={<Allocation />} />
         <Route path="allocation-history" element={<AllocationHistory />} />
 
-        {/* CSV importer */}
+        {/* Tools */}
         <Route path="importer" element={<Importer />} />
-
-        {/* Data settings */}
         <Route path="settings" element={<DataSettings />} />
-
-        {/* Stock Planner */}
         <Route path="stock-planner" element={<StockPlanner />} />
 
         {/* Bulk upload */}
