@@ -18,10 +18,10 @@ interface NumberSuggestion {
   score?: number;
 }
 
-interface TeamRow {
-  id: string;
+interface TeamOption {
+  id: string; // this will be players.team_id
   name: string;
-  club_id: string;
+  ageGroupNum: number | null; // extracted from team id/name when possible (10, 12, 14, 16, etc)
 }
 
 const JerseyWidget: React.FC = () => {
@@ -40,8 +40,8 @@ const JerseyWidget: React.FC = () => {
   const [teamChoice, setTeamChoice] = useState<string>("not_sure");
   const [preferredNumber, setPreferredNumber] = useState<string>("");
 
-  // Teams
-  const [teams, setTeams] = useState<TeamRow[]>([]);
+  // Teams (sourced from players table)
+  const [teamOptions, setTeamOptions] = useState<TeamOption[]>([]);
   const [suggestedTeamIds, setSuggestedTeamIds] = useState<string[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
 
@@ -92,6 +92,46 @@ const JerseyWidget: React.FC = () => {
       window.dispatchEvent(new CustomEvent(type, { detail: payload || {} }));
     } catch (_) {}
   };
+
+  // Extract an age group number from a team id/name when possible.
+  // Handles examples like:
+  // - "16B.2" -> 16
+  // - "10B.1" -> 10
+  // - "U10 M.1 (Wildcats)" -> 10
+  // - "U12 Boys Div 1 (Red)" -> 12
+  // Returns null if it cannot be determined (eg "SLG.1")
+  const parseTeamAgeGroupNum = (teamIdOrName: string): number | null => {
+    const s = String(teamIdOrName || "").trim();
+    if (!s) return null;
+
+    const m1 = s.match(/\bU(\d{1,2})\b/i);
+    if (m1 && m1[1]) {
+      const n = Number(m1[1]);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    const m2 = s.match(/^\s*(\d{1,2})\s*[A-Za-z]/);
+    if (m2 && m2[1]) {
+      const n = Number(m2[1]);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    const m3 = s.match(/\b(\d{1,2})\s*[A-Za-z]\b/);
+    if (m3 && m3[1]) {
+      const n = Number(m3[1]);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    return null;
+  };
+
+  // Desired age group number from YOB.
+  // Assumption: U group = (current year - birth year + 2)
+  // Example you gave: 2013 -> currently U14, which matches 2025 - 2013 + 2 = 14.
+  const desiredAgeGroupNum = useMemo(() => {
+    if (!yobValid) return null;
+    return SEASON_YEAR - yobNum + 2;
+  }, [SEASON_YEAR, yobNum, yobValid]);
 
   // Read query params
   useEffect(() => {
@@ -183,26 +223,42 @@ const JerseyWidget: React.FC = () => {
     return () => clearInterval(timer);
   }, [expiresAt]);
 
-  // Load teams for club
+  // Load team options from players for this club (uuid-safe)
   useEffect(() => {
     const load = async () => {
-      setTeams([]);
+      setTeamOptions([]);
       setSuggestedTeamIds([]);
+
       if (!selectedClubId) return;
 
       setLoadingTeams(true);
       try {
         const { data, error } = await supabase
-          .from("teams")
-          .select("id, name, club_id")
+          .from("players")
+          .select("team_id")
           .eq("club_id", selectedClubId)
-          .order("name");
+          .not("team_id", "is", null);
 
         if (error) throw error;
-        setTeams((data ?? []) as TeamRow[]);
+
+        const set = new Set<string>();
+        for (const r of data ?? []) {
+          const tid = String((r as any).team_id || "").trim();
+          if (!tid) continue;
+          set.add(tid);
+        }
+
+        const list: TeamOption[] = Array.from(set)
+          .map((tid) => ({
+            id: tid,
+            name: tid,
+            ageGroupNum: parseTeamAgeGroupNum(tid),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        setTeamOptions(list);
       } catch (e: any) {
-        // Teams not mission-critical: we keep "not sure" available
-        console.warn("Failed to load teams", e?.message || e);
+        console.warn("Failed to load teams from players", e?.message || e);
       } finally {
         setLoadingTeams(false);
       }
@@ -239,7 +295,6 @@ const JerseyWidget: React.FC = () => {
 
         setSuggestedTeamIds(ranked);
 
-        // If user hasn't picked a real team yet, auto-pick the top suggested team (if any)
         if ((teamChoice === "not_sure" || teamChoice === "") && ranked.length > 0) {
           setTeamChoice(ranked[0]);
         }
@@ -290,7 +345,6 @@ const JerseyWidget: React.FC = () => {
         limit: 12,
       });
 
-      // If preferred number entered, check if it’s viable for THIS size (stock exists + no cohort clash)
       const pref = Number(preferredNumber);
       if (Number.isFinite(pref)) {
         try {
@@ -386,7 +440,6 @@ const JerseyWidget: React.FC = () => {
 
       setStatusMessage(`Jersey #${selectedNumber} reserved.`);
 
-      // Tell Shopify: unlock ATC + set both hidden props (Jersey + Reservation ID)
       notifyShopify("h2h:reservation:ready", {
         jerseyNumber: selectedNumber,
         pendingAllocationId: pid,
@@ -399,20 +452,30 @@ const JerseyWidget: React.FC = () => {
   };
 
   const orderedTeamOptions = useMemo(() => {
-    const notSure = [{ id: "not_sure", name: "I don't know / Not assigned yet", club_id: selectedClubId } as TeamRow];
+    const notSure: TeamOption[] = [{ id: "not_sure", name: "I don't know / Not assigned yet", ageGroupNum: null }];
 
-    if (!teams.length) return notSure;
+    const baseList = teamOptions;
 
-    // If we have suggestedTeamIds, put them first (but still keep full list available below)
+    // If YOB is valid and we can match an age group, filter down to that age group.
+    // Fallback: if we cannot find any teams for that age group, show the full list.
+    let filtered = baseList;
+    if (desiredAgeGroupNum != null) {
+      const matches = baseList.filter((t) => t.ageGroupNum === desiredAgeGroupNum);
+      filtered = matches.length > 0 ? matches : baseList;
+    }
+
+    if (!filtered.length) return notSure;
+
+    // Suggested teams first (if any)
     const suggested = suggestedTeamIds
-      .map((id) => teams.find((t) => t.id === id))
-      .filter(Boolean) as TeamRow[];
+      .map((id) => filtered.find((t) => t.id === id))
+      .filter(Boolean) as TeamOption[];
 
     const suggestedSet = new Set(suggested.map((t) => t.id));
-    const rest = teams.filter((t) => !suggestedSet.has(t.id));
+    const rest = filtered.filter((t) => !suggestedSet.has(t.id));
 
     return [...notSure, ...suggested, ...rest];
-  }, [teams, suggestedTeamIds, selectedClubId]);
+  }, [teamOptions, suggestedTeamIds, desiredAgeGroupNum]);
 
   return (
     <div className="w-full max-w-[440px]">
@@ -457,6 +520,11 @@ const JerseyWidget: React.FC = () => {
             value={yearOfBirth}
             onChange={(e) => setYearOfBirth(e.target.value)}
           />
+          {yobValid && desiredAgeGroupNum != null && (
+            <div className="text-xs text-gray-500 mt-1">
+              Showing teams for U{desiredAgeGroupNum} when available.
+            </div>
+          )}
         </div>
 
         <div>
@@ -475,6 +543,13 @@ const JerseyWidget: React.FC = () => {
               </option>
             ))}
           </select>
+
+          {loadingTeams && (
+            <div className="text-xs text-gray-500 mt-1">
+              Loading teams for this club...
+            </div>
+          )}
+
           {yobValid && suggestedTeamIds.length > 0 && (
             <div className="text-xs text-gray-500 mt-1">
               Suggested teams shown at top based on players born {yobNum}.
