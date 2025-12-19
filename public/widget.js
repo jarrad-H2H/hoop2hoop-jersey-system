@@ -1,16 +1,10 @@
-// FILE: public/widget.js
 (function () {
   function findSelectedSizeValue() {
-    // Dawn variants are usually managed via <variant-selects> or <variant-radios>
-    // We'll grab the selected option that corresponds to the Size option if possible,
-    // otherwise fall back to the currently selected variant title part.
     try {
-      // 1) variant-selects dropdowns (some stores)
       var variantSelects = document.querySelector("variant-selects");
       if (variantSelects) {
         var selects = variantSelects.querySelectorAll("select");
         if (selects && selects.length) {
-          // Best effort: if any select has name "options[Size]" or label nearby includes Size
           for (var i = 0; i < selects.length; i++) {
             var sel = selects[i];
             var name = (sel.getAttribute("name") || "").toLowerCase();
@@ -18,15 +12,12 @@
               return (sel.value || "").trim();
             }
           }
-          // fallback: first select
           return (selects[0].value || "").trim();
         }
       }
 
-      // 2) variant-radios buttons (Dawn size pills)
       var variantRadios = document.querySelector("variant-radios");
       if (variantRadios) {
-        // Try to find a fieldset that looks like size
         var fieldsets = variantRadios.querySelectorAll("fieldset");
         for (var f = 0; f < fieldsets.length; f++) {
           var fs = fieldsets[f];
@@ -37,7 +28,6 @@
             if (checked) return (checked.value || "").trim();
           }
         }
-        // fallback: any checked radio
         var anyChecked = variantRadios.querySelector('input[type="radio"]:checked');
         if (anyChecked) return (anyChecked.value || "").trim();
       }
@@ -69,19 +59,20 @@
 
     var baseUrl = new URL(document.currentScript.src).origin;
 
-    // pull club name/handle from the placeholder dataset (you already render this)
+    // Pull productId from placeholder (you render data-product-id in main-product.liquid)
+    var productId = "";
+    try {
+      productId = (host.getAttribute("data-product-id") || "").trim();
+    } catch (_) {}
+
+    // Pull club handle too (optional fallback if you ever want it)
     var club = "";
     try {
       club = (host.getAttribute("data-club-handle") || "").trim();
     } catch (_) {}
 
-    // Embed the widget
     var iframe = document.createElement("iframe");
-    iframe.src =
-      baseUrl +
-      "/embed/widget-demo" +
-      "?club=" +
-      encodeURIComponent(club || "");
+    iframe.src = baseUrl + "/embed/widget-demo";
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -89,35 +80,37 @@
 
     host.appendChild(iframe);
 
-    // Send size + variantId to the widget (on load and whenever it changes)
-    function sendVariantState() {
+    function postToWidget(payload) {
+      try {
+        if (!iframe.contentWindow) return;
+        iframe.contentWindow.postMessage(payload, "*");
+      } catch (_) {}
+    }
+
+    function sendState() {
       try {
         var size = findSelectedSizeValue();
         var variantId = findSelectedVariantId();
 
-        iframe.contentWindow &&
-          iframe.contentWindow.postMessage(
-            {
-              type: "h2h:variantChanged",
-              size: size,
-              variantId: variantId,
-            },
-            "*"
-          );
+        postToWidget({
+          type: "h2h:variantChanged",
+          productId: productId,
+          club: club,
+          size: size,
+          variantId: variantId,
+        });
       } catch (_) {}
     }
 
     iframe.addEventListener("load", function () {
-      sendVariantState();
+      // Send initial state as soon as iframe is ready
+      sendState();
     });
 
-    // Watch for changes anywhere in the product form area
     document.addEventListener("change", function (e) {
-      // Only react if the change happened within product form / variants area
       var t = e && e.target;
       if (!t) return;
 
-      // variant selectors typically live in these containers
       var inVariantArea =
         t.closest("variant-radios") ||
         t.closest("variant-selects") ||
@@ -125,11 +118,11 @@
         t.closest("product-info");
 
       if (inVariantArea) {
-        sendVariantState();
+        sendState();
       }
     });
 
-    // Listen for widget -> Shopify page messages (reservation ready/cleared)
+    // Widget -> Shopify page messages
     window.addEventListener("message", function (event) {
       try {
         if (!event || !event.data) return;
