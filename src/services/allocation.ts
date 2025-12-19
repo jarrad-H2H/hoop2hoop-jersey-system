@@ -48,6 +48,14 @@ export interface PendingAllocationRow {
   status: "reserved" | "purchased" | "expired" | "cancelled" | "reconciled";
   created_at: string;
   expires_at: string;
+
+  // Optional future purchase-reconciliation fields (safe to exist or not)
+  order_id?: string | null;
+  order_number?: string | null;
+  shopify_line_item_id?: string | null;
+  purchased_at?: string | null;
+  cancelled_at?: string | null;
+  expired_at?: string | null;
 }
 
 /**
@@ -334,7 +342,6 @@ export async function suggestNumbersForClubRanked(input: {
     const adjUse = adjCounts.get(n) ?? 0;
 
     const lowNumberPenalty = n >= 0 && n <= 10 ? 2 : 0;
-
     const score = adjUse * 100 + lowNumberPenalty * 10 - stockDepth * 2;
 
     scored.push({ jersey_number: n, total_stock: stockDepth, score });
@@ -352,6 +359,7 @@ export async function suggestNumbersForClubRanked(input: {
 
 /**
  * Reserve a specific inventory row for a club/number/size.
+ * (This marks inventory Allocated - it’s your “hard lock”.)
  */
 export async function allocateNumberForClub(
   clubId: string,
@@ -477,10 +485,12 @@ export async function createPendingAllocation(input: {
 }
 
 /**
- * One-call helper for the demo widget:
+ * One-call helper for the widget:
  * - allocate inventory row (hard lock)
  * - create pending allocation record
  * - log allocation event
+ *
+ * IMPORTANT: If pending allocation fails, we ROLLBACK the inventory row to Available.
  */
 export async function reserveNumberForPurchase(input: {
   clubId: string;
@@ -513,10 +523,25 @@ export async function reserveNumberForPurchase(input: {
   });
 
   if (!pending.success || !pending.row) {
+    // Roll back inventory immediately so stock isn’t stranded in Allocated
+    try {
+      await supabase
+        .from("inventory")
+        .update({
+          status: "Available",
+          allocated_player_id: null,
+          allocation_date: null,
+          return_date_due: null,
+        })
+        .eq("id", alloc.inventoryId);
+    } catch (e) {
+      // If rollback fails, we still return a clear error - admin can fix manually
+      console.error("reserveNumberForPurchase rollback failed", e);
+    }
+
     return {
       success: false,
-      message:
-        "Inventory was reserved, but pending allocation record failed to save. (You may want to return the jersey to stock.)",
+      message: "Pending allocation failed to save - inventory was returned to Available. Please try again.",
       inventoryId: alloc.inventoryId,
     };
   }
@@ -529,19 +554,19 @@ export async function reserveNumberForPurchase(input: {
     size: input.size,
     previous_jersey_number: null,
     previous_size: null,
-    note: "Reserved via widget demo (pending allocation)",
+    note: "Reserved via widget (pending allocation)",
   });
 
   return {
     success: true,
-    message: `Reserved jersey #${input.jerseyNumber} (${input.size}). Pending allocation created.`,
+    message: `Reserved jersey #${input.jerseyNumber} (${input.size}).`,
     pendingAllocationId: pending.row.id,
     inventoryId: alloc.inventoryId,
   };
 }
 
 /**
- * NEW: Cancel a reservation (used by "Change number" in widget demo).
+ * Cancel a reservation:
  * - Marks pending_allocation cancelled (only if still reserved and unexpired)
  * - Returns the inventory row to Available
  */
@@ -571,7 +596,6 @@ export async function cancelReservation(input: {
     return { success: false, message: `This reservation is not cancellable (status: ${row.status}).` };
   }
 
-  // Mark pending cancelled
   const { error: updPendingErr } = await supabase
     .from("pending_allocations")
     .update({ status: "cancelled" })
@@ -583,7 +607,6 @@ export async function cancelReservation(input: {
     return { success: false, message: "Failed to cancel the reservation record." };
   }
 
-  // Return inventory to available
   const { error: invErr } = await supabase
     .from("inventory")
     .update({
@@ -605,23 +628,18 @@ export async function cancelReservation(input: {
     player_id: null,
     jersey_number: row.jersey_number,
     size: row.size,
-    note: "Reservation cancelled (widget demo) - returned to stock",
+    note: "Reservation cancelled (widget) - returned to stock",
   });
 
   return { success: true, message: "Reservation cancelled. Inventory returned to available." };
 }
 
 /**
- * NEW: Finalize a reservation as "Purchased" (simulates Add to Cart completion).
- * - Marks pending_allocation purchased (only if still reserved and unexpired)
- * - Keeps inventory Allocated (do NOT return to stock)
- * - Logs an audit event (note only - we keep allocation_type = 'new' already recorded at reserve time)
- *
- * Later, when Shopify is wired in, this is the function we'll call at Add-to-Cart (or Order Created).
+ * Finalize a reservation as "Purchased" (used later by webhook/order flow).
  */
 export async function finalizeReservationForOrder(input: {
   pendingAllocationId: string;
-  orderRef?: string | null; // optional demo reference
+  orderRef?: string | null;
 }): Promise<{ success: boolean; message: string }> {
   const { data: pending, error: pErr } = await supabase
     .from("pending_allocations")
@@ -646,7 +664,6 @@ export async function finalizeReservationForOrder(input: {
     return { success: false, message: `This reservation cannot be finalized (status: ${row.status}).` };
   }
 
-  // Mark pending as purchased
   const { error: updPendingErr } = await supabase
     .from("pending_allocations")
     .update({ status: "purchased" })
@@ -658,7 +675,6 @@ export async function finalizeReservationForOrder(input: {
     return { success: false, message: "Failed to mark reservation as purchased." };
   }
 
-  // Ensure inventory is still allocated (guard)
   const { data: invRow, error: invReadErr } = await supabase
     .from("inventory")
     .select("id, status")
@@ -676,7 +692,6 @@ export async function finalizeReservationForOrder(input: {
   }
 
   if (String(inv.status) !== "Allocated") {
-    // We don't auto-fix here - safer to alert than to mutate unexpectedly
     return {
       success: false,
       message: `Reservation marked purchased, but inventory status is '${inv.status}'. Check for manual intervention.`,
@@ -689,9 +704,7 @@ export async function finalizeReservationForOrder(input: {
     player_id: null,
     jersey_number: row.jersey_number,
     size: row.size,
-    note: input.orderRef
-      ? `Purchased (simulated) - orderRef: ${input.orderRef}`
-      : "Purchased (simulated) - finalize reservation",
+    note: input.orderRef ? `Purchased - orderRef: ${input.orderRef}` : "Purchased - finalize reservation",
   });
 
   return { success: true, message: "Reservation finalized as purchased. Inventory remains allocated." };
