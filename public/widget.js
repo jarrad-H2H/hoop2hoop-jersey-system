@@ -27,17 +27,14 @@
   }
 
   function findSelectedVariantId(scope) {
-    // Dawn keeps this updated
     var input = $(".product-variant-id:not([disabled])", scope) || $(".product-variant-id", scope);
     if (input && input.value) return String(input.value).trim();
 
-    // Fallback
     var fallback = $('form[action^="/cart/add"] input[name="id"]', scope);
     return fallback && fallback.value ? String(fallback.value).trim() : "";
   }
 
   function findSelectedSizeValue(scope) {
-    // 1) Dawn variant-selects dropdowns
     var variantSelects = $("variant-selects", scope);
     if (variantSelects) {
       var selects = $all("select", variantSelects);
@@ -49,7 +46,6 @@
       if (selects[0] && selects[0].value) return (selects[0].value || "").trim();
     }
 
-    // 2) Dawn variant-radios (native size pills)
     var variantRadios = $("variant-radios", scope);
     if (variantRadios) {
       var fieldsets = $all("fieldset", variantRadios);
@@ -66,7 +62,6 @@
       if (anyChecked && anyChecked.value) return (anyChecked.value || "").trim();
     }
 
-    // 3) Globo swatches (your store)
     var globoActive =
       $('.swatch-anchor[aria-pressed="true"]', scope) ||
       $('.swatch-anchor.active', scope) ||
@@ -74,11 +69,8 @@
       $('.swatch-anchor.is-selected', scope) ||
       $('.swatch-anchor.globo-active', scope);
 
-    if (globoActive && globoActive.textContent) {
-      return globoActive.textContent.trim();
-    }
+    if (globoActive && globoActive.textContent) return globoActive.textContent.trim();
 
-    // 3b) Globo input checked
     var checkedSwatch = $('input[id^="swatch-detail-"]:checked', scope);
     if (checkedSwatch) {
       var lbl = $('label[for="' + checkedSwatch.id + '"]', scope);
@@ -86,7 +78,6 @@
       if (checkedSwatch.value) return String(checkedSwatch.value).trim();
     }
 
-    // 4) Conservative fallback: "Size: YL"
     var info = $(".product__info-container", scope) || scope;
     var text = info && info.innerText ? info.innerText : "";
     var m = text.match(/Size:\s*([A-Za-z0-9]+)/);
@@ -96,7 +87,6 @@
   }
 
   function debouncedSend(iframe, payload) {
-    // Avoid CPU spikes and spam
     if (sendTimer) clearTimeout(sendTimer);
     sendTimer = setTimeout(function () {
       try {
@@ -108,6 +98,36 @@
         iframe.contentWindow && iframe.contentWindow.postMessage(payload, "*");
       } catch (_) {}
     }, 60);
+  }
+
+  function findAddToCartButton(scope) {
+    // Dawn typically uses <button name="add"> inside the product form
+    return (
+      $('form[action^="/cart/add"] button[name="add"]', scope) ||
+      $('form[action^="/cart/add"] button[type="submit"]', scope)
+    );
+  }
+
+  function setButtonLabel(btn, label) {
+    if (!btn) return;
+    // Store original label once
+    if (!btn.getAttribute("data-h2h-original-label")) {
+      btn.setAttribute("data-h2h-original-label", (btn.textContent || "").trim());
+    }
+
+    // Dawn often has nested spans
+    var span = btn.querySelector("span");
+    if (span) {
+      span.textContent = label;
+    } else {
+      btn.textContent = label;
+    }
+  }
+
+  function restoreButtonLabel(btn) {
+    if (!btn) return;
+    var original = btn.getAttribute("data-h2h-original-label");
+    if (original) setButtonLabel(btn, original);
   }
 
   function mount() {
@@ -126,8 +146,7 @@
     } catch (_) {}
 
     var iframe = document.createElement("iframe");
-    iframe.src =
-      baseUrl + "/embed/widget-demo" + "?productId=" + encodeURIComponent(productId || "");
+    iframe.src = baseUrl + "/embed/widget-demo" + "?productId=" + encodeURIComponent(productId || "");
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -151,7 +170,6 @@
       sendVariantState();
     });
 
-    // Clicks catch Globo pills that sometimes don't fire "change"
     scope.addEventListener("click", function (e) {
       var t = e && e.target;
       if (!t) return;
@@ -169,7 +187,6 @@
       setTimeout(sendVariantState, 0);
     });
 
-    // Lightweight mutation observer (debounced) for Globo DOM updates
     try {
       var mo = new MutationObserver(function () {
         sendVariantState();
@@ -186,37 +203,39 @@
         if (data.type === "h2h:reservation:ready") {
           var jerseyNum = data.jerseyNumber;
 
-          // 1) Set hidden line item property (if present)
+          // set hidden line item property
           var input = document.getElementById("h2h_jersey_number");
           if (input) input.value = String(jerseyNum);
-
           if (input) {
             input.dispatchEvent(new Event("input", { bubbles: true }));
             input.dispatchEvent(new Event("change", { bubbles: true }));
           }
 
-          // 2) Dispatch unlock event WITH detail (this is the key fix)
+          // unlock + pass detail
           window.dispatchEvent(
             new CustomEvent("h2h:reservation:ready", {
               detail: { jerseyNumber: jerseyNum },
             })
           );
+
+          // ✅ force button label to Add to cart (even if theme thinks sold out)
+          var atc = findAddToCartButton(scope);
+          setButtonLabel(atc, "Add to cart");
         }
 
         if (data.type === "h2h:reservation:cleared") {
           var input2 = document.getElementById("h2h_jersey_number");
           if (input2) input2.value = "";
-
           if (input2) {
             input2.dispatchEvent(new Event("input", { bubbles: true }));
             input2.dispatchEvent(new Event("change", { bubbles: true }));
           }
 
-          window.dispatchEvent(
-            new CustomEvent("h2h:reservation:cleared", {
-              detail: {},
-            })
-          );
+          window.dispatchEvent(new CustomEvent("h2h:reservation:cleared", { detail: {} }));
+
+          // restore whatever the theme originally had
+          var atc2 = findAddToCartButton(scope);
+          restoreButtonLabel(atc2);
         }
       } catch (_) {}
     });
