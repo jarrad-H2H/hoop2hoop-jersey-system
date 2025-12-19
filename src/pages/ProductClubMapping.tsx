@@ -20,12 +20,8 @@ function extractShopifyProductId(input: string): string | null {
   const raw = (input || "").trim();
   if (!raw) return null;
 
-  // If user pasted just the numeric ID
   if (/^\d+$/.test(raw)) return raw;
 
-  // Try to extract from Shopify Admin URLs like:
-  // https://admin.shopify.com/store/xxx/products/1234567890
-  // https://{shop}.myshopify.com/admin/products/1234567890
   const m = raw.match(/\/products\/(\d+)/i);
   if (m && m[1]) return m[1];
 
@@ -116,12 +112,7 @@ const ProductClubMapping: React.FC = () => {
       const { error: upsertError } = await supabase
         .from("shopify_product_club_map")
         .upsert(
-          [
-            {
-              shopify_product_id: parsedProductId,
-              club_id: selectedClubId,
-            },
-          ],
+          [{ shopify_product_id: parsedProductId, club_id: selectedClubId }],
           { onConflict: "shopify_product_id" }
         );
 
@@ -143,10 +134,7 @@ const ProductClubMapping: React.FC = () => {
     setStatus("");
     setLoading(true);
     try {
-      const { error } = await supabase
-        .from("shopify_product_club_map")
-        .delete()
-        .eq("id", id);
+      const { error } = await supabase.from("shopify_product_club_map").delete().eq("id", id);
 
       if (error) {
         setError(error.message);
@@ -184,9 +172,7 @@ const ProductClubMapping: React.FC = () => {
       <form onSubmit={handleSave} className="bg-white border rounded p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-              Club
-            </label>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Club</label>
             <select
               className="border rounded px-3 py-2 w-full"
               value={selectedClubId}
