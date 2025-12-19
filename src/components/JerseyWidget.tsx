@@ -18,10 +18,68 @@ interface NumberSuggestion {
   score?: number;
 }
 
-interface TeamOption {
-  id: string; // this will be players.team_id
+interface TeamRow {
+  id: string;
   name: string;
-  ageGroupNum: number | null; // extracted from team id/name when possible (10, 12, 14, 16, etc)
+  club_id: string | null;
+  club_id_uuid: string | null;
+  age_group: string | null;
+  gender: string | null;
+}
+
+type AgeGroupLabel = "U10" | "U12" | "U14" | "U16" | "U18" | "U20" | "SLG";
+
+function deriveAgeGroupFromYob(seasonYear: number, yob: number): AgeGroupLabel {
+  const age = seasonYear - yob;
+
+  // 2-year bands (typical junior structure)
+  if (age <= 9) return "U10"; // 8-9-ish
+  if (age <= 11) return "U12"; // 10-11
+  if (age <= 13) return "U14"; // 12-13
+  if (age <= 15) return "U16"; // 14-15
+  if (age <= 17) return "U18"; // 16-17
+  if (age <= 19) return "U20"; // 18-19
+  return "SLG";
+}
+
+function normalizeAgeGroup(raw: unknown): AgeGroupLabel | null {
+  const s = String(raw ?? "").trim().toUpperCase();
+  if (!s || s === "N/A") return null;
+
+  if (s.includes("SLG")) return "SLG";
+
+  // Accept "U12", "12", "U 12", etc
+  const m = s.match(/U?\s*(10|12|14|16|18|20)\b/);
+  if (!m) return null;
+
+  const n = Number(m[1]);
+  if (n === 10) return "U10";
+  if (n === 12) return "U12";
+  if (n === 14) return "U14";
+  if (n === 16) return "U16";
+  if (n === 18) return "U18";
+  if (n === 20) return "U20";
+  return null;
+}
+
+function inferTeamAgeGroupFromName(name: string): AgeGroupLabel | null {
+  const s = String(name ?? "").trim().toUpperCase();
+  if (!s) return null;
+
+  if (s.startsWith("SLG") || s.includes(" SLG") || s.includes("SLG.")) return "SLG";
+
+  // Matches "12B.1", "10B.2", "U12 Boys Div 1", etc
+  const m = s.match(/\bU?\s*(10|12|14|16|18|20)\b/);
+  if (!m) return null;
+
+  const n = Number(m[1]);
+  if (n === 10) return "U10";
+  if (n === 12) return "U12";
+  if (n === 14) return "U14";
+  if (n === 16) return "U16";
+  if (n === 18) return "U18";
+  if (n === 20) return "U20";
+  return null;
 }
 
 const JerseyWidget: React.FC = () => {
@@ -40,9 +98,8 @@ const JerseyWidget: React.FC = () => {
   const [teamChoice, setTeamChoice] = useState<string>("not_sure");
   const [preferredNumber, setPreferredNumber] = useState<string>("");
 
-  // Teams (sourced from players table)
-  const [teamOptions, setTeamOptions] = useState<TeamOption[]>([]);
-  const [suggestedTeamIds, setSuggestedTeamIds] = useState<string[]>([]);
+  // Teams
+  const [allTeams, setAllTeams] = useState<TeamRow[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
 
   // Suggestions
@@ -64,6 +121,11 @@ const JerseyWidget: React.FC = () => {
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
+
+  const derivedAgeGroup: AgeGroupLabel | null = useMemo(() => {
+    if (!yobValid) return null;
+    return deriveAgeGroupFromYob(SEASON_YEAR, yobNum);
+  }, [SEASON_YEAR, yobNum, yobValid]);
 
   const remainingSeconds = expiresAt ? Math.max(0, Math.floor((expiresAt - tick) / 1000)) : 0;
   const sizeSelected = Boolean((selectedSize || "").trim());
@@ -92,46 +154,6 @@ const JerseyWidget: React.FC = () => {
       window.dispatchEvent(new CustomEvent(type, { detail: payload || {} }));
     } catch (_) {}
   };
-
-  // Extract an age group number from a team id/name when possible.
-  // Handles examples like:
-  // - "16B.2" -> 16
-  // - "10B.1" -> 10
-  // - "U10 M.1 (Wildcats)" -> 10
-  // - "U12 Boys Div 1 (Red)" -> 12
-  // Returns null if it cannot be determined (eg "SLG.1")
-  const parseTeamAgeGroupNum = (teamIdOrName: string): number | null => {
-    const s = String(teamIdOrName || "").trim();
-    if (!s) return null;
-
-    const m1 = s.match(/\bU(\d{1,2})\b/i);
-    if (m1 && m1[1]) {
-      const n = Number(m1[1]);
-      return Number.isFinite(n) ? n : null;
-    }
-
-    const m2 = s.match(/^\s*(\d{1,2})\s*[A-Za-z]/);
-    if (m2 && m2[1]) {
-      const n = Number(m2[1]);
-      return Number.isFinite(n) ? n : null;
-    }
-
-    const m3 = s.match(/\b(\d{1,2})\s*[A-Za-z]\b/);
-    if (m3 && m3[1]) {
-      const n = Number(m3[1]);
-      return Number.isFinite(n) ? n : null;
-    }
-
-    return null;
-  };
-
-  // Desired age group number from YOB.
-  // Assumption: U group = (current year - birth year + 2)
-  // Example you gave: 2013 -> currently U14, which matches 2025 - 2013 + 2 = 14.
-  const desiredAgeGroupNum = useMemo(() => {
-    if (!yobValid) return null;
-    return SEASON_YEAR - yobNum + 2;
-  }, [SEASON_YEAR, yobNum, yobValid]);
 
   // Read query params
   useEffect(() => {
@@ -223,42 +245,41 @@ const JerseyWidget: React.FC = () => {
     return () => clearInterval(timer);
   }, [expiresAt]);
 
-  // Load team options from players for this club (uuid-safe)
+  // Load all teams for club (by uuid)
   useEffect(() => {
     const load = async () => {
-      setTeamOptions([]);
-      setSuggestedTeamIds([]);
-
+      setAllTeams([]);
       if (!selectedClubId) return;
 
       setLoadingTeams(true);
       try {
-        const { data, error } = await supabase
-          .from("players")
-          .select("team_id")
-          .eq("club_id", selectedClubId)
-          .not("team_id", "is", null);
+        // Primary: use club_id_uuid (matches your clubs.uuid)
+        const primary = await supabase
+          .from("teams")
+          .select("id, name, club_id, club_id_uuid, age_group, gender")
+          .eq("club_id_uuid", selectedClubId)
+          .order("name");
 
-        if (error) throw error;
+        if (primary.error) throw primary.error;
 
-        const set = new Set<string>();
-        for (const r of data ?? []) {
-          const tid = String((r as any).team_id || "").trim();
-          if (!tid) continue;
-          set.add(tid);
+        const primaryTeams = (primary.data ?? []) as TeamRow[];
+
+        // Fallback: if nothing returned, try legacy club_id text
+        if (primaryTeams.length === 0) {
+          const fallback = await supabase
+            .from("teams")
+            .select("id, name, club_id, club_id_uuid, age_group, gender")
+            .eq("club_id", selectedClubId)
+            .order("name");
+
+          if (fallback.error) throw fallback.error;
+          setAllTeams((fallback.data ?? []) as TeamRow[]);
+        } else {
+          setAllTeams(primaryTeams);
         }
-
-        const list: TeamOption[] = Array.from(set)
-          .map((tid) => ({
-            id: tid,
-            name: tid,
-            ageGroupNum: parseTeamAgeGroupNum(tid),
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-
-        setTeamOptions(list);
       } catch (e: any) {
-        console.warn("Failed to load teams from players", e?.message || e);
+        console.warn("Failed to load teams", e?.message || e);
+        setAllTeams([]);
       } finally {
         setLoadingTeams(false);
       }
@@ -267,50 +288,56 @@ const JerseyWidget: React.FC = () => {
     void load();
   }, [selectedClubId]);
 
-  // Suggest teams after YOB entry (based on players in that YOB for this club)
-  useEffect(() => {
-    const run = async () => {
-      setSuggestedTeamIds([]);
-      if (!selectedClubId || !yobValid) return;
-
-      try {
-        const { data, error } = await supabase
-          .from("players")
-          .select("team_id")
-          .eq("club_id", selectedClubId)
-          .eq("year_of_birth", yobNum);
-
-        if (error) throw error;
-
-        const counts = new Map<string, number>();
-        for (const r of data ?? []) {
-          const tid = (r as any).team_id as string | null;
-          if (!tid) continue;
-          counts.set(tid, (counts.get(tid) ?? 0) + 1);
-        }
-
-        const ranked = Array.from(counts.entries())
-          .sort((a, b) => b[1] - a[1])
-          .map(([id]) => id);
-
-        setSuggestedTeamIds(ranked);
-
-        if ((teamChoice === "not_sure" || teamChoice === "") && ranked.length > 0) {
-          setTeamChoice(ranked[0]);
-        }
-      } catch (e: any) {
-        console.warn("Failed to suggest teams", e?.message || e);
-      }
-    };
-
-    void run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClubId, yobValid, yobNum]);
-
   const clearMessages = () => {
     setError(null);
     setStatusMessage("");
   };
+
+  const filteredTeams = useMemo(() => {
+    if (!derivedAgeGroup) return [];
+
+    const want = derivedAgeGroup;
+
+    return (allTeams ?? []).filter((t) => {
+      const fromAgeGroupCol = normalizeAgeGroup(t.age_group);
+      const fromName = inferTeamAgeGroupFromName(t.name);
+
+      const tag = fromAgeGroupCol ?? fromName;
+      return tag === want;
+    });
+  }, [allTeams, derivedAgeGroup]);
+
+  // If current selected team isn't in filtered list, reset to not_sure (keeps UX safe)
+  useEffect(() => {
+    if (!derivedAgeGroup) return;
+
+    if (teamChoice === "not_sure") return;
+
+    const exists = filteredTeams.some((t) => t.id === teamChoice);
+    if (!exists) setTeamChoice("not_sure");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [derivedAgeGroup, filteredTeams]);
+
+  const orderedTeamOptions = useMemo(() => {
+    const notSure = [
+      {
+        id: "not_sure",
+        name: "I don't know / Not assigned yet",
+        club_id: null,
+        club_id_uuid: selectedClubId || null,
+        age_group: derivedAgeGroup ?? null,
+        gender: null,
+      } as TeamRow,
+    ];
+
+    // Before YOB valid -> only show not sure
+    if (!derivedAgeGroup) return notSure;
+
+    // If no matching teams, still show not sure (dropdown won’t be empty)
+    if (!filteredTeams.length) return notSure;
+
+    return [...notSure, ...filteredTeams];
+  }, [filteredTeams, selectedClubId, derivedAgeGroup]);
 
   const handleSuggest = async () => {
     clearMessages();
@@ -345,6 +372,7 @@ const JerseyWidget: React.FC = () => {
         limit: 12,
       });
 
+      // If preferred number entered, check if it’s viable for THIS size (stock exists + no cohort clash)
       const pref = Number(preferredNumber);
       if (Number.isFinite(pref)) {
         try {
@@ -451,32 +479,6 @@ const JerseyWidget: React.FC = () => {
     }
   };
 
-  const orderedTeamOptions = useMemo(() => {
-    const notSure: TeamOption[] = [{ id: "not_sure", name: "I don't know / Not assigned yet", ageGroupNum: null }];
-
-    const baseList = teamOptions;
-
-    // If YOB is valid and we can match an age group, filter down to that age group.
-    // Fallback: if we cannot find any teams for that age group, show the full list.
-    let filtered = baseList;
-    if (desiredAgeGroupNum != null) {
-      const matches = baseList.filter((t) => t.ageGroupNum === desiredAgeGroupNum);
-      filtered = matches.length > 0 ? matches : baseList;
-    }
-
-    if (!filtered.length) return notSure;
-
-    // Suggested teams first (if any)
-    const suggested = suggestedTeamIds
-      .map((id) => filtered.find((t) => t.id === id))
-      .filter(Boolean) as TeamOption[];
-
-    const suggestedSet = new Set(suggested.map((t) => t.id));
-    const rest = filtered.filter((t) => !suggestedSet.has(t.id));
-
-    return [...notSure, ...suggested, ...rest];
-  }, [teamOptions, suggestedTeamIds, desiredAgeGroupNum]);
-
   return (
     <div className="w-full max-w-[440px]">
       <div className="mb-3">
@@ -520,9 +522,9 @@ const JerseyWidget: React.FC = () => {
             value={yearOfBirth}
             onChange={(e) => setYearOfBirth(e.target.value)}
           />
-          {yobValid && desiredAgeGroupNum != null && (
+          {derivedAgeGroup && (
             <div className="text-xs text-gray-500 mt-1">
-              Showing teams for U{desiredAgeGroupNum} when available.
+              Showing teams for <span className="font-semibold">{derivedAgeGroup}</span> when available.
             </div>
           )}
         </div>
@@ -544,15 +546,9 @@ const JerseyWidget: React.FC = () => {
             ))}
           </select>
 
-          {loadingTeams && (
-            <div className="text-xs text-gray-500 mt-1">
-              Loading teams for this club...
-            </div>
-          )}
-
-          {yobValid && suggestedTeamIds.length > 0 && (
-            <div className="text-xs text-gray-500 mt-1">
-              Suggested teams shown at top based on players born {yobNum}.
+          {derivedAgeGroup && !loadingTeams && filteredTeams.length === 0 && (
+            <div className="text-xs text-amber-800 mt-1">
+              No teams found for {derivedAgeGroup} (for this club). You can still proceed with “Not assigned yet”.
             </div>
           )}
         </div>
