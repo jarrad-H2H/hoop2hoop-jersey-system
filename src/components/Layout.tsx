@@ -11,7 +11,15 @@ import {
   LogOut,
   Settings,
   BarChart3,
+  Link2,
 } from "lucide-react";
+
+type NavItem = {
+  path: string;
+  label: string;
+  icon: React.ReactNode;
+  match?: (pathname: string) => boolean;
+};
 
 const Layout: React.FC = () => {
   const navigate = useNavigate();
@@ -22,19 +30,77 @@ const Layout: React.FC = () => {
     navigate("/login");
   };
 
-  const navItems = [
-    { path: "/admin", label: "Dashboard", icon: <LayoutDashboard size={20} /> },
-    { path: "/admin/club-overview", label: "Club Overview", icon: <Users size={20} /> },
-    { path: "/admin/clubs", label: "Club Manager", icon: <Users size={20} /> },
-    { path: "/admin/inventory", label: "Inventory", icon: <Shirt size={20} /> },
-    { path: "/admin/players", label: "Players", icon: <Users size={20} /> },
-    { path: "/admin/allocation", label: "Number Allocation", icon: <Shirt size={20} /> },
-    { path: "/admin/allocation-history", label: "Allocation History", icon: <Database size={20} /> },
-    { path: "/admin/stock-planner", label: "Stock Planner", icon: <BarChart3 size={20} /> },
-    { path: "/admin/importer", label: "CSV Importer", icon: <Upload size={20} /> },
-    { path: "/admin/settings", label: "Data Settings", icon: <Settings size={20} /> },
-    { path: "/admin/widget-demo", label: "Widget Demo", icon: <Database size={20} /> },
+  const navItems: NavItem[] = [
+    {
+      path: "/admin",
+      label: "Dashboard",
+      icon: <LayoutDashboard size={20} />,
+      match: (p) => p === "/admin" || p === "/admin/club-overview",
+    },
+    {
+      path: "/admin/clubs",
+      label: "Club Manager",
+      icon: <Users size={20} />,
+      match: (p) => p.startsWith("/admin/clubs"),
+    },
+    {
+      path: "/admin/inventory",
+      label: "Inventory",
+      icon: <Shirt size={20} />,
+      // Important: keep highlighted for bulk upload sub-route too
+      match: (p) => p.startsWith("/admin/inventory"),
+    },
+    {
+      path: "/admin/product-mapping",
+      label: "Product Mapping",
+      icon: <Link2 size={20} />,
+      match: (p) => p.startsWith("/admin/product-mapping"),
+    },
+    {
+      path: "/admin/players",
+      label: "Players",
+      icon: <Users size={20} />,
+      match: (p) => p.startsWith("/admin/players"),
+    },
+    {
+      path: "/admin/allocation",
+      label: "Number Allocation",
+      icon: <Shirt size={20} />,
+      match: (p) => p.startsWith("/admin/allocation"),
+    },
+    {
+      path: "/admin/allocation-history",
+      label: "Allocation History",
+      icon: <Database size={20} />,
+      match: (p) => p.startsWith("/admin/allocation-history"),
+    },
+    {
+      path: "/admin/stock-planner",
+      label: "Stock Planner",
+      icon: <BarChart3 size={20} />,
+      match: (p) => p.startsWith("/admin/stock-planner"),
+    },
+    {
+      path: "/admin/importer",
+      label: "CSV Importer",
+      icon: <Upload size={20} />,
+      match: (p) => p.startsWith("/admin/importer"),
+    },
+    {
+      path: "/admin/settings",
+      label: "Data Settings",
+      icon: <Settings size={20} />,
+      match: (p) => p.startsWith("/admin/settings"),
+    },
+    {
+      path: "/admin/widget-demo",
+      label: "Widget Demo",
+      icon: <Database size={20} />,
+      match: (p) => p.startsWith("/admin/widget-demo"),
+    },
   ];
+
+  const pathname = location.pathname;
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col md:flex-row">
@@ -44,13 +110,13 @@ const Layout: React.FC = () => {
           <h1 className="text-2xl font-bold tracking-tight text-orange-500">
             Hoop2Hoop
           </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Jersey Management System
-          </p>
+          <p className="text-xs text-slate-400 mt-1">Jersey Management System</p>
         </div>
+
         <nav className="p-4 space-y-2 flex-1">
           {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
+            const isActive = item.match ? item.match(pathname) : pathname === item.path;
+
             return (
               <Link
                 key={item.path}
@@ -67,6 +133,7 @@ const Layout: React.FC = () => {
             );
           })}
         </nav>
+
         <div className="p-4 border-t border-slate-700">
           <button
             onClick={handleLogout}
