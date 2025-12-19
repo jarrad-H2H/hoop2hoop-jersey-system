@@ -12,6 +12,11 @@ interface MappingRow {
   club_id: string;
 }
 
+interface TeamRow {
+  id: string;
+  name: string;
+}
+
 interface NumberSuggestion {
   jersey_number: number;
   total_stock: number;
@@ -29,9 +34,14 @@ const JerseyWidget: React.FC = () => {
   const [selectedClubId, setSelectedClubId] = useState<string>("");
   const [clubDetectError, setClubDetectError] = useState<string | null>(null);
 
+  // ---- Team dropdown ----
+  const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [teamsError, setTeamsError] = useState<string | null>(null);
+  const [teamChoice, setTeamChoice] = useState<string>("not_sure"); // required (including "not sure")
+  const [suggestedTeamIds, setSuggestedTeamIds] = useState<string[]>([]);
+
   // ---- Inputs ----
   const [yearOfBirth, setYearOfBirth] = useState<string>("");
-  const [teamChoice, setTeamChoice] = useState<string>(""); // required (including "not sure")
   const [preferredNumber, setPreferredNumber] = useState<string>("");
 
   // ---- Suggestions / selection ----
@@ -47,6 +57,7 @@ const JerseyWidget: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [tick, setTick] = useState<number>(Date.now());
+  const [pendingAllocationId, setPendingAllocationId] = useState<string>("");
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
@@ -56,8 +67,6 @@ const JerseyWidget: React.FC = () => {
     : 0;
 
   const sizeSelected = Boolean((selectedSize || "").trim());
-
-  // Require Team dropdown selection (including the "not sure" option)
   const teamSelected = Boolean((teamChoice || "").trim());
 
   const canSuggest =
@@ -78,15 +87,11 @@ const JerseyWidget: React.FC = () => {
     payload?: any
   ) => {
     try {
-      // Shopify iframe usage
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({ type, ...(payload || {}) }, "*");
       }
-      // Admin demo usage (same window)
       window.dispatchEvent(new CustomEvent(type, { detail: payload || {} }));
-    } catch (_) {
-      // no-op
-    }
+    } catch (_) {}
   };
 
   // ---- 1) Read initial query params (best-effort) ----
@@ -95,11 +100,7 @@ const JerseyWidget: React.FC = () => {
       const params = new URLSearchParams(window.location.search);
       const pid = (params.get("productId") || params.get("product_id") || "").trim();
       if (pid) setShopifyProductId(pid);
-    } catch (_) {
-      // ignore
-    }
-
-    // Default Team dropdown option (required)
+    } catch (_) {}
     setTeamChoice("not_sure");
   }, []);
 
@@ -113,19 +114,14 @@ const JerseyWidget: React.FC = () => {
         const size = (data.size || "").trim();
         if (size) {
           setSelectedSize(size);
-
-          // If user changes size after suggestions were loaded, reset downstream selections.
           setSuggestions([]);
           setSelectedNumber(null);
           setError(null);
         }
 
-        // If your widget.js is later updated to pass productId too, we’ll accept it.
         const pid = (data.productId || data.product_id || "").toString().trim();
         if (pid) setShopifyProductId(pid);
-      } catch (_) {
-        // ignore
-      }
+      } catch (_) {}
     };
 
     window.addEventListener("message", onMsg);
@@ -137,12 +133,13 @@ const JerseyWidget: React.FC = () => {
     const run = async () => {
       setClubDetectError(null);
       setSelectedClubId("");
+      setTeams([]);
+      setTeamsError(null);
+      setSuggestedTeamIds([]);
+      setTeamChoice("not_sure");
 
       const pid = (shopifyProductId || "").trim();
-      if (!pid) {
-        // Don’t throw hard error yet - the size pill message often arrives first.
-        return;
-      }
+      if (!pid) return;
 
       const { data, error } = await supabase
         .from("shopify_product_club_map")
@@ -167,34 +164,124 @@ const JerseyWidget: React.FC = () => {
     void run();
   }, [shopifyProductId]);
 
-  // ---- 4) Countdown tick ----
+  // ---- 4) Load teams for detected club (if teams table exists) ----
+  useEffect(() => {
+    const loadTeams = async () => {
+      setTeams([]);
+      setTeamsError(null);
+      setSuggestedTeamIds([]);
+      setTeamChoice("not_sure");
+
+      if (!selectedClubId) return;
+
+      const { data, error } = await supabase
+        .from("teams")
+        .select("id, name")
+        .eq("club_id", selectedClubId)
+        .order("name");
+
+      if (error) {
+        // If teams table doesn't exist or RLS blocks it, don't break the widget.
+        setTeamsError(error.message);
+        return;
+      }
+
+      setTeams((data ?? []) as TeamRow[]);
+    };
+
+    void loadTeams();
+  }, [selectedClubId]);
+
+  // ---- 5) Suggest team ordering based on YOB (uses players table team_id frequency) ----
+  useEffect(() => {
+    const run = async () => {
+      setSuggestedTeamIds([]);
+      if (!selectedClubId || !yobValid) return;
+
+      // Try exact YOB first
+      const tryYobWindows: Array<{ min: number; max: number }> = [
+        { min: yobNum, max: yobNum },
+        { min: yobNum - 1, max: yobNum + 1 },
+      ];
+
+      for (const w of tryYobWindows) {
+        const { data, error } = await supabase
+          .from("players")
+          .select("team_id, year_of_birth")
+          .eq("club_id", selectedClubId)
+          .gte("year_of_birth", w.min)
+          .lte("year_of_birth", w.max);
+
+        if (error) {
+          // Don't block widget if players table has RLS issues; just skip.
+          return;
+        }
+
+        const rows = (data ?? []) as any[];
+        const counts = new Map<string, number>();
+
+        for (const r of rows) {
+          const tid = (r as any).team_id;
+          if (!tid) continue;
+          counts.set(String(tid), (counts.get(String(tid)) ?? 0) + 1);
+        }
+
+        const ranked = Array.from(counts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .map(([id]) => id);
+
+        if (ranked.length > 0) {
+          setSuggestedTeamIds(ranked.slice(0, 6));
+          return;
+        }
+      }
+    };
+
+    void run();
+  }, [selectedClubId, yobValid, yobNum]);
+
+  // ---- 6) Countdown tick ----
   useEffect(() => {
     if (!expiresAt) return;
     const t = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(t);
   }, [expiresAt]);
 
-  // ---- 5) Auto-expire reservation ----
+  // ---- 7) Auto-expire reservation (UI only) ----
   useEffect(() => {
     if (!expiresAt) return;
-
     const timer = setInterval(() => {
       if (Date.now() >= expiresAt) {
         setExpiresAt(null);
         setStatusMessage("");
         setSelectedNumber(null);
+        setPendingAllocationId("");
         notifyShopify("h2h:reservation:cleared");
       }
     }, 1000);
-
     return () => clearInterval(timer);
   }, [expiresAt]);
 
-  // ---- Helpers ----
   const clearMessages = () => {
     setError(null);
     setStatusMessage("");
   };
+
+  // Order teams: suggested first, then the rest
+  const orderedTeams = useMemo(() => {
+    if (!teams.length) return { suggested: [] as TeamRow[], rest: [] as TeamRow[] };
+
+    const suggestedSet = new Set(suggestedTeamIds);
+    const suggested = teams.filter((t) => suggestedSet.has(t.id));
+    const rest = teams.filter((t) => !suggestedSet.has(t.id));
+
+    // keep suggested order based on suggestedTeamIds ranking
+    const rank = new Map<string, number>();
+    suggestedTeamIds.forEach((id, idx) => rank.set(id, idx));
+    suggested.sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
+
+    return { suggested, rest };
+  }, [teams, suggestedTeamIds]);
 
   const handleSuggest = async () => {
     clearMessages();
@@ -227,33 +314,32 @@ const JerseyWidget: React.FC = () => {
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
         limit: 12,
-        // team is not enforced in allocation logic yet - captured for future improvements
       });
 
-      // Optional: if preferred number entered, check it and float it to the top if valid
+      // If preferred number entered, check if it's safe + stock exists for selected size
       const pref = Number(preferredNumber);
       if (Number.isFinite(pref)) {
         try {
-          const check = await smartCheckNumber({
-            clubId: selectedClubId,
-            size: selectedSize,
+          const check = await smartCheckNumber(selectedClubId, pref, {
             seasonYear: SEASON_YEAR,
-            jerseyNumber: pref,
             yearOfBirth: yobNum,
+            cohortWindowYears: 0,
           });
 
-          // If smartCheck says "available", add it to the front if it isn't already present
-          if ((check as any)?.ok === true || (check as any)?.available === true) {
-            const exists = ranked.some((r: any) => r.jersey_number === pref);
+          const sizeStock = (check.stockBySize || []).find((s) => String(s.size) === String(selectedSize));
+          const hasSizeStock = Boolean(sizeStock && sizeStock.count > 0);
+          const noClash = (check.clashes || []).length === 0;
+
+          if (noClash && hasSizeStock) {
+            const exists = ranked.some((r) => r.jersey_number === pref);
             const boosted: NumberSuggestion[] = exists
               ? ranked
-              : [{ jersey_number: pref, total_stock: 1, score: 999 }, ...ranked];
+              : [{ jersey_number: pref, total_stock: sizeStock?.count ?? 1, score: -9999 }, ...ranked];
             setSuggestions(boosted);
           } else {
             setSuggestions(ranked);
           }
         } catch (_) {
-          // If smartCheck fails, just show ranked list
           setSuggestions(ranked);
         }
       } else {
@@ -261,9 +347,7 @@ const JerseyWidget: React.FC = () => {
       }
 
       if (!ranked || ranked.length === 0) {
-        setError(
-          "No available numbers found for this size. Try another size or contact the club."
-        );
+        setError("No available numbers found for this size. Try another size or contact the club.");
       }
     } finally {
       setLoadingSuggest(false);
@@ -302,12 +386,15 @@ const JerseyWidget: React.FC = () => {
 
     setReserving(true);
     try {
+      const teamId = teamChoice === "not_sure" ? null : teamChoice;
+
       const result = await reserveNumberForPurchase({
         clubId: selectedClubId,
         jerseyNumber: selectedNumber,
         size: selectedSize,
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
+        teamId,
         expiresMinutes: 15,
       });
 
@@ -319,11 +406,15 @@ const JerseyWidget: React.FC = () => {
       const expiry = Date.now() + 15 * 60 * 1000;
       setExpiresAt(expiry);
 
-      // Put the success message at the bottom near the buttons (as requested)
+      const pid = result.pendingAllocationId || "";
+      setPendingAllocationId(pid);
+
       setStatusMessage(`Jersey #${selectedNumber} reserved. Hold expires in 15:00.`);
 
-      // IMPORTANT: tell Shopify parent page to unlock Add to cart
-      notifyShopify("h2h:reservation:ready", { jerseyNumber: selectedNumber });
+      notifyShopify("h2h:reservation:ready", {
+        jerseyNumber: selectedNumber,
+        pendingAllocationId: pid,
+      });
     } finally {
       setReserving(false);
     }
@@ -338,27 +429,20 @@ const JerseyWidget: React.FC = () => {
         </p>
       </div>
 
-      {/* Errors */}
       {error && (
         <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3 mb-3">
           {error}
         </div>
       )}
 
-      {/* Club detect issues (soft display) */}
       {clubDetectError && !selectedClubId && (
         <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-3 mb-3">
           {clubDetectError}
-          {!shopifyProductId && (
-            <div className="mt-1">
-              (Waiting for product context from Shopify.)
-            </div>
-          )}
+          {!shopifyProductId && <div className="mt-1">(Waiting for product context from Shopify.)</div>}
         </div>
       )}
 
       <div className="bg-white border rounded p-4 space-y-3">
-        {/* Size (read-only indicator, comes from Shopify size pills) */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Size
@@ -368,7 +452,6 @@ const JerseyWidget: React.FC = () => {
           </div>
         </div>
 
-        {/* YOB */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Year of birth
@@ -378,26 +461,60 @@ const JerseyWidget: React.FC = () => {
             className="border rounded px-3 py-2 w-full"
             placeholder="e.g. 2013"
             value={yearOfBirth}
-            onChange={(e) => setYearOfBirth(e.target.value)}
+            onChange={(e) => {
+              setYearOfBirth(e.target.value);
+              setSuggestions([]);
+              setSelectedNumber(null);
+              setError(null);
+            }}
           />
         </div>
 
-        {/* Team dropdown (placeholder for now - we’ll wire it to real teams next) */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Team
           </label>
+
           <select
             className="border rounded px-3 py-2 w-full"
             value={teamChoice}
-            onChange={(e) => setTeamChoice(e.target.value)}
+            onChange={(e) => {
+              setTeamChoice(e.target.value);
+              setSuggestions([]);
+              setSelectedNumber(null);
+              setError(null);
+            }}
           >
-            <option value="">Select a team</option>
             <option value="not_sure">I don&apos;t know / Not assigned yet</option>
+
+            {orderedTeams.suggested.length > 0 && (
+              <optgroup label="Suggested teams">
+                {orderedTeams.suggested.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+
+            {orderedTeams.rest.length > 0 && (
+              <optgroup label="All teams">
+                {orderedTeams.rest.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
+
+          {teamsError && (
+            <div className="text-xs text-gray-500 mt-1">
+              (Teams list unavailable: {teamsError})
+            </div>
+          )}
         </div>
 
-        {/* Preferred number (optional) - ABOVE suggest button */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Preferred number (optional)
@@ -411,7 +528,6 @@ const JerseyWidget: React.FC = () => {
           />
         </div>
 
-        {/* Suggest button */}
         <button
           type="button"
           onClick={handleSuggest}
@@ -421,7 +537,6 @@ const JerseyWidget: React.FC = () => {
           {loadingSuggest ? "Checking…" : "Check & Suggest Playing Numbers"}
         </button>
 
-        {/* Suggested numbers */}
         {suggestions.length > 0 && (
           <div className="pt-2">
             <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
@@ -450,7 +565,6 @@ const JerseyWidget: React.FC = () => {
           </div>
         )}
 
-        {/* Confirm button (bottom, only meaningful once a number is selected) */}
         <button
           type="button"
           onClick={handleReserve}
@@ -460,7 +574,6 @@ const JerseyWidget: React.FC = () => {
           {reserving ? "Reserving…" : "Confirm & Reserve"}
         </button>
 
-        {/* Status message at the BOTTOM near actions (as requested) */}
         {statusMessage && (
           <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded text-sm">
             <div>{statusMessage}</div>
@@ -468,6 +581,11 @@ const JerseyWidget: React.FC = () => {
               <div className="text-xs mt-1">
                 Hold expires in {Math.floor(remainingSeconds / 60)}:
                 {(remainingSeconds % 60).toString().padStart(2, "0")}
+              </div>
+            )}
+            {pendingAllocationId && (
+              <div className="text-[11px] mt-1 text-amber-800">
+                Reservation reference: {pendingAllocationId}
               </div>
             )}
           </div>
