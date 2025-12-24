@@ -29,9 +29,7 @@
   }
 
   function findSelectedVariantId(scope) {
-    var input =
-      $(".product-variant-id:not([disabled])", scope) ||
-      $(".product-variant-id", scope);
+    var input = $(".product-variant-id:not([disabled])", scope) || $(".product-variant-id", scope);
     if (input && input.value) return String(input.value).trim();
 
     var fallback = $('form[action^="/cart/add"] input[name="id"]', scope);
@@ -158,6 +156,17 @@
   }
   // -----------------------------------
 
+  function setHiddenInputValue(id, value) {
+    var input = document.getElementById(id);
+    if (!input) return;
+    input.value = value;
+
+    try {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (_) {}
+  }
+
   function mount() {
     var host = findHost();
     if (!host) return;
@@ -176,11 +185,7 @@
     snapshotOriginalAtcLabel(scope);
 
     var iframe = document.createElement("iframe");
-    iframe.src =
-      baseUrl +
-      "/embed/widget-demo" +
-      "?productId=" +
-      encodeURIComponent(productId || "");
+    iframe.src = baseUrl + "/embed/widget-demo" + "?productId=" + encodeURIComponent(productId || "");
     iframe.style.width = "100%";
     iframe.style.border = "0";
     iframe.style.minHeight = "520px";
@@ -238,22 +243,18 @@
 
         if (data.type === "h2h:reservation:ready") {
           var jerseyNum = data.jerseyNumber;
+          var pendingId = data.pendingAllocationId || "";
 
-          // ✅ CRITICAL FIX: dispatch CustomEvent with detail so buy-buttons.liquid unlocks
+          // Dispatch CustomEvent with detail so buy-buttons.liquid unlocks
           window.dispatchEvent(
             new CustomEvent("h2h:reservation:ready", {
-              detail: { jerseyNumber: jerseyNum },
+              detail: { jerseyNumber: jerseyNum, pendingAllocationId: pendingId },
             })
           );
 
-          // Set hidden input property too (belt + braces)
-          var input = document.getElementById("h2h_jersey_number");
-          if (input) input.value = String(jerseyNum);
-
-          if (input) {
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-            input.dispatchEvent(new Event("change", { bubbles: true }));
-          }
+          // Set hidden line item properties
+          setHiddenInputValue("h2h_jersey_number", String(jerseyNum));
+          setHiddenInputValue("h2h_pending_allocation_id", String(pendingId));
 
           // Force label once unlocked
           forceAtcLabel(scope, "Add to cart");
@@ -262,12 +263,9 @@
         if (data.type === "h2h:reservation:cleared") {
           window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
 
-          var input2 = document.getElementById("h2h_jersey_number");
-          if (input2) input2.value = "";
-          if (input2) {
-            input2.dispatchEvent(new Event("input", { bubbles: true }));
-            input2.dispatchEvent(new Event("change", { bubbles: true }));
-          }
+          // Clear hidden line item properties
+          setHiddenInputValue("h2h_jersey_number", "");
+          setHiddenInputValue("h2h_pending_allocation_id", "");
 
           restoreAtcLabel(scope);
         }
