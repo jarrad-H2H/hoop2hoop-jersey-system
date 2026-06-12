@@ -495,55 +495,41 @@ export async function reserveNumberForPurchase(input: {
   pendingAllocationId?: string;
   inventoryId?: string;
 }> {
-  const alloc = await allocateNumberForClub(input.clubId, input.jerseyNumber, input.size);
-  if (!alloc.success || !alloc.inventoryId) {
-    return { success: false, message: alloc.message ?? "Failed to reserve inventory." };
-  }
-
-  const pending = await createPendingAllocation({
-    clubId: input.clubId,
-    inventoryId: alloc.inventoryId,
-    jerseyNumber: input.jerseyNumber,
-    size: input.size,
-    seasonYear: input.seasonYear,
-    yearOfBirth: input.yearOfBirth,
-    teamId: input.teamId ?? null,
-    expiresMinutes: input.expiresMinutes,
+  // Atomic, race-safe reservation: a single Postgres transaction locks one
+  // Available inventory row (SKIP LOCKED), allocates it, creates the pending
+  // allocation, and logs the audit event. Two simultaneous shoppers can no
+  // longer be sold the same physical jersey.
+  const { data, error } = await supabase.rpc("reserve_jersey", {
+    p_club_id: input.clubId,
+    p_jersey_number: input.jerseyNumber,
+    p_size: input.size,
+    p_season_year: input.seasonYear,
+    p_year_of_birth: input.yearOfBirth,
+    p_team_id: input.teamId ?? null,
+    p_expires_minutes: input.expiresMinutes ?? 15,
   });
 
-  if (!pending.success || !pending.row) {
-    // rollback inventory if pending fails
-    await supabase
-      .from("inventory")
-      .update({
-        status: STATUS_AVAILABLE,
-        allocated_player_id: null,
-        allocation_date: null,
-        return_date_due: null,
-      })
-      .eq("id", alloc.inventoryId);
+  if (error) {
+    console.error("reserveNumberForPurchase rpc error", error);
+    return { success: false, message: "Failed to reserve. Please try again." };
+  }
 
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { pending_allocation_id: string; inventory_id: string }
+    | undefined;
+
+  if (!row?.pending_allocation_id) {
     return {
       success: false,
-      message: "Pending allocation failed to save - inventory was returned to Available. Please try again.",
-      inventoryId: alloc.inventoryId,
+      message: "That number/size was just taken or is out of stock. Please pick another.",
     };
   }
-
-  await logAllocationEvent({
-    allocation_type: "new",
-    club_id: input.clubId,
-    player_id: null,
-    jersey_number: input.jerseyNumber,
-    size: input.size,
-    note: "Reserved via widget (pending allocation)",
-  });
 
   return {
     success: true,
     message: `Reserved jersey #${input.jerseyNumber} (${input.size}).`,
-    pendingAllocationId: pending.row.id,
-    inventoryId: alloc.inventoryId,
+    pendingAllocationId: row.pending_allocation_id,
+    inventoryId: row.inventory_id,
   };
 }
 
