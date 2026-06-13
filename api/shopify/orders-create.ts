@@ -279,6 +279,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           : "Reservation purchased",
         meta: { jerseyNumber, lineItemId },
       });
+
+      // Write a sales record to the orders table (for the Sales History admin page).
+      // Only write for clean purchases — reconciled orders need manual review first.
+      if (!reconciliationNeeded) {
+        try {
+          // Look up player name via their allocated jersey number + club
+          let playerName = "";
+          if (pending.club_id && pending.jersey_number) {
+            const { data: playerRow } = await supabase
+              .from("players")
+              .select("first_name, last_name")
+              .eq("club_id", pending.club_id)
+              .eq("final_shirt", pending.jersey_number)
+              .maybeSingle();
+            if (playerRow) {
+              playerName = `${playerRow.first_name ?? ""} ${playerRow.last_name ?? ""}`.trim();
+            }
+          }
+
+          // Look up club name
+          let clubName = "";
+          if (pending.club_id) {
+            const { data: clubRow } = await supabase
+              .from("clubs")
+              .select("name")
+              .eq("id", pending.club_id)
+              .maybeSingle();
+            clubName = (clubRow as any)?.name ?? "";
+          }
+
+          await supabase.from("orders").insert({
+            id: reservationId,
+            reservation_id: reservationId,
+            shopify_order_id: orderId,
+            order_number: orderNumber || null,
+            order_date: nowIso,
+            player_name: playerName,
+            club_id: String(pending.club_id ?? ""),
+            team_name: String((pending as any).team_id ?? ""),
+            product_name: clubName,
+            size: String((pending as any).size ?? ""),
+            number: String((pending as any).jersey_number ?? jerseyNumber),
+            jersey_number: Number((pending as any).jersey_number) || null,
+            year_of_birth: Number((pending as any).year_of_birth) || null,
+            season_year: Number((pending as any).season_year) || null,
+            purchased_at: nowIso,
+          });
+        } catch {
+          // Sales log write must never break webhook processing
+        }
+      }
     } catch (e: any) {
       issues.push({ reservationId, issue: "Unhandled exception.", detail: e?.message ?? String(e) });
       await logEvent(supabase, {

@@ -12,6 +12,7 @@ import {
   Settings,
   BarChart3,
   Link2,
+  ShoppingBag,
 } from "lucide-react";
 
 type NavItem = {
@@ -73,6 +74,12 @@ const Layout: React.FC = () => {
       label: "Allocation History",
       icon: <Database size={20} />,
       match: (p) => p.startsWith("/admin/allocation-history"),
+    },
+    {
+      path: "/admin/sales-history",
+      label: "Sales History",
+      icon: <ShoppingBag size={20} />,
+      match: (p) => p.startsWith("/admin/sales-history"),
     },
     {
       path: "/admin/stock-planner",

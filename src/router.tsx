@@ -14,6 +14,7 @@ import ClubOverview from "./pages/ClubOverview";
 import StockPlanner from "./pages/StockPlanner";
 import BulkStockUpload from "./pages/BulkStockUpload";
 import ProductClubMapping from "./pages/ProductClubMapping";
+import SalesHistory from "./pages/SalesHistory";
 
 // Components
 import Importer from "./components/Importer";
@@ -62,6 +63,9 @@ const AppRouter: React.FC = () => {
 
         {/* Bulk upload */}
         <Route path="inventory/bulk-upload/:clubId" element={<BulkStockUpload />} />
+
+        {/* Sales History */}
+        <Route path="sales-history" element={<SalesHistory />} />
 
         {/* Widget Demo (admin view) */}
         <Route path="widget-demo" element={<WidgetDemo />} />
