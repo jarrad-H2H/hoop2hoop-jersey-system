@@ -481,6 +481,85 @@ export async function createPendingAllocation(input: {
   return { success: true, row };
 }
 
+/**
+ * Look up an existing player by name + YOB within a club.
+ * Used by the widget to detect if the player already has a jersey.
+ * Tries exact match first; falls back to last-name + YOB fuzzy match
+ * to handle nicknames (Mike vs Michael etc.).
+ */
+export async function lookupPlayerByName(params: {
+  clubId: string;
+  firstName: string;
+  lastName: string;
+  yearOfBirth: number;
+}): Promise<{
+  found: boolean;
+  playerId?: string;
+  currentJerseyNumber?: number | null;
+  previousInventoryId?: string | null;
+}> {
+  const { clubId, firstName, lastName, yearOfBirth } = params;
+  const firstTrimmed = firstName.trim();
+  const lastTrimmed = lastName.trim();
+
+  // 1. Exact match: first + last + YOB + club
+  const { data: exact } = await supabase
+    .from("players")
+    .select("id, first_name, last_name, final_shirt, year_of_birth")
+    .eq("club_id", clubId)
+    .ilike("first_name", firstTrimmed)
+    .ilike("last_name", lastTrimmed)
+    .eq("year_of_birth", yearOfBirth)
+    .limit(1);
+
+  let player = (exact ?? [])[0] as any;
+
+  // 2. Fuzzy fallback: same last name + YOB (handles nickname variations)
+  if (!player) {
+    const { data: fuzzy } = await supabase
+      .from("players")
+      .select("id, first_name, last_name, final_shirt, year_of_birth")
+      .eq("club_id", clubId)
+      .ilike("last_name", lastTrimmed)
+      .eq("year_of_birth", yearOfBirth)
+      .limit(5);
+
+    const candidates = (fuzzy ?? []) as any[];
+    if (candidates.length > 0) {
+      const firstLower = firstTrimmed.toLowerCase();
+      // Prefer a candidate whose first name starts with the same 3+ characters
+      player =
+        candidates.find(
+          (p) =>
+            firstLower.length >= 3 &&
+            (p.first_name ?? "").toLowerCase().startsWith(firstLower.slice(0, 3))
+        ) ?? candidates[0];
+    }
+  }
+
+  if (!player) return { found: false };
+
+  // If the player already has a jersey, find the inventory row ID for it
+  let previousInventoryId: string | null = null;
+  if (player.final_shirt) {
+    const { data: invData } = await supabase
+      .from("inventory")
+      .select("id")
+      .eq("club_id", clubId)
+      .eq("jersey_number", player.final_shirt)
+      .eq("status", "Allocated")
+      .limit(1);
+    previousInventoryId = ((invData ?? [])[0] as any)?.id ?? null;
+  }
+
+  return {
+    found: true,
+    playerId: player.id,
+    currentJerseyNumber: player.final_shirt ?? null,
+    previousInventoryId,
+  };
+}
+
 export async function reserveNumberForPurchase(input: {
   clubId: string;
   jerseyNumber: number;
@@ -489,6 +568,13 @@ export async function reserveNumberForPurchase(input: {
   yearOfBirth: number;
   teamId?: string | null;
   expiresMinutes?: number;
+  // Player identity fields (new)
+  playerFirstName?: string;
+  playerLastName?: string;
+  isNewPlayer?: boolean | null;
+  keepExistingJersey?: boolean | null;
+  previousJerseyNumber?: number | null;
+  previousInventoryId?: string | null;
 }): Promise<{
   success: boolean;
   message: string;
@@ -523,6 +609,25 @@ export async function reserveNumberForPurchase(input: {
       success: false,
       message: "That number/size was just taken or is out of stock. Please pick another.",
     };
+  }
+
+  // Patch the new player identity fields onto the pending allocation row
+  if (input.playerFirstName || input.playerLastName || input.isNewPlayer != null) {
+    try {
+      await supabase
+        .from("pending_allocations")
+        .update({
+          player_first_name: input.playerFirstName ?? null,
+          player_last_name: input.playerLastName ?? null,
+          is_new_player: input.isNewPlayer ?? null,
+          keep_existing_jersey: input.keepExistingJersey ?? null,
+          previous_jersey_number: input.previousJerseyNumber ?? null,
+          previous_inventory_id: input.previousInventoryId ?? null,
+        })
+        .eq("id", row.pending_allocation_id);
+    } catch {
+      // Non-fatal — reservation is still valid without name patch
+    }
   }
 
   return {
