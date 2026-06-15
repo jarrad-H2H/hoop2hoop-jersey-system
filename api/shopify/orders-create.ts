@@ -18,11 +18,19 @@ type ShopifyLineItem = {
   properties?: any;
 };
 
+type ShopifyCustomer = {
+  id?: number | string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+};
+
 type ShopifyOrderPayload = {
   id?: number | string;
   name?: string;
   order_number?: number | string;
   line_items?: ShopifyLineItem[];
+  customer?: ShopifyCustomer;
 };
 
 function readRawBody(req: VercelRequest): Promise<string> {
@@ -147,6 +155,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     : payload?.name != null ? String(payload.name) : "";
   const lineItems = Array.isArray(payload?.line_items) ? payload!.line_items! : [];
 
+  // Shopify buyer name — captured for audit trail (fraud/abuse retrospective lookup)
+  const shopifyBuyerName =
+    [payload?.customer?.first_name, payload?.customer?.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || null;
+
   if (!orderId) {
     return res.status(200).json({ ok: true, processed: 0, note: "No order id in payload." });
   }
@@ -178,7 +193,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const { data: pending, error: pendingErr } = await supabase
         .from("pending_allocations")
-        .select("id, status, expires_at, inventory_id")
+        .select("id, status, expires_at, inventory_id, jersey_number, size, season_year, year_of_birth, club_id, team_id, player_first_name, player_last_name, is_new_player, keep_existing_jersey, previous_jersey_number, previous_inventory_id")
         .eq("id", reservationId)
         .maybeSingle();
 
@@ -284,50 +299,111 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Only write for clean purchases — reconciled orders need manual review first.
       if (!reconciliationNeeded) {
         try {
-          // Look up player name via their allocated jersey number + club
-          let playerName = "";
-          if (pending.club_id && pending.jersey_number) {
-            const { data: playerRow } = await supabase
-              .from("players")
-              .select("first_name, last_name")
-              .eq("club_id", pending.club_id)
-              .eq("final_shirt", pending.jersey_number)
-              .maybeSingle();
-            if (playerRow) {
-              playerName = `${playerRow.first_name ?? ""} ${playerRow.last_name ?? ""}`.trim();
-            }
-          }
+          // DEBUG: log raw pending object to diagnose empty orders rows
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+            level: "info", message: "DEBUG pending object",
+            meta: { pending },
+          });
+
+          const p = pending as any;
+          const playerFirstName: string = p.player_first_name ?? "";
+          const playerLastName: string = p.player_last_name ?? "";
+          const isNewPlayerFlag: boolean | null = p.is_new_player ?? null;
+          const keepExistingFlag: boolean | null = p.keep_existing_jersey ?? null;
+          const prevJerseyNum: number | null = p.previous_jersey_number ?? null;
+          const prevInventoryId: string | null = p.previous_inventory_id ?? null;
+          const playerName = [playerFirstName, playerLastName].filter(Boolean).join(" ").trim();
+          const clubId = String(p.club_id ?? "");
+          const newJerseyNum = Number(p.jersey_number) || null;
 
           // Look up club name
           let clubName = "";
-          if (pending.club_id) {
+          if (clubId) {
             const { data: clubRow } = await supabase
-              .from("clubs")
-              .select("name")
-              .eq("id", pending.club_id)
-              .maybeSingle();
+              .from("clubs").select("name").eq("id", clubId).maybeSingle();
             clubName = (clubRow as any)?.name ?? "";
           }
 
-          await supabase.from("orders").insert({
+          // ── Player record management ─────────────────────────────────────────
+          if (playerFirstName && playerLastName && p.year_of_birth && clubId) {
+            const yob = Number(p.year_of_birth);
+
+            if (isNewPlayerFlag === true) {
+              // New player — insert a fresh player record
+              await supabase.from("players").insert({
+                first_name: playerFirstName,
+                last_name: playerLastName,
+                year_of_birth: yob,
+                club_id: clubId,
+                final_shirt: newJerseyNum,
+              });
+            } else if (isNewPlayerFlag === false) {
+              // Existing player — find them and update final_shirt
+              const { data: existingPlayers } = await supabase
+                .from("players")
+                .select("id")
+                .eq("club_id", clubId)
+                .ilike("first_name", playerFirstName)
+                .ilike("last_name", playerLastName)
+                .eq("year_of_birth", yob)
+                .limit(1);
+
+              const existingPlayer = (existingPlayers ?? [])[0] as any;
+              if (existingPlayer?.id) {
+                await supabase
+                  .from("players")
+                  .update({ final_shirt: newJerseyNum })
+                  .eq("id", existingPlayer.id);
+              }
+
+              // If they're releasing their old jersey, free that inventory row
+              if (keepExistingFlag === false && prevInventoryId) {
+                await supabase
+                  .from("inventory")
+                  .update({ status: "Available", allocation_date: null })
+                  .eq("id", prevInventoryId)
+                  .eq("status", "Allocated"); // guard: only release if still allocated
+              }
+            }
+          }
+          // ────────────────────────────────────────────────────────────────────
+
+          const { error: insertErr } = await supabase.from("orders").insert({
             id: reservationId,
             reservation_id: reservationId,
             shopify_order_id: orderId,
             order_number: orderNumber || null,
             order_date: nowIso,
             player_name: playerName,
-            club_id: String(pending.club_id ?? ""),
-            team_name: String((pending as any).team_id ?? ""),
+            player_first_name: playerFirstName || null,
+            player_last_name: playerLastName || null,
+            is_new_player: isNewPlayerFlag,
+            keep_existing_jersey: keepExistingFlag,
+            shopify_buyer_name: shopifyBuyerName,
+            club_id: clubId,
+            team_name: String(p.team_id ?? ""),
             product_name: clubName,
-            size: String((pending as any).size ?? ""),
-            number: String((pending as any).jersey_number ?? jerseyNumber),
-            jersey_number: Number((pending as any).jersey_number) || null,
-            year_of_birth: Number((pending as any).year_of_birth) || null,
-            season_year: Number((pending as any).season_year) || null,
+            size: String(p.size ?? ""),
+            number: String(p.jersey_number ?? jerseyNumber),
+            jersey_number: newJerseyNum,
+            year_of_birth: Number(p.year_of_birth) || null,
+            season_year: Number(p.season_year) || null,
             purchased_at: nowIso,
           });
-        } catch {
-          // Sales log write must never break webhook processing
+          if (insertErr) {
+            await logEvent(supabase, {
+              order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+              level: "error", message: "Failed to write to orders table",
+              meta: { detail: insertErr.message, code: (insertErr as any).code },
+            });
+          }
+        } catch (salesErr: any) {
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+            level: "error", message: "Exception writing to orders table",
+            meta: { detail: salesErr?.message ?? String(salesErr) },
+          });
         }
       }
     } catch (e: any) {
