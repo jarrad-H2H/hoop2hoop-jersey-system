@@ -585,6 +585,8 @@ export async function reserveNumberForPurchase(input: {
   // Available inventory row (SKIP LOCKED), allocates it, creates the pending
   // allocation, and logs the audit event. Two simultaneous shoppers can no
   // longer be sold the same physical jersey.
+  // Player identity fields are passed directly into the RPC so they're written
+  // atomically in the same transaction — no separate UPDATE needed (and no RLS risk).
   const { data, error } = await supabase.rpc("reserve_jersey", {
     p_club_id: input.clubId,
     p_jersey_number: input.jerseyNumber,
@@ -593,6 +595,12 @@ export async function reserveNumberForPurchase(input: {
     p_year_of_birth: input.yearOfBirth,
     p_team_id: input.teamId ?? null,
     p_expires_minutes: input.expiresMinutes ?? 15,
+    p_player_first_name: input.playerFirstName ?? null,
+    p_player_last_name: input.playerLastName ?? null,
+    p_is_new_player: input.isNewPlayer ?? null,
+    p_keep_existing_jersey: input.keepExistingJersey ?? null,
+    p_previous_jersey_number: input.previousJerseyNumber ?? null,
+    p_previous_inventory_id: input.previousInventoryId ?? null,
   });
 
   if (error) {
@@ -609,25 +617,6 @@ export async function reserveNumberForPurchase(input: {
       success: false,
       message: "That number/size was just taken or is out of stock. Please pick another.",
     };
-  }
-
-  // Patch the new player identity fields onto the pending allocation row
-  if (input.playerFirstName || input.playerLastName || input.isNewPlayer != null) {
-    try {
-      await supabase
-        .from("pending_allocations")
-        .update({
-          player_first_name: input.playerFirstName ?? null,
-          player_last_name: input.playerLastName ?? null,
-          is_new_player: input.isNewPlayer ?? null,
-          keep_existing_jersey: input.keepExistingJersey ?? null,
-          previous_jersey_number: input.previousJerseyNumber ?? null,
-          previous_inventory_id: input.previousInventoryId ?? null,
-        })
-        .eq("id", row.pending_allocation_id);
-    } catch {
-      // Non-fatal — reservation is still valid without name patch
-    }
   }
 
   return {
