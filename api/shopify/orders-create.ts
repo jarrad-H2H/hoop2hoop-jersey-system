@@ -299,13 +299,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Only write for clean purchases — reconciled orders need manual review first.
       if (!reconciliationNeeded) {
         try {
-          // DEBUG: log raw pending object to diagnose empty orders rows
-          await logEvent(supabase, {
-            order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
-            level: "info", message: "DEBUG pending object",
-            meta: { pending },
-          });
-
           const p = pending as any;
           const playerFirstName: string = p.player_first_name ?? "";
           const playerLastName: string = p.player_last_name ?? "";
