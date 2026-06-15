@@ -362,7 +362,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
           // ────────────────────────────────────────────────────────────────────
 
-          await supabase.from("orders").insert({
+          const { error: insertErr } = await supabase.from("orders").insert({
             id: reservationId,
             reservation_id: reservationId,
             shopify_order_id: orderId,
@@ -384,8 +384,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             season_year: Number(p.season_year) || null,
             purchased_at: nowIso,
           });
-        } catch {
-          // Sales log write must never break webhook processing
+          if (insertErr) {
+            await logEvent(supabase, {
+              order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+              level: "error", message: "Failed to write to orders table",
+              meta: { detail: insertErr.message, code: (insertErr as any).code },
+            });
+          }
+        } catch (salesErr: any) {
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+            level: "error", message: "Exception writing to orders table",
+            meta: { detail: salesErr?.message ?? String(salesErr) },
+          });
         }
       }
     } catch (e: any) {
