@@ -332,7 +332,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 final_shirt: newJerseyNum,
               });
             } else if (isNewPlayerFlag === false) {
-              // Existing player — find them and update final_shirt
+              // Existing player — find them and update final_shirt.
+              // If not found in DB (e.g. pre-existing player not yet recorded),
+              // insert them anyway so we always have a player record.
               const { data: existingPlayers } = await supabase
                 .from("players")
                 .select("id")
@@ -348,6 +350,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                   .from("players")
                   .update({ final_shirt: newJerseyNum })
                   .eq("id", existingPlayer.id);
+              } else {
+                // Not found — insert a new record so we always have one
+                await supabase.from("players").insert({
+                  first_name: playerFirstName,
+                  last_name: playerLastName,
+                  year_of_birth: yob,
+                  club_id: clubId,
+                  final_shirt: newJerseyNum,
+                });
               }
 
               // If they're releasing their old jersey, free that inventory row
