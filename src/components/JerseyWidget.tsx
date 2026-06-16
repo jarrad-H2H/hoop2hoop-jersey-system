@@ -332,11 +332,13 @@ const JerseyWidget: React.FC = () => {
       setExistingPlayerInventoryId(null);
       setKeepExistingJersey(null);
       try {
+        const ageGroup = yobNum ? deriveAgeGroupFromYob(SEASON_YEAR, yobNum) : null;
         const result = await lookupPlayerByName({
           clubId: selectedClubId,
           firstName: firstName.trim(),
           lastName: lastName.trim(),
           yearOfBirth: yobNum,
+          ageGroup, // fallback for BC-imported players who have no YOB stored
         });
         if (result.found && result.currentJerseyNumber != null) {
           setExistingPlayerJersey(result.currentJerseyNumber);
@@ -755,7 +757,7 @@ const JerseyWidget: React.FC = () => {
             )}
             {pendingAllocationId && (
               <div className="text-[11px] mt-1 text-amber-900/80">
-                Reservation ID saved for checkout.
+                              Reservation ID saved for checkout.
               </div>
             )}
           </div>
