@@ -417,9 +417,9 @@ const StockPlanner: React.FC = () => {
       }
 
       // Escalate WATCH if number pool is fragile (even if unit stock is ok)
-      if (status === “OK” && (lowEntropy || lowNumberFlex)) {
-        status = “WATCH”;
-        const tightList = constrainedNumbers !== “—“ ? ` Tightest: ${constrainedNumbers}.` : “”;
+      if (status === "OK" && (lowEntropy || lowNumberFlex)) {
+        status = "WATCH";
+        const tightList = constrainedNumbers !== "—" ? ` Tightest: ${constrainedNumbers}.` : "";
         notes = lowNumberFlex
           ? `Units OK, but only ${distinctNumbersAvailable} distinct numbers available (clash risk).${tightList}`
           : `Units OK, but number pool is unevenly spread (clash risk).${tightList}`;
