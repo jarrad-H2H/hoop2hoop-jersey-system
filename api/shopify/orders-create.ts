@@ -416,7 +416,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch (e: any) {
       issues.push({ reservationId, issue: "Unhandled exception.", detail: e?.message ?? String(e) });
       await logEvent(supabase, {
-        order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
         level: "error", message: "Unhandled exception processing reservation",
         meta: { detail: e?.message ?? String(e) },
       });
