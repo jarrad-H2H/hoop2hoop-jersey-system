@@ -492,36 +492,44 @@ export async function lookupPlayerByName(params: {
   firstName: string;
   lastName: string;
   yearOfBirth: number;
+  ageGroup?: string | null; // derived from YOB in widget; used as fallback for BC-imported players who have no YOB stored
 }): Promise<{
   found: boolean;
   playerId?: string;
   currentJerseyNumber?: number | null;
   previousInventoryId?: string | null;
 }> {
-  const { clubId, firstName, lastName, yearOfBirth } = params;
+  const { clubId, firstName, lastName, yearOfBirth, ageGroup } = params;
   const firstTrimmed = firstName.trim();
   const lastTrimmed = lastName.trim();
 
-  // 1. Exact match: first + last + YOB + club
+  // Match cohort by YOB (if stored) OR age_group (if YOB missing — common for BC-imported players).
+  // Using OR means a player imported from BC with only age_group = 'U14' is still found when
+  // the parent enters YOB 2013 (which the widget maps to U14).
+  const cohortFilter = ageGroup
+    ? `year_of_birth.eq.${yearOfBirth},age_group.eq.${ageGroup}`
+    : `year_of_birth.eq.${yearOfBirth}`;
+
+  // 1. Exact match: first + last + cohort + club
   const { data: exact } = await supabase
     .from("players")
     .select("id, first_name, last_name, final_shirt, year_of_birth")
     .eq("club_id", clubId)
     .ilike("first_name", firstTrimmed)
     .ilike("last_name", lastTrimmed)
-    .eq("year_of_birth", yearOfBirth)
+    .or(cohortFilter)
     .limit(1);
 
   let player = (exact ?? [])[0] as any;
 
-  // 2. Fuzzy fallback: same last name + YOB (handles nickname variations)
+  // 2. Fuzzy fallback: same last name + cohort (handles nickname variations e.g. Harry → Harrison)
   if (!player) {
     const { data: fuzzy } = await supabase
       .from("players")
       .select("id, first_name, last_name, final_shirt, year_of_birth")
       .eq("club_id", clubId)
       .ilike("last_name", lastTrimmed)
-      .eq("year_of_birth", yearOfBirth)
+      .or(cohortFilter)
       .limit(5);
 
     const candidates = (fuzzy ?? []) as any[];
