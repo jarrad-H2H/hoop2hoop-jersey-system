@@ -221,7 +221,8 @@ const StockPlanner: React.FC = () => {
         const { data: invData, error: invError } = await supabase
           .from("inventory")
           .select("size, status, jersey_number")
-          .eq("club_id", selectedClubId);
+          .eq("club_id", selectedClubId)
+          .neq("status", "Written Off");
 
         if (invError) {
           console.error("StockPlanner load inventory error", invError);
