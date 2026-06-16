@@ -51,6 +51,9 @@ const AllocationHistory: React.FC = () => {
     "end",
     "return",
   ]);
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+  const [playerSearch, setPlayerSearch] = useState<string>("");
   const [rows, setRows] = useState<AllocationRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,10 +113,19 @@ const AllocationHistory: React.FC = () => {
           )
           .eq("club_id", selectedClubId)
           .order("created_at", { ascending: false })
-          .limit(300); // keep it light for UI
+          .limit(500);
 
         if (selectedTypes.length > 0 && selectedTypes.length < 4) {
           query = query.in("allocation_type", selectedTypes);
+        }
+        if (dateFrom) {
+          query = query.gte("created_at", dateFrom);
+        }
+        if (dateTo) {
+          // Include the full day by adding a day to dateTo
+          const toDate = new Date(dateTo);
+          toDate.setDate(toDate.getDate() + 1);
+          query = query.lt("created_at", toDate.toISOString().split("T")[0]);
         }
 
         const { data, error } = await query;
@@ -131,7 +143,7 @@ const AllocationHistory: React.FC = () => {
     };
 
     void loadHistory();
-  }, [selectedClubId, selectedTypes]);
+  }, [selectedClubId, selectedTypes, dateFrom, dateTo]);
 
   const toggleType = (type: AllocationType) => {
     setSelectedTypes((prev) =>
@@ -139,36 +151,139 @@ const AllocationHistory: React.FC = () => {
     );
   };
 
+  // Client-side player name filter
+  const filteredRows = playerSearch.trim()
+    ? rows.filter((r) => {
+        const name = `${r.player?.first_name ?? ""} ${r.player?.last_name ?? ""}`.toLowerCase();
+        return name.includes(playerSearch.trim().toLowerCase());
+      })
+    : rows;
+
+  const handleExportCsv = () => {
+    if (!filteredRows.length) return;
+    const clubName = clubs.find((c) => c.id === selectedClubId)?.name ?? "";
+    const header = ["Time", "Type", "Player", "Club", "New #", "New Size", "Prev #", "Prev Size", "Note"];
+    const lines = [
+      header.join(","),
+      ...filteredRows.map((r) => {
+        const playerName = r.player
+          ? `${r.player.first_name ?? ""} ${r.player.last_name ?? ""}`.trim()
+          : "";
+        return [
+          `"${new Date(r.created_at).toLocaleString()}"`,
+          typeLabels[r.allocation_type],
+          `"${playerName.replace(/"/g, '""')}"`,
+          `"${(r.club?.name ?? clubName).replace(/"/g, '""')}"`,
+          r.jersey_number ?? "",
+          r.size ?? "",
+          r.previous_jersey_number ?? "",
+          r.previous_size ?? "",
+          `"${(r.note ?? "").replace(/"/g, '""')}"`,
+        ].join(",");
+      }),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `allocation_history_${clubName.replace(/\s+/g, "_")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">Allocation History</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">Allocation History</h1>
+        <button
+          type="button"
+          onClick={handleExportCsv}
+          disabled={filteredRows.length === 0}
+          className="px-4 py-2 rounded bg-slate-800 text-white text-sm disabled:bg-gray-400"
+        >
+          Export CSV
+        </button>
+      </div>
       <p className="text-sm text-gray-600 mb-6">
-        Audit trail of jersey allocations, swaps, ends, and warehouse returns.
-        Use this to answer &quot;who had which number when&quot; for each club.
+        Audit trail of jersey allocations, swaps, exchanges, and warehouse
+        returns. Filter by club, date range, event type, or player name.
       </p>
 
       {/* Filters */}
-      <div className="flex flex-col md:flex-row md:items-end md:space-x-6 space-y-4 md:space-y-0 mb-6">
-        <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-            Club
-          </label>
-          <select
-            value={selectedClubId}
-            onChange={(e) => setSelectedClubId(e.target.value)}
-            className="border rounded px-3 py-2 min-w-[220px]"
-          >
-            {clubs.length === 0 && (
-              <option value="">No client clubs found</option>
-            )}
-            {clubs.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+      <div className="space-y-4 mb-6">
+        {/* Row 1: Club + dates + player search */}
+        <div className="flex flex-col md:flex-row md:items-end md:space-x-4 space-y-3 md:space-y-0">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              Club
+            </label>
+            <select
+              value={selectedClubId}
+              onChange={(e) => setSelectedClubId(e.target.value)}
+              className="border rounded px-3 py-2 min-w-[200px]"
+            >
+              {clubs.length === 0 && (
+                <option value="">No client clubs found</option>
+              )}
+              {clubs.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              From Date
+            </label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="border rounded px-3 py-2"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              To Date
+            </label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="border rounded px-3 py-2"
+            />
+          </div>
+
+          <div className="flex-1">
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+              Player Name
+            </label>
+            <input
+              type="text"
+              value={playerSearch}
+              onChange={(e) => setPlayerSearch(e.target.value)}
+              placeholder="Filter by player name..."
+              className="border rounded px-3 py-2 w-full"
+            />
+          </div>
+
+          {(dateFrom || dateTo || playerSearch) && (
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => { setDateFrom(""); setDateTo(""); setPlayerSearch(""); }}
+                className="px-3 py-2 text-xs border rounded bg-gray-50 hover:bg-gray-100"
+              >
+                Clear
+              </button>
+            </div>
+          )}
         </div>
 
+        {/* Row 2: Event type toggles */}
         <div>
           <div className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
             Event Types
@@ -208,14 +323,18 @@ const AllocationHistory: React.FC = () => {
       )}
 
       {/* Table */}
-      {!loading && rows.length === 0 && (
+      {!loading && filteredRows.length === 0 && (
         <div className="text-sm text-gray-500">
-          No allocation events found for this club with the current filters.
+          No allocation events found with the current filters.
         </div>
       )}
 
-      {!loading && rows.length > 0 && (
+      {!loading && filteredRows.length > 0 && (
         <div className="overflow-x-auto bg-white rounded-lg shadow">
+          <div className="px-3 py-2 text-xs text-gray-500 border-b">
+            Showing {filteredRows.length} event{filteredRows.length !== 1 ? "s" : ""}
+            {rows.length !== filteredRows.length && ` (filtered from ${rows.length})`}
+          </div>
           <table className="min-w-full text-xs">
             <thead className="bg-gray-100">
               <tr>
@@ -229,7 +348,7 @@ const AllocationHistory: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
+              {filteredRows.map((row) => {
                 const playerName = row.player
                   ? `${row.player.first_name ?? ""} ${
                       row.player.last_name ?? ""

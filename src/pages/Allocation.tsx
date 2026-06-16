@@ -1,5 +1,5 @@
 // FILE: src/pages/Allocation.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 import {
   smartCheckNumber,
@@ -27,6 +27,14 @@ interface ClubPlayer {
   year_of_birth: number | null;
 }
 
+const SWAP_REASONS = [
+  "Size exchange",
+  "Damaged jersey",
+  "Number preference",
+  "Admin correction",
+  "Other",
+];
+
 const Allocation: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
@@ -36,6 +44,9 @@ const Allocation: React.FC = () => {
 
   const [clubPlayers, setClubPlayers] = useState<ClubPlayer[]>([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
+
+  // Player search
+  const [playerSearch, setPlayerSearch] = useState<string>("");
 
   const [preferredNumber, setPreferredNumber] = useState<string>("");
   const [yearOfBirth, setYearOfBirth] = useState<string>("");
@@ -62,26 +73,42 @@ const Allocation: React.FC = () => {
   const [returnBusy, setReturnBusy] = useState(false);
   const [returnMessage, setReturnMessage] = useState<string>("");
 
-  // Swap workflow state (admin)
+  // Exchange / swap workflow state
   const [swapSize, setSwapSize] = useState<string>("");
   const [swapNumber, setSwapNumber] = useState<string>("");
+  const [swapReason, setSwapReason] = useState<string>(SWAP_REASONS[0]);
+  const [swapSuggestions, setSwapSuggestions] = useState<NumberSuggestion[]>([]);
+  const [swapSuggesting, setSwapSuggesting] = useState(false);
   const [swapBusy, setSwapBusy] = useState(false);
 
   // Helper: current player object
   const currentPlayer =
     clubPlayers.find((p) => p.id === selectedPlayerId) ?? null;
 
+  // Filtered player search results
+  const filteredPlayers = useMemo(() => {
+    const needle = playerSearch.trim().toLowerCase();
+    if (!needle) return [];
+    return clubPlayers
+      .filter((p) => {
+        const fullName = `${p.first_name} ${p.last_name}`.toLowerCase();
+        const reversed = `${p.last_name} ${p.first_name}`.toLowerCase();
+        const numStr = p.final_shirt != null ? String(p.final_shirt) : "";
+        return (
+          fullName.includes(needle) ||
+          reversed.includes(needle) ||
+          numStr === needle
+        );
+      })
+      .slice(0, 10);
+  }, [playerSearch, clubPlayers]);
+
   // Helper: derive the YOB to use for cohort logic
   const deriveCohortYear = (): number | undefined => {
-    // 1) Prefer typed YOB
     if (yearOfBirth) {
       const typed = Number(yearOfBirth);
-      if (Number.isFinite(typed)) {
-        return typed;
-      }
+      if (Number.isFinite(typed)) return typed;
     }
-
-    // 2) Fall back to player's stored YOB
     if (
       currentPlayer &&
       typeof currentPlayer.year_of_birth === "number" &&
@@ -89,8 +116,6 @@ const Allocation: React.FC = () => {
     ) {
       return currentPlayer.year_of_birth;
     }
-
-    // 3) No YOB → cohort logic disabled, use club-wide fallback
     return undefined;
   };
 
@@ -114,10 +139,7 @@ const Allocation: React.FC = () => {
 
         const clubList = (data ?? []) as Club[];
         setClubs(clubList);
-
-        if (clubList.length > 0) {
-          setSelectedClubId(clubList[0].id);
-        }
+        if (clubList.length > 0) setSelectedClubId(clubList[0].id);
       } finally {
         setLoadingClubs(false);
       }
@@ -126,7 +148,7 @@ const Allocation: React.FC = () => {
     loadClubs();
   }, []);
 
-  // Load available sizes for selected club (from inventory)
+  // Load available sizes for selected club
   useEffect(() => {
     const loadSizes = async () => {
       if (!selectedClubId) {
@@ -154,9 +176,9 @@ const Allocation: React.FC = () => {
 
         const unique = Array.from(
           new Set((data ?? []).map((row: any) => String(row.size ?? "")))
-        ).filter((s) => s.length > 0);
-
-        unique.sort();
+        )
+          .filter((s) => s.length > 0)
+          .sort();
 
         setSizes(unique);
         setSelectedSize(unique[0] ?? "");
@@ -175,6 +197,7 @@ const Allocation: React.FC = () => {
       if (!selectedClubId) {
         setClubPlayers([]);
         setSelectedPlayerId("");
+        setPlayerSearch("");
         return;
       }
 
@@ -199,7 +222,8 @@ const Allocation: React.FC = () => {
 
         const list = (data ?? []) as ClubPlayer[];
         setClubPlayers(list);
-        setSelectedPlayerId(list[0]?.id ?? "");
+        setSelectedPlayerId("");
+        setPlayerSearch("");
       } finally {
         setLoadingPlayers(false);
       }
@@ -208,11 +232,16 @@ const Allocation: React.FC = () => {
     loadPlayers();
   }, [selectedClubId]);
 
+  // Clear swap suggestions when size changes
+  useEffect(() => {
+    setSwapSuggestions([]);
+    setSwapNumber("");
+  }, [swapSize]);
+
   const handleClubChange = (clubId: string) => {
     setSelectedClubId(clubId);
-
-    // Reset state when club changes
     setSelectedPlayerId("");
+    setPlayerSearch("");
     setStatusMessage("");
     setClashes([]);
     setStockBySize([]);
@@ -221,6 +250,33 @@ const Allocation: React.FC = () => {
     setPreferredNumber("");
     setYearOfBirth("");
     setSwapNumber("");
+    setSwapSuggestions([]);
+  };
+
+  const selectPlayer = (id: string) => {
+    setSelectedPlayerId(id);
+    setPlayerSearch("");
+    // Reset number entry when switching player
+    setPreferredNumber("");
+    setStatusMessage("");
+    setClashes([]);
+    setStockBySize([]);
+    setSuggestions([]);
+    setAllocationMessage("");
+    setSwapNumber("");
+    setSwapSuggestions([]);
+  };
+
+  const clearPlayer = () => {
+    setSelectedPlayerId("");
+    setPlayerSearch("");
+    setStatusMessage("");
+    setClashes([]);
+    setStockBySize([]);
+    setSuggestions([]);
+    setAllocationMessage("");
+    setSwapNumber("");
+    setSwapSuggestions([]);
   };
 
   const findStockForSelectedSize = (stock: StockBySize[]) => {
@@ -236,18 +292,9 @@ const Allocation: React.FC = () => {
   };
 
   const handleCheckNumber = async () => {
-    if (!selectedClubId) {
-      setError("Please select a club.");
-      return;
-    }
-    if (!selectedSize) {
-      setError("Please select a size.");
-      return;
-    }
-    if (!preferredNumber) {
-      setError("Please enter a preferred number.");
-      return;
-    }
+    if (!selectedClubId) { setError("Please select a club."); return; }
+    if (!selectedSize) { setError("Please select a size."); return; }
+    if (!preferredNumber) { setError("Please enter a preferred number."); return; }
 
     const num = Number(preferredNumber);
     if (!Number.isFinite(num) || num <= 0) {
@@ -264,13 +311,11 @@ const Allocation: React.FC = () => {
 
     try {
       const yobNum = deriveCohortYear();
-
-      const { clashes, stockBySize, statusMessage } =
-        await smartCheckNumber(selectedClubId, num, {
-          yearOfBirth: yobNum,
-          // seasonYear: 2025 // optional: could be configurable later
-        });
-
+      const { clashes, stockBySize, statusMessage } = await smartCheckNumber(
+        selectedClubId,
+        num,
+        { yearOfBirth: yobNum }
+      );
       setClashes(clashes);
       setStockBySize(stockBySize);
       setStatusMessage(statusMessage);
@@ -283,14 +328,8 @@ const Allocation: React.FC = () => {
   };
 
   const handleSuggestNumbers = async () => {
-    if (!selectedClubId) {
-      setError("Please select a club.");
-      return;
-    }
-    if (!selectedSize) {
-      setError("Please select a size.");
-      return;
-    }
+    if (!selectedClubId) { setError("Please select a club."); return; }
+    if (!selectedSize) { setError("Please select a size."); return; }
 
     setError(null);
     setSuggesting(true);
@@ -298,16 +337,12 @@ const Allocation: React.FC = () => {
     setAllocationMessage("");
 
     try {
-      const results = await suggestNumbersForClub(
-        selectedClubId,
-        selectedSize,
-        10
-      );
+      const results = await suggestNumbersForClub(selectedClubId, selectedSize, 10);
       setSuggestions(results);
 
       if (results.length === 0) {
         setStatusMessage(
-          `There are no clash-free numbers with available stock for size ${selectedSize} in this club.`
+          `No clash-free numbers with available stock for size ${selectedSize} in this club.`
         );
       } else {
         setStatusMessage(
@@ -325,7 +360,7 @@ const Allocation: React.FC = () => {
   const handleUseSuggestion = (num: number) => {
     setPreferredNumber(String(num));
     setStatusMessage(
-      `Using suggested number ${num}. Click "Check Number" to validate or "Confirm Allocation" to reserve stock.`
+      `Selected #${num}. Click "Check Number" to validate or "Confirm Allocation" to reserve.`
     );
   };
 
@@ -333,22 +368,10 @@ const Allocation: React.FC = () => {
     setAllocationMessage("");
     setError(null);
 
-    if (!selectedClubId) {
-      setError("Please select a club before confirming allocation.");
-      return;
-    }
-    if (!selectedPlayerId) {
-      setError("Please select a player before confirming allocation.");
-      return;
-    }
-    if (!selectedSize) {
-      setError("Please select a size before confirming allocation.");
-      return;
-    }
-    if (!preferredNumber) {
-      setError("Please enter a preferred number before confirming allocation.");
-      return;
-    }
+    if (!selectedClubId) { setError("Please select a club before confirming allocation."); return; }
+    if (!selectedPlayerId) { setError("Please select a player before confirming allocation."); return; }
+    if (!selectedSize) { setError("Please select a size before confirming allocation."); return; }
+    if (!preferredNumber) { setError("Please enter a preferred number before confirming allocation."); return; }
 
     const num = Number(preferredNumber);
     if (!Number.isFinite(num) || num <= 0) {
@@ -357,43 +380,25 @@ const Allocation: React.FC = () => {
     }
 
     const yobNum = deriveCohortYear();
-
     setAllocating(true);
 
     try {
-      // Re-check clashes + stock at commit time to keep it safe
-      const { clashes, stockBySize } = await smartCheckNumber(
-        selectedClubId,
-        num,
-        {
-          yearOfBirth: yobNum,
-        }
-      );
-
+      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, num, { yearOfBirth: yobNum });
       const stockForSize = findStockForSelectedSize(stockBySize);
 
       if (clashes.length > 0) {
-        setAllocationMessage(
-          `Cannot allocate: this number still clashes in the effective cohort.`
-        );
+        setAllocationMessage("Cannot allocate: this number still clashes in the effective cohort.");
         setAllocating(false);
         return;
       }
 
       if (stockForSize <= 0) {
-        setAllocationMessage(
-          `Cannot allocate: there is no available stock for size ${selectedSize} for this number.`
-        );
+        setAllocationMessage(`Cannot allocate: there is no available stock for size ${selectedSize} for this number.`);
         setAllocating(false);
         return;
       }
 
-      // 1) Reserve inventory row
-      const invResult = await allocateNumberForClub(
-        selectedClubId,
-        num,
-        selectedSize
-      );
+      const invResult = await allocateNumberForClub(selectedClubId, num, selectedSize);
 
       if (!invResult.success || !invResult.inventoryId) {
         setAllocationMessage(invResult.message || "Failed to reserve stock.");
@@ -404,11 +409,8 @@ const Allocation: React.FC = () => {
       const inventoryId = invResult.inventoryId;
       const playerId = selectedPlayerId;
 
-      // 2) Update player final_shirt and optionally year_of_birth
       const playerUpdate: any = { final_shirt: num };
-      if (yobNum && Number.isFinite(yobNum)) {
-        playerUpdate.year_of_birth = yobNum;
-      }
+      if (yobNum && Number.isFinite(yobNum)) playerUpdate.year_of_birth = yobNum;
 
       const { error: playerError } = await supabase
         .from("players")
@@ -417,14 +419,11 @@ const Allocation: React.FC = () => {
 
       if (playerError) {
         console.error("Player update error", playerError);
-        setAllocationMessage(
-          "Inventory reserved, but failed to update player record. Please fix player manually."
-        );
+        setAllocationMessage("Inventory reserved, but failed to update player record. Please fix player manually.");
         setAllocating(false);
         return;
       }
 
-      // 3) Attach inventory row to player
       const { error: invLinkError } = await supabase
         .from("inventory")
         .update({ allocated_player_id: playerId })
@@ -432,14 +431,11 @@ const Allocation: React.FC = () => {
 
       if (invLinkError) {
         console.error("Inventory link error", invLinkError);
-        setAllocationMessage(
-          "Player updated, but failed to link jersey to player in inventory."
-        );
+        setAllocationMessage("Player updated, but failed to link jersey to player in inventory.");
         setAllocating(false);
         return;
       }
 
-      // 4) Log allocation event
       await logAllocationEvent({
         allocation_type: "new",
         club_id: selectedClubId,
@@ -448,30 +444,25 @@ const Allocation: React.FC = () => {
         size: selectedSize,
         previous_jersey_number: null,
         previous_size: null,
-        note: "New allocation from admin panel",
+        note: `New allocation: #${num} (${selectedSize})`,
       });
 
-      // Update local snapshot so UI reflects latest number/YOB
       setClubPlayers((prev) =>
         prev.map((p) =>
           p.id === playerId
             ? {
                 ...p,
                 final_shirt: num,
-                year_of_birth:
-                  yobNum && Number.isFinite(yobNum)
-                    ? yobNum
-                    : p.year_of_birth,
+                year_of_birth: yobNum && Number.isFinite(yobNum) ? yobNum : p.year_of_birth,
               }
             : p
         )
       );
 
       setAllocationMessage(
-        `Success: allocated jersey #${num} (${selectedSize}) to this player and reserved stock in inventory.`
+        `Success: allocated jersey #${num} (${selectedSize}) to this player and reserved stock.`
       );
 
-      // Clear suggestions (stock changed) and refresh stock view for this number
       setSuggestions([]);
       setStockBySize(stockBySize);
     } catch (err: any) {
@@ -486,52 +477,33 @@ const Allocation: React.FC = () => {
     setError(null);
     setAllocationMessage("");
 
-    if (!selectedClubId) {
-      setError("Please select a club first.");
-      return;
-    }
-
-    if (!selectedPlayerId || !currentPlayer) {
-      setError("Please select a player first.");
-      return;
-    }
-
+    if (!selectedClubId) { setError("Please select a club first."); return; }
+    if (!selectedPlayerId || !currentPlayer) { setError("Please select a player first."); return; }
     if (currentPlayer.final_shirt == null) {
-      setAllocationMessage(
-        "This player does not currently have an assigned number to end."
-      );
+      setAllocationMessage("This player does not currently have an assigned number to end.");
       return;
     }
 
     const currentNumber = currentPlayer.final_shirt;
-
     setEndingAllocation(true);
+
     try {
       const playerId = currentPlayer.id;
 
-      // 1) Free any inventory rows allocated to this player in this club
       const { error: invError } = await supabase
         .from("inventory")
-        .update({
-          status: "Available",
-          allocated_player_id: null,
-          allocation_date: null,
-          return_date_due: null,
-        })
+        .update({ status: "Available", allocated_player_id: null, allocation_date: null, return_date_due: null })
         .eq("club_id", selectedClubId)
         .eq("allocated_player_id", playerId)
         .eq("status", "Allocated");
 
       if (invError) {
         console.error("EndAllocation inventory update error", invError);
-        setAllocationMessage(
-          "Failed to release jersey from inventory. No changes were made to the player."
-        );
+        setAllocationMessage("Failed to release jersey from inventory. No changes were made to the player.");
         setEndingAllocation(false);
         return;
       }
 
-      // 2) Clear the player's final_shirt
       const { error: playerError } = await supabase
         .from("players")
         .update({ final_shirt: null })
@@ -539,14 +511,11 @@ const Allocation: React.FC = () => {
 
       if (playerError) {
         console.error("EndAllocation player update error", playerError);
-        setAllocationMessage(
-          "Inventory jersey released, but failed to clear player number. Please fix player manually."
-        );
+        setAllocationMessage("Inventory jersey released, but failed to clear player number. Please fix player manually.");
         setEndingAllocation(false);
         return;
       }
 
-      // 3) Log event
       await logAllocationEvent({
         allocation_type: "end",
         club_id: selectedClubId,
@@ -555,28 +524,17 @@ const Allocation: React.FC = () => {
         size: null,
         previous_jersey_number: currentNumber,
         previous_size: null,
-        note: "End allocation from admin panel",
+        note: `End allocation: freed #${currentNumber}`,
       });
 
-      // 4) Update local state so UI reflects the change
       setClubPlayers((prev) =>
-        prev.map((p) =>
-          p.id === playerId
-            ? {
-                ...p,
-                final_shirt: null,
-              }
-            : p
-        )
+        prev.map((p) => (p.id === playerId ? { ...p, final_shirt: null } : p))
       );
 
       setAllocationMessage(
-        `Ended allocation: jersey #${currentNumber} has been freed from this player and returned to stock.`
+        `Ended allocation: jersey #${currentNumber} freed from this player and returned to available stock.`
       );
-
-      setStatusMessage(
-        `Number ${currentNumber} is now free for reuse once stock and cohort checks pass.`
-      );
+      setStatusMessage(`Number ${currentNumber} is now free for reuse.`);
     } catch (err: any) {
       console.error("handleEndAllocation error", err);
       setError(err.message ?? "Failed to end allocation.");
@@ -585,29 +543,36 @@ const Allocation: React.FC = () => {
     }
   };
 
+  const handleSwapSuggest = async () => {
+    if (!selectedClubId) { setError("Please select a club first."); return; }
+    if (!swapSize) { setError("Please choose a new size first."); return; }
+
+    setError(null);
+    setSwapSuggesting(true);
+    setSwapSuggestions([]);
+
+    try {
+      const results = await suggestNumbersForClub(selectedClubId, swapSize, 10);
+      setSwapSuggestions(results);
+      if (results.length === 0) {
+        setAllocationMessage(`No clash-free numbers with stock in size ${swapSize} for this club.`);
+      }
+    } catch (err: any) {
+      console.error("handleSwapSuggest error", err);
+      setError(err.message ?? "Failed to suggest numbers for exchange.");
+    } finally {
+      setSwapSuggesting(false);
+    }
+  };
+
   const handleSwapJersey = async () => {
     setError(null);
     setAllocationMessage("");
 
-    if (!selectedClubId) {
-      setError("Please select a club first.");
-      return;
-    }
-
-    if (!currentPlayer || !selectedPlayerId) {
-      setError("Please select a player to swap jerseys for.");
-      return;
-    }
-
-    if (!swapSize) {
-      setError("Please choose a new jersey size for the swap.");
-      return;
-    }
-
-    if (!swapNumber) {
-      setError("Please enter a new jersey number for the swap.");
-      return;
-    }
+    if (!selectedClubId) { setError("Please select a club first."); return; }
+    if (!currentPlayer || !selectedPlayerId) { setError("Please select a player to exchange jerseys for."); return; }
+    if (!swapSize) { setError("Please choose a new jersey size."); return; }
+    if (!swapNumber) { setError("Please select or enter a new jersey number."); return; }
 
     const newNumber = Number(swapNumber);
     if (!Number.isFinite(newNumber) || newNumber <= 0) {
@@ -615,35 +580,21 @@ const Allocation: React.FC = () => {
       return;
     }
 
-    // Decide which YOB to use for cohort logic (same rules as check/allocation)
     const yobNum = deriveCohortYear();
-
     setSwapBusy(true);
 
     try {
-      // 1) Check cohort clashes + stock for the *new* number
-      const { clashes, stockBySize } = await smartCheckNumber(
-        selectedClubId,
-        newNumber,
-        {
-          yearOfBirth: yobNum,
-        }
-      );
-
+      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, newNumber, { yearOfBirth: yobNum });
       const stockForNewSize = findStockForSize(stockBySize, swapSize);
 
       if (clashes.length > 0) {
-        setAllocationMessage(
-          `Cannot swap: new number ${newNumber} clashes within the effective cohort.`
-        );
+        setAllocationMessage(`Cannot exchange: new number ${newNumber} clashes within the effective cohort.`);
         setSwapBusy(false);
         return;
       }
 
       if (stockForNewSize <= 0) {
-        setAllocationMessage(
-          `Cannot swap: there is no available stock for size ${swapSize} in number ${newNumber}.`
-        );
+        setAllocationMessage(`Cannot exchange: no available stock for size ${swapSize} with number ${newNumber}.`);
         setSwapBusy(false);
         return;
       }
@@ -651,39 +602,25 @@ const Allocation: React.FC = () => {
       const playerId = currentPlayer.id;
       const previousNumber = currentPlayer.final_shirt ?? null;
 
-      // 2) Free any existing inventory rows for this player
       const { error: invFreeError } = await supabase
         .from("inventory")
-        .update({
-          status: "Available",
-          allocated_player_id: null,
-          allocation_date: null,
-          return_date_due: null,
-        })
+        .update({ status: "Available", allocated_player_id: null, allocation_date: null, return_date_due: null })
         .eq("club_id", selectedClubId)
         .eq("allocated_player_id", playerId)
         .eq("status", "Allocated");
 
       if (invFreeError) {
         console.error("SwapJersey inventory free error", invFreeError);
-        setAllocationMessage(
-          "Failed to free existing jersey from inventory. Swap aborted."
-        );
+        setAllocationMessage("Failed to free existing jersey from inventory. Exchange aborted.");
         setSwapBusy(false);
         return;
       }
 
-      // 3) Reserve new inventory row for the new size/number
-      const invResult = await allocateNumberForClub(
-        selectedClubId,
-        newNumber,
-        swapSize
-      );
+      const invResult = await allocateNumberForClub(selectedClubId, newNumber, swapSize);
 
       if (!invResult.success || !invResult.inventoryId) {
         setAllocationMessage(
-          invResult.message ||
-            "Failed to reserve new jersey row during swap. Existing jersey has been freed; please re-allocate manually."
+          invResult.message || "Failed to reserve new jersey. Existing jersey has been freed — please re-allocate manually."
         );
         setSwapBusy(false);
         return;
@@ -691,11 +628,8 @@ const Allocation: React.FC = () => {
 
       const newInventoryId = invResult.inventoryId;
 
-      // 4) Update player with new final_shirt (+ optionally YOB)
       const playerUpdate: any = { final_shirt: newNumber };
-      if (yobNum && Number.isFinite(yobNum)) {
-        playerUpdate.year_of_birth = yobNum;
-      }
+      if (yobNum && Number.isFinite(yobNum)) playerUpdate.year_of_birth = yobNum;
 
       const { error: playerUpdateError } = await supabase
         .from("players")
@@ -704,14 +638,11 @@ const Allocation: React.FC = () => {
 
       if (playerUpdateError) {
         console.error("SwapJersey player update error", playerUpdateError);
-        setAllocationMessage(
-          "New jersey reserved, but failed to update player record. Please fix player manually."
-        );
+        setAllocationMessage("New jersey reserved, but failed to update player record. Please fix player manually.");
         setSwapBusy(false);
         return;
       }
 
-      // 5) Link the new inventory row to this player
       const { error: invLinkError } = await supabase
         .from("inventory")
         .update({ allocated_player_id: playerId })
@@ -719,14 +650,15 @@ const Allocation: React.FC = () => {
 
       if (invLinkError) {
         console.error("SwapJersey inventory link error", invLinkError);
-        setAllocationMessage(
-          "Player updated, but failed to link new jersey to player in inventory."
-        );
+        setAllocationMessage("Player updated, but failed to link new jersey in inventory.");
         setSwapBusy(false);
         return;
       }
 
-      // 6) Log swap event
+      // Build a descriptive log note so exchange history is readable without extra steps
+      const prevDesc = previousNumber != null ? `#${previousNumber}` : "no number";
+      const noteText = `${swapReason}: ${prevDesc} → #${newNumber} (${swapSize})`;
+
       await logAllocationEvent({
         allocation_type: "swap",
         club_id: selectedClubId,
@@ -735,35 +667,30 @@ const Allocation: React.FC = () => {
         size: swapSize,
         previous_jersey_number: previousNumber,
         previous_size: null,
-        note: "Swap via admin panel",
+        note: noteText,
       });
 
-      // 7) Update local state snapshot
       setClubPlayers((prev) =>
         prev.map((p) =>
           p.id === playerId
             ? {
                 ...p,
                 final_shirt: newNumber,
-                year_of_birth:
-                  yobNum && Number.isFinite(yobNum)
-                    ? yobNum
-                    : p.year_of_birth,
+                year_of_birth: yobNum && Number.isFinite(yobNum) ? yobNum : p.year_of_birth,
               }
             : p
         )
       );
 
       setAllocationMessage(
-        `Swap complete: player now has jersey #${newNumber} (${swapSize}). Old jersey has been freed and new one reserved & linked.`
+        `Exchange complete: ${currentPlayer.first_name} ${currentPlayer.last_name} now has #${newNumber} (${swapSize}). Old jersey freed, new one reserved.`
       );
 
-      // Clear swap inputs
       setSwapNumber("");
-      // Keep swapSize as-is for future swaps
+      setSwapSuggestions([]);
     } catch (err: any) {
       console.error("handleSwapJersey error", err);
-      setError(err.message ?? "Failed to swap jersey.");
+      setError(err.message ?? "Failed to process exchange.");
     } finally {
       setSwapBusy(false);
     }
@@ -773,20 +700,9 @@ const Allocation: React.FC = () => {
     setReturnMessage("");
     setError(null);
 
-    if (!selectedClubId) {
-      setError("Please select a club for the return.");
-      return;
-    }
-
-    if (!returnSize) {
-      setError("Please enter the jersey size for the return.");
-      return;
-    }
-
-    if (!returnNumber) {
-      setError("Please enter the jersey number for the return.");
-      return;
-    }
+    if (!selectedClubId) { setError("Please select a club for the return."); return; }
+    if (!returnSize) { setError("Please enter the jersey size for the return."); return; }
+    if (!returnNumber) { setError("Please enter the jersey number for the return."); return; }
 
     const num = Number(returnNumber);
     if (!Number.isFinite(num) || num <= 0) {
@@ -796,12 +712,7 @@ const Allocation: React.FC = () => {
 
     setReturnBusy(true);
     try {
-      const result = await returnJerseyToStock(
-        selectedClubId,
-        num,
-        returnSize
-      );
-
+      const result = await returnJerseyToStock(selectedClubId, num, returnSize);
       setReturnMessage(result.message);
     } catch (err: any) {
       console.error("handleReturnToStock error", err);
@@ -815,19 +726,17 @@ const Allocation: React.FC = () => {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">
-        Jersey Number Allocation (Admin)
-      </h1>
+      <h1 className="text-2xl font-bold mb-4">Jersey Allocation (Admin)</h1>
       <p className="text-sm text-gray-600 mb-6">
-        Use this tool to select a player, check for cohort-aware clashes, and
-        commit jersey allocations against live inventory. Use the End Allocation
-        action to free a player&apos;s number, or the Swap Jersey flow to move
-        them to a new size/number. Returns can also be processed by warehouse
-        below.
+        Search for a player, check for cohort-aware number clashes, and commit
+        allocations against live inventory. Use the Exchange / Swap section to
+        process size changes or number changes. Warehouse returns are at the
+        bottom.
       </p>
 
       {/* Top form */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        {/* Club */}
         <div>
           <label className="block text-sm font-semibold mb-1">Club</label>
           <select
@@ -849,6 +758,7 @@ const Allocation: React.FC = () => {
           </select>
         </div>
 
+        {/* Size */}
         <div>
           <label className="block text-sm font-semibold mb-1">Size</label>
           <select
@@ -870,9 +780,11 @@ const Allocation: React.FC = () => {
           </select>
         </div>
 
+        {/* Year of birth */}
         <div>
           <label className="block text-sm font-semibold mb-1">
-            Year of Birth (optional, enables cohort logic)
+            Year of Birth{" "}
+            <span className="font-normal text-gray-500">(cohort logic)</span>
           </label>
           <input
             type="number"
@@ -882,43 +794,112 @@ const Allocation: React.FC = () => {
             className="w-full border p-2 rounded"
           />
           <p className="mt-1 text-xs text-gray-500">
-            If left blank, we use the player&apos;s stored year of birth (if
-            available) for cohort checks.
+            Leave blank to use the player&apos;s stored YOB. Enter manually to
+            override (e.g. when a player is playing up an age group, enter the
+            typical birth year of that higher group).
           </p>
         </div>
 
+        {/* Player search */}
         <div>
           <label className="block text-sm font-semibold mb-1">
-            Player (this club)
-          </label>
-          <select
-            value={selectedPlayerId}
-            onChange={(e) => setSelectedPlayerId(e.target.value)}
-            className="w-full border p-2 rounded"
-            disabled={loadingPlayers || clubPlayers.length === 0}
-          >
-            {loadingPlayers && <option value="">Loading players...</option>}
-            {!loadingPlayers && clubPlayers.length === 0 && (
-              <option value="">No players found for this club</option>
+            Player{" "}
+            {clubPlayers.length > 0 && (
+              <span className="font-normal text-gray-500">
+                ({clubPlayers.length} in club)
+              </span>
             )}
-            {!loadingPlayers &&
-              clubPlayers.map((p) => {
-                const labelParts = [
-                  `${p.last_name}, ${p.first_name}`,
-                  p.team_id ? `(${p.team_id})` : "",
-                  p.final_shirt != null ? `#${p.final_shirt}` : "",
-                ].filter(Boolean);
-                return (
-                  <option key={p.id} value={p.id}>
-                    {labelParts.join(" ")}
-                  </option>
-                );
-              })}
-          </select>
+          </label>
+
+          {currentPlayer ? (
+            /* Selected player chip */
+            <div className="flex items-center gap-2 border rounded p-2 bg-indigo-50 border-indigo-200">
+              <div className="flex-1 text-sm">
+                <span className="font-semibold">
+                  {currentPlayer.last_name}, {currentPlayer.first_name}
+                </span>
+                {currentPlayer.team_id && (
+                  <span className="text-gray-500 ml-1">
+                    ({currentPlayer.team_id})
+                  </span>
+                )}
+                {currentPlayer.final_shirt != null && (
+                  <span className="ml-2 text-indigo-700 font-semibold">
+                    #{currentPlayer.final_shirt}
+                  </span>
+                )}
+                {currentPlayer.year_of_birth && (
+                  <span className="ml-2 text-gray-500 text-xs">
+                    b. {currentPlayer.year_of_birth}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={clearPlayer}
+                className="text-gray-400 hover:text-gray-700 text-lg leading-none"
+                title="Clear player selection"
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            /* Search input + results */
+            <div className="relative">
+              <input
+                type="text"
+                value={playerSearch}
+                onChange={(e) => setPlayerSearch(e.target.value)}
+                placeholder={
+                  loadingPlayers
+                    ? "Loading players..."
+                    : "Type name or jersey #..."
+                }
+                className="w-full border p-2 rounded"
+                disabled={loadingPlayers || !selectedClubId}
+                autoComplete="off"
+              />
+              {filteredPlayers.length > 0 && playerSearch.trim() && (
+                <div className="absolute z-20 w-full bg-white border border-gray-200 rounded shadow-lg mt-1 max-h-52 overflow-y-auto">
+                  {filteredPlayers.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => selectPlayer(p.id)}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 border-b border-gray-100 last:border-0"
+                    >
+                      <span className="font-medium">
+                        {p.last_name}, {p.first_name}
+                      </span>
+                      {p.team_id && (
+                        <span className="text-gray-500 ml-1 text-xs">
+                          ({p.team_id})
+                        </span>
+                      )}
+                      {p.final_shirt != null ? (
+                        <span className="ml-2 text-indigo-600 font-semibold">
+                          #{p.final_shirt}
+                        </span>
+                      ) : (
+                        <span className="ml-2 text-red-400 text-xs">
+                          no number
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {playerSearch.trim() && filteredPlayers.length === 0 && !loadingPlayers && (
+                <p className="text-xs text-gray-500 mt-1">
+                  No players found matching &quot;{playerSearch}&quot;.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Current allocation + actions */}
+      {/* Current allocation + end allocation */}
       <div className="mb-6 border rounded-lg p-4 bg-gray-50 space-y-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-sm">
           <div>
@@ -928,9 +909,9 @@ const Allocation: React.FC = () => {
                 <div>
                   <span className="font-semibold">
                     {currentPlayer.first_name} {currentPlayer.last_name}
-                  </span>{" "}
+                  </span>
                   {currentPlayer.team_id && (
-                    <span className="text-gray-600">
+                    <span className="text-gray-600 ml-2">
                       &mdash; {currentPlayer.team_id}
                     </span>
                   )}
@@ -947,15 +928,14 @@ const Allocation: React.FC = () => {
                   )}
                 </div>
                 <div className="text-xs text-gray-500 mt-1">
-                  Use &quot;End Allocation&quot; when this player leaves or you
-                  are deliberately freeing this number for reuse. Use &quot;Swap
-                  Jersey&quot; below to move them to a new size or number while
-                  keeping history consistent.
+                  Use &quot;End Allocation&quot; to free this player&apos;s
+                  number (e.g. player leaving the club). Use the Exchange
+                  section below to process size swaps or number changes.
                 </div>
               </>
             ) : (
-              <p className="text-gray-600">
-                Select a player above to view and manage their allocation.
+              <p className="text-gray-500 text-sm">
+                Search for a player above to view and manage their allocation.
               </p>
             )}
           </div>
@@ -964,26 +944,28 @@ const Allocation: React.FC = () => {
               type="button"
               onClick={handleEndAllocation}
               disabled={
-                endingAllocation || !currentPlayer || currentPlayer.final_shirt == null
+                endingAllocation ||
+                !currentPlayer ||
+                currentPlayer.final_shirt == null
               }
               className="px-4 py-2 rounded bg-red-600 text-white text-sm disabled:bg-gray-400"
             >
-              {endingAllocation
-                ? "Ending Allocation..."
-                : "End Allocation (free number)"}
+              {endingAllocation ? "Ending..." : "End Allocation (free number)"}
             </button>
           </div>
         </div>
 
-        {/* Swap Jersey panel */}
+        {/* Exchange / Swap panel */}
         <div className="mt-4 border-t pt-4">
-          <h3 className="text-sm font-semibold mb-2">Swap Jersey</h3>
+          <h3 className="text-sm font-semibold mb-1">Exchange / Swap Jersey</h3>
           <p className="text-xs text-gray-600 mb-3">
-            Use this when the player is changing size and/or number. The current
-            jersey will be freed back to stock, cohort rules checked for the new
-            number, and a new jersey will be reserved and linked.
+            Process a size exchange or number change. The current jersey is freed,
+            clash rules are checked for the new number, and the replacement is
+            reserved and linked. The exchange is logged automatically.
           </p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end mb-3">
+            {/* New size */}
             <div>
               <label className="block text-xs font-semibold mb-1">
                 New Size
@@ -996,7 +978,7 @@ const Allocation: React.FC = () => {
               >
                 {loadingSizes && <option value="">Loading sizes...</option>}
                 {!loadingSizes && sizes.length === 0 && (
-                  <option value="">No inventory sizes found</option>
+                  <option value="">No sizes found</option>
                 )}
                 {!loadingSizes &&
                   sizes.map((size) => (
@@ -1006,6 +988,8 @@ const Allocation: React.FC = () => {
                   ))}
               </select>
             </div>
+
+            {/* New number */}
             <div>
               <label className="block text-xs font-semibold mb-1">
                 New Number
@@ -1018,23 +1002,80 @@ const Allocation: React.FC = () => {
                 className="w-full border p-2 rounded text-sm"
               />
             </div>
+
+            {/* Reason */}
             <div>
+              <label className="block text-xs font-semibold mb-1">
+                Reason
+              </label>
+              <select
+                value={swapReason}
+                onChange={(e) => setSwapReason(e.target.value)}
+                className="w-full border p-2 rounded text-sm"
+              >
+                {SWAP_REASONS.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleSwapSuggest}
+                disabled={swapSuggesting || !selectedClubId || !swapSize}
+                className="flex-1 px-3 py-2 bg-slate-600 text-white rounded text-sm disabled:bg-gray-400"
+                title="Suggest available clash-free numbers for the selected size"
+              >
+                {swapSuggesting ? "..." : "Suggest"}
+              </button>
               <button
                 type="button"
                 onClick={handleSwapJersey}
                 disabled={swapBusy || !currentPlayer}
-                className="w-full px-4 py-2 bg-orange-600 text-white rounded text-sm disabled:bg-gray-400"
+                className="flex-1 px-3 py-2 bg-orange-600 text-white rounded text-sm disabled:bg-gray-400"
               >
-                {swapBusy
-                  ? "Swapping..."
-                  : "Swap Jersey (free old + allocate new)"}
+                {swapBusy ? "Processing..." : "Confirm Exchange"}
               </button>
             </div>
           </div>
+
+          {/* Swap suggestions */}
+          {swapSuggestions.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs text-gray-600 mb-2">
+                Available clash-free numbers in size{" "}
+                <span className="font-semibold">{swapSize}</span> — click to
+                select:
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {swapSuggestions.map((s) => (
+                  <button
+                    key={s.jersey_number}
+                    type="button"
+                    onClick={() => setSwapNumber(String(s.jersey_number))}
+                    className={`px-3 py-1 rounded border text-sm transition ${
+                      swapNumber === String(s.jersey_number)
+                        ? "bg-orange-600 text-white border-orange-600"
+                        : "border-orange-400 text-orange-700 bg-orange-50 hover:bg-orange-100"
+                    }`}
+                  >
+                    #{s.jersey_number} &mdash; {s.total_stock} in stock
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Number entry + actions (fresh allocation flow) */}
+      {/* Number entry + fresh allocation flow */}
+      <div className="mb-2">
+        <h2 className="text-sm font-semibold mb-3">New Allocation</h2>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 items-end">
         <div>
           <label className="block text-sm font-semibold mb-1">
@@ -1066,13 +1107,13 @@ const Allocation: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex">
+        <div>
           <button
             onClick={handleConfirmAllocation}
             disabled={allocating}
             className="w-full px-4 py-2 bg-emerald-600 text-white rounded disabled:bg-gray-400"
           >
-            {allocating ? "Allocating..." : "Confirm Allocation (reserve + link)"}
+            {allocating ? "Allocating..." : "Confirm Allocation"}
           </button>
         </div>
       </div>
@@ -1094,12 +1135,11 @@ const Allocation: React.FC = () => {
         </div>
       )}
 
-      {/* Suggestions */}
+      {/* Suggestions (new allocation flow) */}
       {suggestions.length > 0 && (
         <div className="mb-6">
           <h2 className="text-sm font-semibold mb-2">
-            Suggested clash-free numbers with available stock (size{" "}
-            {selectedSize || "—"})
+            Clash-free numbers with stock &mdash; size {selectedSize || "—"}
           </h2>
           <div className="flex flex-wrap gap-2">
             {suggestions.map((s) => (
@@ -1119,7 +1159,7 @@ const Allocation: React.FC = () => {
       {clashes.length > 0 && (
         <div className="mb-6">
           <h2 className="text-sm font-semibold mb-2">
-            Clashing players (effective cohort view)
+            Clashing players (effective cohort)
           </h2>
           <div className="overflow-x-auto border rounded">
             <table className="min-w-full text-xs">
@@ -1138,12 +1178,8 @@ const Allocation: React.FC = () => {
                     <td className="px-2 py-1">{p.first_name}</td>
                     <td className="px-2 py-1">{p.last_name}</td>
                     <td className="px-2 py-1">{p.team_id ?? "—"}</td>
-                    <td className="px-2 py-1">
-                      {p.final_shirt ?? "—"}
-                    </td>
-                    <td className="px-2 py-1">
-                      {p.year_of_birth ?? "—"}
-                    </td>
+                    <td className="px-2 py-1">{p.final_shirt ?? "—"}</td>
+                    <td className="px-2 py-1">{p.year_of_birth ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1156,7 +1192,7 @@ const Allocation: React.FC = () => {
       {stockBySize.length > 0 && (
         <div className="mb-8">
           <h2 className="text-sm font-semibold mb-2">
-            Inventory for this number (all sizes) – {clubName}
+            Inventory for this number (all sizes) &mdash; {clubName}
           </h2>
           <div className="overflow-x-auto border rounded max-w-md">
             <table className="min-w-full text-xs">
@@ -1168,10 +1204,7 @@ const Allocation: React.FC = () => {
               </thead>
               <tbody>
                 {stockBySize.map((s) => (
-                  <tr
-                    key={s.size}
-                    className="odd:bg-white even:bg-gray-50"
-                  >
+                  <tr key={s.size} className="odd:bg-white even:bg-gray-50">
                     <td className="px-2 py-1">{s.size}</td>
                     <td className="px-2 py-1">{s.count}</td>
                   </tr>
@@ -1182,19 +1215,17 @@ const Allocation: React.FC = () => {
         </div>
       )}
 
-      {/* Return to stock section (for warehouse) */}
+      {/* Warehouse: return to stock */}
       <div className="border-t pt-6 mt-6">
         <h2 className="text-lg font-semibold mb-2">
           Return Jersey to Stock (Warehouse)
         </h2>
         <p className="text-sm text-gray-600 mb-4">
-          When a jersey is physically returned to the warehouse, use this
-          section to mark it back as Available in inventory for{" "}
-          <span className="font-semibold">
-            {clubName || "the selected club"}
-          </span>
-          . This does not change the player record – use End Allocation or Swap
-          Jersey above if the player is actually changing number.
+          When a jersey is physically returned to the warehouse, mark it back as
+          available here for{" "}
+          <span className="font-semibold">{clubName || "the selected club"}</span>
+          . This does not change any player record — use End Allocation or
+          Exchange above if the player is also changing number.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">

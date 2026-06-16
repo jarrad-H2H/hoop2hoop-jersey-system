@@ -142,12 +142,8 @@ const ClubOverview: React.FC = () => {
         (p) => p.final_shirt !== null && p.year_of_birth !== null
       ).length;
 
-      const sampleMissingNumber = players
-        .filter((p) => p.final_shirt === null)
-        .slice(0, 10);
-      const sampleMissingYOB = players
-        .filter((p) => p.year_of_birth === null)
-        .slice(0, 10);
+      const sampleMissingNumber = players.filter((p) => p.final_shirt === null);
+      const sampleMissingYOB = players.filter((p) => p.year_of_birth === null);
 
       // --- Inventory stats ---
       const inventoryTotal = inventory.length;
@@ -361,59 +357,77 @@ const ClubOverview: React.FC = () => {
           {/* Data quality panels */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             <div className="bg-white rounded-lg shadow p-4">
-              <h2 className="text-sm font-semibold mb-3">
+              <h2 className="text-sm font-semibold mb-1">
                 Players Missing Jersey Number
               </h2>
               {summary.sampleMissingNumber.length === 0 ? (
-                <p className="text-xs text-gray-500">
-                  All players currently have a number assigned.
+                <p className="text-xs text-gray-500 mt-2">
+                  All players currently have a number assigned. ✓
                 </p>
               ) : (
-                <ul className="text-xs text-gray-700 space-y-1">
-                  {summary.sampleMissingNumber.map((p) => (
-                    <li key={p.id}>
-                      <span className="font-semibold">
-                        {p.last_name}, {p.first_name}
-                      </span>{" "}
-                      {p.team_id && (
-                        <span className="text-gray-500">
-                          &mdash; {p.team_id}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <p className="text-xs text-gray-500 mb-2">
+                    {summary.sampleMissingNumber.length} player
+                    {summary.sampleMissingNumber.length !== 1 ? "s" : ""} without a number — go to{" "}
+                    <span className="font-medium">Jersey Allocation</span> to assign.
+                  </p>
+                  <div className="max-h-64 overflow-y-auto">
+                    <ul className="text-xs text-gray-700 space-y-1">
+                      {summary.sampleMissingNumber.map((p) => (
+                        <li key={p.id}>
+                          <span className="font-semibold">
+                            {p.last_name}, {p.first_name}
+                          </span>{" "}
+                          {p.team_id && (
+                            <span className="text-gray-500">
+                              &mdash; {p.team_id}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
               )}
             </div>
 
             <div className="bg-white rounded-lg shadow p-4">
-              <h2 className="text-sm font-semibold mb-3">
+              <h2 className="text-sm font-semibold mb-1">
                 Players Missing Year of Birth
               </h2>
               {summary.sampleMissingYOB.length === 0 ? (
-                <p className="text-xs text-gray-500">
-                  All players have year of birth recorded.
+                <p className="text-xs text-gray-500 mt-2">
+                  All players have year of birth recorded. ✓
                 </p>
               ) : (
-                <ul className="text-xs text-gray-700 space-y-1">
-                  {summary.sampleMissingYOB.map((p) => (
-                    <li key={p.id}>
-                      <span className="font-semibold">
-                        {p.last_name}, {p.first_name}
-                      </span>{" "}
-                      {p.team_id && (
-                        <span className="text-gray-500">
-                          &mdash; {p.team_id}
-                        </span>
-                      )}
-                      {p.final_shirt !== null && (
-                        <span className="ml-2 text-gray-500">
-                          (#{p.final_shirt})
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <p className="text-xs text-gray-500 mb-2">
+                    {summary.sampleMissingYOB.length} player
+                    {summary.sampleMissingYOB.length !== 1 ? "s" : ""} without a YOB — clash
+                    detection will fall back to club-wide logic for these players.
+                  </p>
+                  <div className="max-h-64 overflow-y-auto">
+                    <ul className="text-xs text-gray-700 space-y-1">
+                      {summary.sampleMissingYOB.map((p) => (
+                        <li key={p.id}>
+                          <span className="font-semibold">
+                            {p.last_name}, {p.first_name}
+                          </span>{" "}
+                          {p.team_id && (
+                            <span className="text-gray-500">
+                              &mdash; {p.team_id}
+                            </span>
+                          )}
+                          {p.final_shirt !== null && (
+                            <span className="ml-2 text-gray-500">
+                              (#{p.final_shirt})
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
               )}
             </div>
           </div>

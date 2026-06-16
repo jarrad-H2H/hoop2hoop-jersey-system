@@ -417,12 +417,12 @@ const StockPlanner: React.FC = () => {
       }
 
       // Escalate WATCH if number pool is fragile (even if unit stock is ok)
-      // This is the “collision risk” proxy at club-wide level.
-      if (status === "OK" && (lowEntropy || lowNumberFlex)) {
-        status = "WATCH";
+      if (status === “OK” && (lowEntropy || lowNumberFlex)) {
+        status = “WATCH”;
+        const tightList = constrainedNumbers !== “—“ ? ` Tightest: ${constrainedNumbers}.` : “”;
         notes = lowNumberFlex
-          ? "Units OK, but very few distinct numbers available (future clash risk)."
-          : "Units OK, but number pool is unevenly distributed (future clash risk).";
+          ? `Units OK, but only ${distinctNumbersAvailable} distinct numbers available (clash risk).${tightList}`
+          : `Units OK, but number pool is unevenly spread (clash risk).${tightList}`;
       }
 
       rows.push({
@@ -655,77 +655,111 @@ const StockPlanner: React.FC = () => {
       )}
 
       {!loading && planRows.length > 0 && (
-        <div className="overflow-x-auto bg-white rounded-lg shadow">
-          <table className="min-w-full text-xs">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="px-3 py-2 text-left">Size</th>
-                <th className="px-3 py-2 text-left">Avail</th>
-                <th className="px-3 py-2 text-left">Reserved</th>
-                <th className="px-3 py-2 text-left">Effective</th>
-                <th className="px-3 py-2 text-left"># Numbers</th>
-                <th className="px-3 py-2 text-left">Entropy</th>
-                <th className="px-3 py-2 text-left">Constrained #s</th>
-                <th className="px-3 py-2 text-left">Weekly Usage</th>
-                <th className="px-3 py-2 text-left">Weeks Cover</th>
-                <th className="px-3 py-2 text-left">Status</th>
-                <th className="px-3 py-2 text-left">Suggested Order</th>
-                <th className="px-3 py-2 text-left">Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {planRows.map((row) => {
-                const statusBadgeClasses =
-                  row.status === "ORDER_NOW"
-                    ? "bg-red-100 text-red-800 border-red-200"
-                    : row.status === "WATCH"
-                    ? "bg-amber-100 text-amber-800 border-amber-200"
-                    : "bg-emerald-100 text-emerald-800 border-emerald-200";
+        <>
+          <div className="overflow-x-auto bg-white rounded-lg shadow mb-6">
+            <table className="min-w-full text-xs">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-3 py-2 text-left">Size</th>
+                  <th className="px-3 py-2 text-left">In Warehouse</th>
+                  <th className="px-3 py-2 text-left">Pending Orders</th>
+                  <th className="px-3 py-2 text-left font-semibold">Free to Assign</th>
+                  <th className="px-3 py-2 text-left">Weekly Usage</th>
+                  <th className="px-3 py-2 text-left">Weeks Cover</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-left">Order Qty</th>
+                  <th className="px-3 py-2 text-left">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {planRows.map((row) => {
+                  const statusBadgeClasses =
+                    row.status === "ORDER_NOW"
+                      ? "bg-red-100 text-red-800 border-red-200"
+                      : row.status === "WATCH"
+                      ? "bg-amber-100 text-amber-800 border-amber-200"
+                      : "bg-emerald-100 text-emerald-800 border-emerald-200";
 
-                const statusLabel =
-                  row.status === "ORDER_NOW" ? "Order Now" : row.status === "WATCH" ? "Watch" : "OK";
+                  const statusLabel =
+                    row.status === "ORDER_NOW"
+                      ? "Order Now"
+                      : row.status === "WATCH"
+                      ? "Watch"
+                      : "OK";
 
-                return (
-                  <tr
-                    key={row.size}
-                    className="border-t border-gray-100 odd:bg-white even:bg-gray-50"
-                  >
-                    <td className="px-3 py-2 align-top">{row.size}</td>
-                    <td className="px-3 py-2 align-top">{row.availableStock}</td>
-                    <td className="px-3 py-2 align-top">{row.reservedStock}</td>
-                    <td className="px-3 py-2 align-top font-semibold">{row.effectiveStock}</td>
-                    <td className="px-3 py-2 align-top">{row.distinctNumbersAvailable}</td>
-                    <td className="px-3 py-2 align-top">
-                      {row.numberEntropy !== null ? row.numberEntropy.toFixed(2) : "—"}
-                    </td>
-                    <td className="px-3 py-2 align-top">{row.constrainedNumbers}</td>
-                    <td className="px-3 py-2 align-top">{row.weeklyUsage.toFixed(2)}</td>
-                    <td className="px-3 py-2 align-top">
-                      {row.weeksOfCover !== null ? row.weeksOfCover.toFixed(1) : "—"}
-                    </td>
-                    <td className="px-3 py-2 align-top">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border ${statusBadgeClasses}`}
-                      >
-                        {statusLabel}
+                  return (
+                    <tr
+                      key={row.size}
+                      className="border-t border-gray-100 odd:bg-white even:bg-gray-50"
+                    >
+                      <td className="px-3 py-2 align-top font-medium">{row.size}</td>
+                      <td className="px-3 py-2 align-top">{row.availableStock}</td>
+                      <td className="px-3 py-2 align-top">{row.reservedStock}</td>
+                      <td className="px-3 py-2 align-top font-semibold">{row.effectiveStock}</td>
+                      <td className="px-3 py-2 align-top">{row.weeklyUsage.toFixed(2)}</td>
+                      <td className="px-3 py-2 align-top">
+                        {row.weeksOfCover !== null ? row.weeksOfCover.toFixed(1) : "—"}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] border ${statusBadgeClasses}`}
+                        >
+                          {statusLabel}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        {row.recommendedOrder > 0 ? (
+                          <span className="font-semibold text-gray-800">
+                            {row.recommendedOrder}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-top text-[11px] text-gray-600">
+                        {row.notes}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Purchase Order Summary */}
+          {planRows.some((r) => r.recommendedOrder > 0) && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-amber-900">
+                  Suggested Purchase Order &mdash; {clubName}
+                </h2>
+                <button
+                  type="button"
+                  onClick={handleExportCsv}
+                  className="px-3 py-1.5 rounded bg-amber-700 text-white text-xs font-semibold hover:bg-amber-800"
+                >
+                  Export Full Plan (CSV)
+                </button>
+              </div>
+              <div className="space-y-1 max-w-xs">
+                {planRows
+                  .filter((r) => r.recommendedOrder > 0)
+                  .map((r) => (
+                    <div key={r.size} className="flex justify-between text-sm">
+                      <span className="text-amber-900">{r.size}</span>
+                      <span className="font-semibold text-amber-900">
+                        {r.recommendedOrder} units
                       </span>
-                    </td>
-                    <td className="px-3 py-2 align-top">
-                      {row.recommendedOrder > 0 ? (
-                        <span className="font-semibold text-gray-800">{row.recommendedOrder}</span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 align-top text-[11px] text-gray-600">
-                      {row.notes}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </div>
+                  ))}
+                <div className="border-t border-amber-300 pt-2 mt-2 flex justify-between text-sm font-bold text-amber-900">
+                  <span>Total</span>
+                  <span>{totalRecommendedOrder} units</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

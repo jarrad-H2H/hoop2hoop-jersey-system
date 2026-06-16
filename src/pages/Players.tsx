@@ -33,6 +33,11 @@ const Players: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [teamFilter, setTeamFilter] = useState<string>("all");
 
+  // Inline YOB edit state
+  const [editingYobId, setEditingYobId] = useState<string | null>(null);
+  const [editingYobValue, setEditingYobValue] = useState<string>("");
+  const [savingYobId, setSavingYobId] = useState<string | null>(null);
+
   // Load clubs
   useEffect(() => {
     const loadClubs = async () => {
@@ -156,6 +161,44 @@ const Players: React.FC = () => {
 
   const selectedClubName =
     clubs.find((c) => c.id === selectedClubId)?.name ?? "";
+
+  const startEditYob = (p: PlayerRow) => {
+    setEditingYobId(p.id);
+    setEditingYobValue(p.year_of_birth != null ? String(p.year_of_birth) : "");
+  };
+
+  const cancelEditYob = () => {
+    setEditingYobId(null);
+    setEditingYobValue("");
+  };
+
+  const saveYob = async (playerId: string) => {
+    const parsed = Number(editingYobValue.trim());
+    if (!editingYobValue.trim() || !Number.isFinite(parsed) || parsed < 1990 || parsed > 2025) {
+      alert("Please enter a valid year between 1990 and 2025.");
+      return;
+    }
+
+    setSavingYobId(playerId);
+    const { error } = await supabase
+      .from("players")
+      .update({ year_of_birth: parsed })
+      .eq("id", playerId);
+
+    if (error) {
+      console.error("saveYob error", error);
+      alert("Failed to save year of birth: " + error.message);
+      setSavingYobId(null);
+      return;
+    }
+
+    setPlayers((prev) =>
+      prev.map((p) => (p.id === playerId ? { ...p, year_of_birth: parsed } : p))
+    );
+    setEditingYobId(null);
+    setEditingYobValue("");
+    setSavingYobId(null);
+  };
 
   return (
     <div>
@@ -309,47 +352,82 @@ const Players: React.FC = () => {
                 <th className="px-3 py-2 text-left">Team</th>
                 <th className="px-3 py-2 text-left">Number</th>
                 <th className="px-3 py-2 text-left">Year of Birth</th>
+                <th className="px-3 py-2 text-left">Edit YOB</th>
               </tr>
             </thead>
             <tbody>
               {filteredPlayers.map((p) => {
-                const isMissingNumber = p.final_shirt == null;
-                const isMissingYob = p.year_of_birth == null;
+                const isEditingYob = editingYobId === p.id;
+                const isSavingYob = savingYobId === p.id;
 
                 return (
                   <tr
                     key={p.id}
                     className="border-t border-gray-100 odd:bg-white even:bg-gray-50"
                   >
-                    <td className="px-3 py-2 align-top">
+                    <td className="px-3 py-2 align-middle">
                       {p.last_name || <span className="text-gray-400">—</span>}
                     </td>
-                    <td className="px-3 py-2 align-top">
-                      {p.first_name || (
-                        <span className="text-gray-400">—</span>
-                      )}
+                    <td className="px-3 py-2 align-middle">
+                      {p.first_name || <span className="text-gray-400">—</span>}
                     </td>
-                    <td className="px-3 py-2 align-top">
+                    <td className="px-3 py-2 align-middle">
                       {p.team_id || <span className="text-gray-400">—</span>}
                     </td>
-                    <td className="px-3 py-2 align-top">
+                    <td className="px-3 py-2 align-middle">
                       {p.final_shirt != null ? (
-                        <span className="font-semibold">
-                          #{p.final_shirt}
-                        </span>
+                        <span className="font-semibold">#{p.final_shirt}</span>
                       ) : (
-                        <span className="text-red-500 font-medium">
-                          Missing
-                        </span>
+                        <span className="text-red-500 font-medium">Missing</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 align-top">
+                    <td className="px-3 py-2 align-middle">
                       {p.year_of_birth != null ? (
                         <span>{p.year_of_birth}</span>
                       ) : (
-                        <span className="text-orange-600 font-medium">
-                          Missing
-                        </span>
+                        <span className="text-orange-600 font-medium">Missing</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 align-middle">
+                      {isEditingYob ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            value={editingYobValue}
+                            onChange={(e) => setEditingYobValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveYob(p.id);
+                              if (e.key === "Escape") cancelEditYob();
+                            }}
+                            className="w-20 border rounded px-1 py-0.5 text-xs"
+                            placeholder="e.g. 2012"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void saveYob(p.id)}
+                            disabled={isSavingYob}
+                            className="px-2 py-0.5 rounded bg-emerald-600 text-white text-xs disabled:bg-gray-400"
+                          >
+                            {isSavingYob ? "…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditYob}
+                            disabled={isSavingYob}
+                            className="px-2 py-0.5 rounded bg-gray-200 text-gray-700 text-xs"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => startEditYob(p)}
+                          className="text-indigo-600 hover:text-indigo-800 text-xs"
+                        >
+                          {p.year_of_birth != null ? "Edit" : "Add YOB"}
+                        </button>
                       )}
                     </td>
                   </tr>
