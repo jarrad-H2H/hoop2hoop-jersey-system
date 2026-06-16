@@ -59,6 +59,7 @@ const InventoryManager: React.FC = () => {
         .from("inventory")
         .select("*")
         .eq("club_id", selectedClubId)
+        .neq("status", "Written Off")
         .order("size")
         .order("jersey_number");
 
