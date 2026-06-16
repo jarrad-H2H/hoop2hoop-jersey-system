@@ -496,6 +496,8 @@ export async function lookupPlayerByName(params: {
 }): Promise<{
   found: boolean;
   playerId?: string;
+  matchedFirstName?: string;
+  matchedLastName?: string;
   currentJerseyNumber?: number | null;
   previousInventoryId?: string | null;
 }> {
@@ -563,6 +565,8 @@ export async function lookupPlayerByName(params: {
   return {
     found: true,
     playerId: player.id,
+    matchedFirstName: player.first_name ?? undefined,
+    matchedLastName: player.last_name ?? undefined,
     currentJerseyNumber: player.final_shirt ?? null,
     previousInventoryId,
   };
