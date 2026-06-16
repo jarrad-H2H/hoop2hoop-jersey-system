@@ -361,13 +361,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 });
               }
 
-              // If they're releasing their old jersey, free that inventory row
+              // If they're releasing their old jersey, write it off permanently.
+              // The physical jersey leaves H2H's pool (player sells second-hand).
+              // NOT returned to Available — drops out of inventory so StockPlanner
+              // flags reduced stock and can recommend reprinting that number.
               if (keepExistingFlag === false && prevInventoryId) {
                 await supabase
                   .from("inventory")
-                  .update({ status: "Available", allocation_date: null })
+                  .update({ status: "Written Off", allocation_date: null, allocated_player_id: null })
                   .eq("id", prevInventoryId)
-                  .eq("status", "Allocated"); // guard: only release if still allocated
+                  .eq("status", "Allocated"); // guard: only write off if still allocated
               }
             }
           }
