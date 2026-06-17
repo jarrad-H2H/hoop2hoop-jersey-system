@@ -13,6 +13,7 @@ import {
   BarChart3,
   Link2,
   ShoppingBag,
+  KeyRound,
 } from "lucide-react";
 
 type NavItem = {
@@ -48,7 +49,6 @@ const Layout: React.FC = () => {
       path: "/admin/inventory",
       label: "Inventory",
       icon: <Shirt size={20} />,
-      // Important: keep highlighted for bulk upload sub-route too
       match: (p) => p.startsWith("/admin/inventory"),
     },
     {
@@ -111,7 +111,6 @@ const Layout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col md:flex-row">
-      {/* Sidebar */}
       <aside className="w-full md:w-64 bg-slate-900 text-white flex-shrink-0 flex flex-col">
         <div className="p-6 border-b border-slate-700">
           <h1 className="text-2xl font-bold tracking-tight text-orange-500">
@@ -123,7 +122,6 @@ const Layout: React.FC = () => {
         <nav className="p-4 space-y-2 flex-1">
           {navItems.map((item) => {
             const isActive = item.match ? item.match(pathname) : pathname === item.path;
-
             return (
               <Link
                 key={item.path}
@@ -141,7 +139,14 @@ const Layout: React.FC = () => {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-700">
+        <div className="p-4 border-t border-slate-700 space-y-1">
+          <Link
+            to="/reset-password"
+            className="flex items-center space-x-3 px-4 py-3 w-full text-slate-300 hover:bg-slate-800 hover:text-white rounded-lg transition-colors"
+          >
+            <KeyRound size={20} />
+            <span className="font-medium text-sm">Change Password</span>
+          </Link>
           <button
             onClick={handleLogout}
             className="flex items-center space-x-3 px-4 py-3 w-full text-left text-red-400 hover:bg-slate-800 rounded-lg transition-colors"
@@ -152,7 +157,6 @@ const Layout: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex-1 overflow-y-auto h-screen">
         <div className="p-8 max-w-7xl mx-auto">
           <Outlet />
