@@ -15,12 +15,15 @@ interface ParsedPlayer {
   lastName: string;
   clubName: string;
   teamRaw: string;
-  teamCode: string | null;
-  teamLabel: string | null;
-  ageGroup: string;       // normalised to U10/U12/.../SLG
-  ageGroupRaw: string;    // raw value from BC for display
+  divisionCode: string | null;   // e.g. "JGC1", "16BC2"
+  teamName: string | null;       // e.g. "BLAZES", "FLAMES"
+  ageGroup: string;              // normalised: U10/U12/U14/U16/U18/U20/SLG
+  ageGroupRaw: string;           // raw BC value
   divisionGrade: string;
   finalShirt: number | null;
+  borrowingDivision: string | null; // normalised age group borrowed INTO (null if not borrowed)
+  isBorrowed: boolean;
+  playing: string;               // "1", "0", or "" — used for dedup priority only
 }
 
 interface PreviewRow extends ParsedPlayer {
@@ -29,28 +32,27 @@ interface PreviewRow extends ParsedPlayer {
 }
 
 // ─── Age group normalisation ──────────────────────────────────────────────────
-// BC exports use inconsistent formats:
-//   GC:       "UNDER 14 BOYS", "JUNIOR GIRLS", "OPEN GIRLS", "UNDER 10 MIXED"
-//   Seahawks: "U16 BOYS", "U12 GIRLS", "SUPERLEAUGE GIRLS", "U20 BOYS"
-// Widget uses: U10, U12, U14, U16, U18, U20, SLG
 function normalizeAgeGroup(raw: string): string {
   const s = (raw ?? "").trim().toUpperCase();
-
-  // "UNDER 14 BOYS" / "UNDER 10 MIXED" → "U14", "U10"
   const underMatch = s.match(/^UNDER\s+(\d+)/);
   if (underMatch) return `U${underMatch[1]}`;
-
-  // "U14 BOYS" / "U16 GIRLS" → "U14", "U16"
   const uMatch = s.match(/^U(\d+)/);
   if (uMatch) return `U${uMatch[1]}`;
-
-  // "JUNIOR GIRLS/BOYS" → "U14" (Qld standard)
   if (s.startsWith("JUNIOR")) return "U14";
-
-  // "OPEN ...", "SUPERLEAGUE/SUPERLEAUGE ...", "SENIOR ..." → "SLG"
   if (/^OPEN|SUPERLEA[GU]|^SENIOR/.test(s)) return "SLG";
+  return raw.trim();
+}
 
-  return raw.trim(); // fallback: store as-is (will still display in admin)
+// ─── Dedup priority score (lower = higher priority) ──────────────────────────
+// 1. Has a real shirt number (0 is real)
+// 2. Not a borrowed row (home team data is preferred)
+// 3. playing=1 over playing=0 or empty
+function dedupScore(p: ParsedPlayer): number {
+  let score = 0;
+  if (p.finalShirt === null) score += 100;
+  if (p.isBorrowed) score += 10;
+  if (p.playing !== "1") score += 1;
+  return score;
 }
 
 // ─── Team field parsing ───────────────────────────────────────────────────────
@@ -61,32 +63,30 @@ function looksLikeTeamCode(token: string): boolean {
 function deriveTeamFields(
   teamRaw: string,
   strategy: ParsingStrategy
-): { clubName: string; teamCode: string | null; teamLabel: string | null } {
+): { clubName: string; divisionCode: string | null; teamName: string | null } {
   const trimmed = teamRaw.trim();
   const parts = trimmed.split(/\s+/).filter(Boolean);
 
-  if (parts.length === 0) {
-    return { clubName: "", teamCode: null, teamLabel: null };
-  }
+  if (parts.length === 0) return { clubName: "", divisionCode: null, teamName: null };
 
   if (strategy === "north_gc") {
-    // "Warriors 16B.2" → clubName=Warriors, teamCode=16B.2
+    // "Warriors 16B.2" → club=Warriors, division=16B.2
     const clubName = parts[0] ?? "";
-    const teamCode = parts.slice(1).join(" ") || null;
-    return { clubName, teamCode, teamLabel: null };
+    const divisionCode = parts.slice(1).join(" ") || null;
+    return { clubName, divisionCode, teamName: null };
   }
 
-  // gold_coast: "12BC3 Amigos White" → teamCode=12BC3, club=Amigos, team=White
-  //             "BLADES CRUSADERS"   → club=BLADES, team=CRUSADERS
+  // gold_coast: "JGC1 HEAT BLAZES" → division=JGC1, club=HEAT, team=BLAZES
+  //             "BLADES ASSASSINS"  → club=BLADES, team=ASSASSINS (no division code)
   if (looksLikeTeamCode(parts[0])) {
-    const teamCode = parts[0];
+    const divisionCode = parts[0];
     const clubName = parts[1] ?? "";
-    const teamLabel = parts.slice(2).join(" ") || null;
-    return { clubName, teamCode, teamLabel };
+    const teamName = parts.slice(2).join(" ") || null;
+    return { clubName, divisionCode, teamName };
   } else {
     const clubName = parts[0] ?? "";
-    const teamLabel = parts.slice(1).join(" ") || null;
-    return { clubName, teamCode: null, teamLabel };
+    const teamName = parts.slice(1).join(" ") || null;
+    return { clubName, divisionCode: null, teamName };
   }
 }
 
@@ -100,9 +100,7 @@ function parseCsv(text: string): RawRow[] {
     const cols = lines[i].split(",");
     if (cols.length === 1 && cols[0].trim() === "") continue;
     const row: RawRow = {};
-    header.forEach((key, idx) => {
-      row[key] = (cols[idx] ?? "").trim();
-    });
+    header.forEach((key, idx) => { row[key] = (cols[idx] ?? "").trim(); });
     rows.push(row);
   }
   return rows;
@@ -121,7 +119,6 @@ const Importer: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Reset state
   const [resetConfirm, setResetConfirm] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
   const [resetStatus, setResetStatus] = useState<string | null>(null);
@@ -148,7 +145,6 @@ const Importer: React.FC = () => {
     if (!competitionSource.trim()) { setErrorMessage("Please enter a competition / season label."); return; }
 
     setLoading(true);
-
     try {
       const text = await file.text();
       const rawRows = parseCsv(text);
@@ -159,35 +155,20 @@ const Importer: React.FC = () => {
         return;
       }
 
-      // Filter: only rows where playing == "1"
-      const playingRows = rawRows.filter((r) => {
-        const v = r["playing"] ?? r["Playing"] ?? "";
-        return v === "1";
-      });
-      setSkippedCount(rawRows.length - playingRows.length);
-
-      // Parse and deduplicate by bc_player_id
-      // Prefer rows with a non-zero, non-null final shirt number
+      // Parse ALL rows — no playing filter. Dedup handles priority.
       const seenBcIds = new Map<string, ParsedPlayer>();
       const noBcIdRows: ParsedPlayer[] = [];
 
-      for (const row of playingRows) {
+      for (const row of rawRows) {
         const teamRaw = (
-          row["Played For (Team)"] ??
-          row["playedForTeam"] ??
-          row["played for team"] ??
-          ""
-        );
-        const { clubName, teamCode, teamLabel } = deriveTeamFields(teamRaw, parsingStrategy);
+          row["Played For (Team)"] ?? row["playedForTeam"] ?? ""
+        ).trim();
+        const { clubName, divisionCode, teamName } = deriveTeamFields(teamRaw, parsingStrategy);
 
         const bcPlayerId = (row["Player Id"] ?? row["Player ID"] ?? "").trim();
         const firstName = (row["First Name"] ?? row["FirstName"] ?? "").trim();
         const lastName = (row["Last Name"] ?? row["LastName"] ?? "").trim();
 
-        // finalShirt: empty string → null (unassigned). Any numeric value, including 0,
-        // is stored as-is — #0 is a valid jersey number. BC also uses 0 as a sentinel for
-        // "no jersey assigned" but we can't distinguish that from a real #0 in the export.
-        // The dedup logic below prefers non-zero rows when a player has mixed entries.
         const shirtStr = (row["finalShirt"] ?? row["FinalShirt"] ?? "").trim();
         const shirtNum = shirtStr !== "" ? Number(shirtStr) : NaN;
         const finalShirt = Number.isFinite(shirtNum) ? shirtNum : null;
@@ -195,31 +176,35 @@ const Importer: React.FC = () => {
         const ageGroupRaw = (row["playerDivisionName"] ?? "").trim();
         const ageGroup = normalizeAgeGroup(ageGroupRaw);
         const divisionGrade = (row["playerDivisionGrade"] ?? "").trim();
+        const playing = (row["playing"] ?? "").trim();
+
+        // Detect genuine borrowing: borrowing division differs from current division
+        const currentDiv = (row["Current Team Division"] ?? "").trim().toUpperCase();
+        const borrowingDiv = (row["Borrowing Team Division"] ?? "").trim().toUpperCase();
+        const isBorrowed = borrowingDiv.length > 0 && borrowingDiv !== currentDiv;
+        const borrowingDivision = isBorrowed ? normalizeAgeGroup(row["Borrowing Team Division"] ?? "") : null;
 
         const player: ParsedPlayer = {
           bcPlayerId,
           firstName,
           lastName,
           clubName: clubName.trim(),
-          teamRaw: teamRaw.trim(),
-          teamCode,
-          teamLabel,
+          teamRaw,
+          divisionCode,
+          teamName,
           ageGroup,
           ageGroupRaw,
           divisionGrade,
           finalShirt,
+          borrowingDivision,
+          isBorrowed,
+          playing,
         };
 
         if (bcPlayerId) {
           const existing = seenBcIds.get(bcPlayerId);
-          if (!existing) {
+          if (!existing || dedupScore(player) < dedupScore(existing)) {
             seenBcIds.set(bcPlayerId, player);
-          } else {
-            // Prefer row with a non-null shirt over null (null = no data in CSV).
-            // If both have a value, keep the first (earlier game rows tend to be more accurate).
-            if (existing.finalShirt === null && finalShirt !== null) {
-              seenBcIds.set(bcPlayerId, player);
-            }
           }
         } else {
           noBcIdRows.push(player);
@@ -232,15 +217,11 @@ const Importer: React.FC = () => {
       ];
 
       if (parsed.length === 0) {
-        setErrorMessage(
-          "No active players found after filtering (playing=1). " +
-            "Check that the 'playing' column exists and contains '1' for active rows."
-        );
+        setErrorMessage("No player rows found after parsing. Check the CSV format.");
         setLoading(false);
         return;
       }
 
-      // Look up existing clubs
       const uniqueClubNames = Array.from(
         new Set(parsed.map((r) => r.clubName).filter(Boolean))
       );
@@ -270,12 +251,15 @@ const Importer: React.FC = () => {
 
       setPreviewRows(preview);
 
-      const skipped = rawRows.length - playingRows.length;
+      const totalRaw = rawRows.length;
+      const uniquePlayers = preview.length;
+      const borrowedCount = preview.filter((r) => r.borrowingDivision).length;
       const noShirtCount = preview.filter((r) => r.finalShirt === null).length;
+
       setStatusMessage(
-        `Preview ready: ${preview.length} player rows` +
-          (skipped > 0 ? `, ${skipped} skipped (not playing)` : "") +
-          (noShirtCount > 0 ? `, ${noShirtCount} with no shirt number in CSV (stored as blank)` : "") +
+        `Preview ready: ${uniquePlayers} unique players from ${totalRaw} rows` +
+          (borrowedCount > 0 ? `, ${borrowedCount} borrow across age groups` : "") +
+          (noShirtCount > 0 ? `, ${noShirtCount} with no shirt number` : "") +
           "." +
           (newClubs.length > 0
             ? ` ${newClubs.length} new club(s) will be auto-created on commit.`
@@ -301,9 +285,7 @@ const Importer: React.FC = () => {
     }
 
     setLoading(true);
-
     try {
-      // Step 1: Create any new clubs
       const clubMap = new Map<string, string>();
       for (const row of previewRows) {
         if (row.clubId) clubMap.set(row.clubName, row.clubId);
@@ -323,7 +305,6 @@ const Importer: React.FC = () => {
         for (const c of created ?? []) clubMap.set(c.name, c.id);
       }
 
-      // Step 2: Replace mode — delete existing players for all clubs in this import
       if (importMode === "replace") {
         const allClubIds = Array.from(
           new Set(
@@ -332,7 +313,6 @@ const Importer: React.FC = () => {
               .filter(Boolean) as string[]
           )
         );
-
         if (allClubIds.length > 0) {
           const { error: delErr } = await supabase
             .from("players")
@@ -349,7 +329,6 @@ const Importer: React.FC = () => {
 
       const season = competitionSource.trim();
 
-      // Step 3a: Upsert rows with a bc_player_id
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
       if (withBcId.length > 0) {
         const upsertPayload = withBcId.map((r) => ({
@@ -357,13 +336,14 @@ const Importer: React.FC = () => {
           first_name: r.firstName,
           last_name: r.lastName,
           club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
-          team_id: (r.teamCode ?? r.teamRaw) || null,
+          team_id: (r.divisionCode ?? r.teamRaw) || null,
           team_name_raw: r.teamRaw || null,
-          team_code: r.teamCode ?? null,
-          team_label: r.teamLabel ?? null,
+          team_code: r.divisionCode ?? null,
+          team_name: r.teamName ?? null,
           age_group: r.ageGroup || null,
           division_grade: r.divisionGrade || null,
           final_shirt: r.finalShirt ?? null,
+          borrowing_division: r.borrowingDivision ?? null,
           competition_source: season,
           bc_last_seen_season: season,
         }));
@@ -379,26 +359,26 @@ const Importer: React.FC = () => {
         }
       }
 
-      // Step 3b: Insert rows without bc_player_id
       const withoutBcId = previewRows.filter((r) => !r.bcPlayerId);
       if (withoutBcId.length > 0) {
         const insertPayload = withoutBcId.map((r) => ({
           first_name: r.firstName,
           last_name: r.lastName,
           club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
-          team_id: (r.teamCode ?? r.teamRaw) || null,
+          team_id: (r.divisionCode ?? r.teamRaw) || null,
           team_name_raw: r.teamRaw || null,
-          team_code: r.teamCode ?? null,
-          team_label: r.teamLabel ?? null,
+          team_code: r.divisionCode ?? null,
+          team_name: r.teamName ?? null,
           age_group: r.ageGroup || null,
           division_grade: r.divisionGrade || null,
           final_shirt: r.finalShirt ?? null,
+          borrowing_division: r.borrowingDivision ?? null,
           competition_source: season,
         }));
 
         const { error: insertErr } = await supabase.from("players").insert(insertPayload);
         if (insertErr) {
-          setErrorMessage(`Insert failed (rows without BC Player ID): ${insertErr.message}`);
+          setErrorMessage(`Insert failed: ${insertErr.message}`);
           setLoading(false);
           return;
         }
@@ -408,7 +388,7 @@ const Importer: React.FC = () => {
       if (importMode === "replace") parts.push("existing players cleared");
       if (withBcId.length > 0) parts.push(`${withBcId.length} players upserted (by BC Player ID)`);
       if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} inserted (no BC Player ID)`);
-      if (newClubNames.length > 0) parts.push(`${newClubNames.length} new club(s) created — enable any client clubs in the Clubs page`);
+      if (newClubNames.length > 0) parts.push(`${newClubNames.length} new club(s) created`);
 
       setStatusMessage("Import complete: " + parts.join(", ") + ".");
       setPreviewRows([]);
@@ -420,18 +400,13 @@ const Importer: React.FC = () => {
     }
   };
 
-  // ── Full data reset ──────────────────────────────────────────────────────
   const handleFullReset = async () => {
-    if (resetConfirm !== "RESET") {
-      setResetError("Type RESET to confirm.");
-      return;
-    }
+    if (resetConfirm !== "RESET") { setResetError("Type RESET to confirm."); return; }
     setResetLoading(true);
     setResetStatus(null);
     setResetError(null);
 
     try {
-      // Order matters — FK constraints
       const tables = ["orders", "pending_allocations", "allocations", "inventory", "players"];
       for (const table of tables) {
         const { error } = await supabase.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000");
@@ -450,17 +425,15 @@ const Importer: React.FC = () => {
     }
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-8">
       <div>
         <h2 className="text-2xl font-bold mb-2">Game Log Importer</h2>
         <p className="text-gray-600 text-sm">
-          Import Basketball Connect game log exports. Only rows where{" "}
-          <code>playing=1</code> are imported. Age group codes are normalised
-          (e.g. "UNDER 14 BOYS" → "U14"). Jersey number 0 is treated as
-          unassigned. Players with a BC Player ID are safely upserted — re-importing
-          the same report won't create duplicates.
+          Import Basketball Connect game log exports. All rows are imported and deduplicated
+          by BC Player ID — home team rows are preferred over borrowed rows, and rows with a
+          shirt number are preferred over those without. Age group codes are normalised
+          (e.g. "UNDER 14 BOYS" → "U14").
         </p>
       </div>
 
@@ -491,9 +464,6 @@ const Importer: React.FC = () => {
             className="w-full px-3 py-2 border rounded-md text-sm border-gray-300
                        focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
-          <p className="text-xs text-gray-500 mt-1">
-            Stored as <code>bc_last_seen_season</code> — helps identify stale player records.
-          </p>
         </div>
 
         <div>
@@ -507,45 +477,27 @@ const Importer: React.FC = () => {
                        focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
             <option value="north_gc">North Gold Coast Seahawks — "Warriors 16B.2"</option>
-            <option value="gold_coast">Gold Coast Association — "12BC3 Amigos White"</option>
+            <option value="gold_coast">Gold Coast Association — "JGC1 HEAT BLAZES"</option>
           </select>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Import Mode
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Import Mode</label>
           <div className="space-y-2">
             <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="importMode"
-                value="upsert"
-                checked={importMode === "upsert"}
-                onChange={() => setImportMode("upsert")}
-                className="mt-0.5"
-              />
+              <input type="radio" name="importMode" value="upsert"
+                checked={importMode === "upsert"} onChange={() => setImportMode("upsert")} className="mt-0.5" />
               <div>
                 <span className="text-sm font-medium">Upsert (merge)</span>
-                <p className="text-xs text-gray-500">
-                  Update existing players by BC Player ID. Safe to re-run. Won't remove players not in this file.
-                </p>
+                <p className="text-xs text-gray-500">Update existing players by BC Player ID. Safe to re-run.</p>
               </div>
             </label>
             <label className="flex items-start gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="importMode"
-                value="replace"
-                checked={importMode === "replace"}
-                onChange={() => setImportMode("replace")}
-                className="mt-0.5"
-              />
+              <input type="radio" name="importMode" value="replace"
+                checked={importMode === "replace"} onChange={() => setImportMode("replace")} className="mt-0.5" />
               <div>
                 <span className="text-sm font-medium text-amber-700">Replace (clear first)</span>
-                <p className="text-xs text-gray-500">
-                  Deletes all players for every club found in this file, then inserts fresh. Use when replacing a season's data. Club records are kept.
-                </p>
+                <p className="text-xs text-gray-500">Deletes all players for clubs in this file, then inserts fresh.</p>
               </div>
             </label>
           </div>
@@ -553,42 +505,30 @@ const Importer: React.FC = () => {
 
         {importMode === "replace" && (
           <div className="text-sm text-amber-700 bg-amber-50 border border-amber-300 rounded-md px-3 py-2">
-            ⚠ Replace mode will permanently delete all player records for clubs in this import file before inserting new ones. This cannot be undone.
+            ⚠ Replace mode will permanently delete all player records for clubs in this import file. This cannot be undone.
           </div>
         )}
 
         <div className="flex gap-3">
-          <button
-            onClick={handlePreview}
-            disabled={loading || !file}
+          <button onClick={handlePreview} disabled={loading || !file}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white
-                        ${loading || !file ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`}
-          >
+                        ${loading || !file ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`}>
             {loading ? "Working…" : "Preview Import"}
           </button>
-          <button
-            onClick={handleCommit}
-            disabled={loading || previewRows.length === 0}
+          <button onClick={handleCommit} disabled={loading || previewRows.length === 0}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white
                         ${loading || previewRows.length === 0
                           ? "bg-gray-300 cursor-not-allowed"
                           : importMode === "replace"
                           ? "bg-amber-600 hover:bg-amber-700"
-                          : "bg-emerald-600 hover:bg-emerald-700"}`}
-          >
+                          : "bg-emerald-600 hover:bg-emerald-700"}`}>
             {importMode === "replace" ? "Replace & Import" : "Commit Import"}
           </button>
         </div>
 
-        {skippedCount > 0 && (
-          <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
-            {skippedCount} row{skippedCount !== 1 ? "s" : ""} skipped — playing ≠ 1.
-          </div>
-        )}
-
         {newClubNames.length > 0 && (
           <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-            <strong>{newClubNames.length} new club(s)</strong> not yet in database — will be auto-created as non-client:{" "}
+            <strong>{newClubNames.length} new club(s)</strong> will be auto-created:{" "}
             <span className="font-mono">{newClubNames.join(", ")}</span>
           </div>
         )}
@@ -605,7 +545,6 @@ const Importer: React.FC = () => {
         )}
       </div>
 
-      {/* Preview table */}
       {previewRows.length > 0 && (
         <div className="bg-white rounded-xl shadow p-4 max-h-96 overflow-auto">
           <table className="min-w-full text-xs">
@@ -615,32 +554,33 @@ const Importer: React.FC = () => {
                 <th className="text-left px-2 py-1 border-b">Club</th>
                 <th className="text-left px-2 py-1 border-b">First</th>
                 <th className="text-left px-2 py-1 border-b">Last</th>
-                <th className="text-left px-2 py-1 border-b">Team Code</th>
+                <th className="text-left px-2 py-1 border-b">Division</th>
+                <th className="text-left px-2 py-1 border-b">Team Name</th>
                 <th className="text-left px-2 py-1 border-b">Age Group</th>
                 <th className="text-left px-2 py-1 border-b">Raw Division</th>
+                <th className="text-left px-2 py-1 border-b">Borrows To</th>
                 <th className="text-left px-2 py-1 border-b">Shirt #</th>
               </tr>
             </thead>
             <tbody>
               {previewRows.map((row, idx) => (
-                <tr
-                  key={idx}
-                  className={`odd:bg-white even:bg-gray-50 ${row.isNewClub ? "text-amber-700" : ""}`}
-                >
-                  <td className="px-2 py-1 border-b font-mono text-gray-500">
-                    {row.bcPlayerId || "—"}
-                  </td>
+                <tr key={idx} className={`odd:bg-white even:bg-gray-50 ${row.isNewClub ? "text-amber-700" : ""}`}>
+                  <td className="px-2 py-1 border-b font-mono text-gray-500">{row.bcPlayerId || "—"}</td>
                   <td className="px-2 py-1 border-b">
                     {row.clubName}
-                    {row.isNewClub && (
-                      <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1 rounded">new</span>
-                    )}
+                    {row.isNewClub && <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1 rounded">new</span>}
                   </td>
                   <td className="px-2 py-1 border-b">{row.firstName}</td>
                   <td className="px-2 py-1 border-b">{row.lastName}</td>
-                  <td className="px-2 py-1 border-b font-mono">{row.teamCode ?? "—"}</td>
+                  <td className="px-2 py-1 border-b font-mono">{row.divisionCode ?? "—"}</td>
+                  <td className="px-2 py-1 border-b">{row.teamName ?? "—"}</td>
                   <td className="px-2 py-1 border-b font-semibold">{row.ageGroup}</td>
                   <td className="px-2 py-1 border-b text-gray-400">{row.ageGroupRaw}</td>
+                  <td className="px-2 py-1 border-b">
+                    {row.borrowingDivision
+                      ? <span className="text-purple-600 font-semibold">{row.borrowingDivision}</span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
                   <td className="px-2 py-1 border-b">
                     {row.finalShirt !== null ? row.finalShirt : <span className="text-gray-300">—</span>}
                   </td>
@@ -651,36 +591,29 @@ const Importer: React.FC = () => {
         </div>
       )}
 
-      {/* Full Data Reset panel */}
       <div className="bg-white rounded-xl shadow p-6 max-w-2xl border border-red-200">
         <h3 className="text-base font-bold text-red-700 mb-1">Full Data Reset</h3>
         <p className="text-sm text-gray-600 mb-4">
           Permanently deletes all <strong>players, inventory, allocations, pending allocations,
-          and orders</strong>. Clubs and club settings are retained. Use this before a fresh
-          season import to start from a clean slate.
+          and orders</strong>. Clubs and club settings are retained.
         </p>
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Type <code className="bg-gray-100 px-1 rounded">RESET</code> to confirm
             </label>
-            <input
-              type="text"
-              value={resetConfirm}
+            <input type="text" value={resetConfirm}
               onChange={(e) => setResetConfirm(e.target.value)}
               placeholder="RESET"
               className="w-full px-3 py-2 border border-red-300 rounded-md text-sm
-                         focus:outline-none focus:ring-2 focus:ring-red-500"
-            />
+                         focus:outline-none focus:ring-2 focus:ring-red-500" />
           </div>
-          <button
-            onClick={handleFullReset}
+          <button onClick={handleFullReset}
             disabled={resetLoading || resetConfirm !== "RESET"}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white
                         ${resetLoading || resetConfirm !== "RESET"
                           ? "bg-red-200 cursor-not-allowed"
-                          : "bg-red-600 hover:bg-red-700"}`}
-          >
+                          : "bg-red-600 hover:bg-red-700"}`}>
             {resetLoading ? "Resetting…" : "Reset All Data"}
           </button>
           {resetStatus && (
