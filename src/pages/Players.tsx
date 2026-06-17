@@ -12,7 +12,8 @@ interface PlayerRow {
   id: string;
   first_name: string;
   last_name: string;
-  team_id: string | null;
+  division_code: string | null;
+  team_name: string | null;
   club_id: string;
   final_shirt: number | null;
   year_of_birth: number | null;
@@ -84,7 +85,7 @@ const Players: React.FC = () => {
         const { data, error } = await supabase
           .from("players")
           .select(
-            "id, first_name, last_name, team_id, club_id, final_shirt, year_of_birth"
+            "id, first_name, last_name, division_code, team_name, club_id, final_shirt, year_of_birth"
           )
           .eq("club_id", selectedClubId)
           .order("last_name", { ascending: true })
@@ -105,11 +106,16 @@ const Players: React.FC = () => {
     loadPlayers();
   }, [selectedClubId]);
 
-  // Distinct teams for dropdown
+  // Derive a display label for a player's team: prefer division_code, fall back to team_name
+  const teamLabel = (p: PlayerRow): string | null =>
+    p.division_code ?? p.team_name ?? null;
+
+  // Distinct teams for dropdown (using division_code ?? team_name)
   const teamsForClub = useMemo(() => {
     const set = new Set<string>();
     players.forEach((p) => {
-      if (p.team_id) set.add(p.team_id);
+      const label = teamLabel(p);
+      if (label) set.add(label);
     });
     return Array.from(set).sort();
   }, [players]);
@@ -126,7 +132,7 @@ const Players: React.FC = () => {
 
     // Team filter
     if (teamFilter !== "all") {
-      list = list.filter((p) => p.team_id === teamFilter);
+      list = list.filter((p) => teamLabel(p) === teamFilter);
     }
 
     // Status filter
@@ -180,24 +186,27 @@ const Players: React.FC = () => {
     }
 
     setSavingYobId(playerId);
-    const { error } = await supabase
-      .from("players")
-      .update({ year_of_birth: parsed })
-      .eq("id", playerId);
+    try {
+      const { error } = await supabase
+        .from("players")
+        .update({ year_of_birth: parsed })
+        .eq("id", playerId);
 
-    if (error) {
-      console.error("saveYob error", error);
-      alert("Failed to save year of birth: " + error.message);
+      if (error) {
+        alert("Failed to save year of birth: " + error.message);
+        return;
+      }
+
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === playerId ? { ...p, year_of_birth: parsed } : p
+        )
+      );
+      setEditingYobId(null);
+      setEditingYobValue("");
+    } finally {
       setSavingYobId(null);
-      return;
     }
-
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === playerId ? { ...p, year_of_birth: parsed } : p))
-    );
-    setEditingYobId(null);
-    setEditingYobValue("");
-    setSavingYobId(null);
   };
 
   return (
@@ -248,9 +257,9 @@ const Players: React.FC = () => {
               className="border rounded px-3 py-2 min-w-[160px]"
             >
               <option value="all">All teams</option>
-              {teamsForClub.map((teamId) => (
-                <option key={teamId} value={teamId}>
-                  {teamId}
+              {teamsForClub.map((t) => (
+                <option key={t} value={t}>
+                  {t}
                 </option>
               ))}
             </select>
@@ -359,6 +368,7 @@ const Players: React.FC = () => {
               {filteredPlayers.map((p) => {
                 const isEditingYob = editingYobId === p.id;
                 const isSavingYob = savingYobId === p.id;
+                const team = teamLabel(p);
 
                 return (
                   <tr
@@ -372,7 +382,11 @@ const Players: React.FC = () => {
                       {p.first_name || <span className="text-gray-400">—</span>}
                     </td>
                     <td className="px-3 py-2 align-middle">
-                      {p.team_id || <span className="text-gray-400">—</span>}
+                      {team ? (
+                        <span className="font-mono text-xs">{team}</span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2 align-middle">
                       {p.final_shirt != null ? (
