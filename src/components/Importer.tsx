@@ -68,6 +68,31 @@ function normalizeClubName(raw: string): string {
   return CLUB_NAME_OVERRIDES[upper] ?? raw.trim();
 }
 
+// ─── Multi-word club prefixes ─────────────────────────────────────────────────
+// Club names that are more than one word. When the raw team string starts with
+// one of these (case-insensitive), the full prefix is used as the club name and
+// the remainder becomes the team name — instead of splitting on the first word.
+// Add entries here whenever a new multi-word club is introduced.
+const MULTI_WORD_CLUB_PREFIXES: string[] = [
+  "EMMANUEL COLLEGE",
+  "GOLD COAST BASKETBALL",
+  "NORTH GOLD COAST SEAHAWKS",
+];
+
+// Returns [clubName, remainder] if the raw string starts with a known multi-word
+// club prefix, otherwise returns null.
+function matchMultiWordClub(raw: string): [string, string] | null {
+  const upper = raw.trim().toUpperCase();
+  for (const prefix of MULTI_WORD_CLUB_PREFIXES) {
+    if (upper === prefix || upper.startsWith(prefix + " ")) {
+      const club = raw.trim().slice(0, prefix.length);
+      const rest = raw.trim().slice(prefix.length).trim();
+      return [club, rest];
+    }
+  }
+  return null;
+}
+
 // ─── Team field parsing ───────────────────────────────────────────────────────
 function looksLikeTeamCode(token: string): boolean {
   return /^(\d{1,2}|[JOS])[A-Z]{1,2}\d/i.test(token);
@@ -89,14 +114,26 @@ function deriveTeamFields(
     return { clubName, divisionCode, teamName: null };
   }
 
-  // gold_coast: "JGC1 HEAT BLAZES" → division=JGC1, club=HEAT, team=BLAZES
-  //             "BLADES ASSASSINS"  → club=BLADES, team=ASSASSINS (no division code)
+  // gold_coast: "JGC1 HEAT BLAZES"       → division=JGC1, club=HEAT, team=BLAZES
+  //             "BLADES ASSASSINS"        → club=BLADES, team=ASSASSINS (no division code)
+  //             "EMMANUEL COLLEGE WHITE"  → club=Emmanuel College, team=WHITE
   if (looksLikeTeamCode(parts[0])) {
     const divisionCode = parts[0];
+    const remainder = parts.slice(1).join(" ");
+    const multi = matchMultiWordClub(remainder);
+    if (multi) {
+      const [clubName, teamRest] = multi;
+      return { clubName, divisionCode, teamName: teamRest || null };
+    }
     const clubName = parts[1] ?? "";
     const teamName = parts.slice(2).join(" ") || null;
     return { clubName, divisionCode, teamName };
   } else {
+    const multi = matchMultiWordClub(trimmed);
+    if (multi) {
+      const [clubName, teamRest] = multi;
+      return { clubName, divisionCode: null, teamName: teamRest || null };
+    }
     const clubName = parts[0] ?? "";
     const teamName = parts.slice(1).join(" ") || null;
     return { clubName, divisionCode: null, teamName };
