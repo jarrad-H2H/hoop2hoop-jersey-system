@@ -22,7 +22,9 @@ interface ClubPlayer {
   id: string;
   first_name: string;
   last_name: string;
-  team_id: string | null;
+  division_code: string | null; // e.g. "JGC1" or "14B.1"
+  team_name: string | null;     // e.g. "BLAZES", null for Seahawks format
+  age_group: string | null;     // e.g. "U14"
   final_shirt: number | null;
   year_of_birth: number | null;
 }
@@ -53,6 +55,7 @@ const Allocation: React.FC = () => {
 
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [clashes, setClashes] = useState<ClashPlayer[]>([]);
+  const [softWarnings, setSoftWarnings] = useState<ClashPlayer[]>([]);
   const [stockBySize, setStockBySize] = useState<StockBySize[]>([]);
   const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
 
@@ -103,7 +106,17 @@ const Allocation: React.FC = () => {
       .slice(0, 10);
   }, [playerSearch, clubPlayers]);
 
-  // Helper: derive the YOB to use for cohort logic
+  // Helper: derive team context from the selected player for team-aware clash logic
+  const deriveTeamContext = () => {
+    if (!currentPlayer) return {};
+    return {
+      divisionCode: currentPlayer.division_code ?? null,
+      teamName: currentPlayer.team_name ?? null,
+      ageGroup: currentPlayer.age_group ?? null,
+    };
+  };
+
+  // Helper: derive the YOB to use for cohort logic (fallback / widget compat)
   const deriveCohortYear = (): number | undefined => {
     if (yearOfBirth) {
       const typed = Number(yearOfBirth);
@@ -208,7 +221,7 @@ const Allocation: React.FC = () => {
         const { data, error } = await supabase
           .from("players")
           .select(
-            "id, first_name, last_name, team_id, final_shirt, year_of_birth"
+            "id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth"
           )
           .eq("club_id", selectedClubId)
           .order("last_name", { ascending: true })
@@ -244,6 +257,7 @@ const Allocation: React.FC = () => {
     setPlayerSearch("");
     setStatusMessage("");
     setClashes([]);
+    setSoftWarnings([]);
     setStockBySize([]);
     setSuggestions([]);
     setAllocationMessage("");
@@ -260,6 +274,7 @@ const Allocation: React.FC = () => {
     setPreferredNumber("");
     setStatusMessage("");
     setClashes([]);
+    setSoftWarnings([]);
     setStockBySize([]);
     setSuggestions([]);
     setAllocationMessage("");
@@ -272,6 +287,7 @@ const Allocation: React.FC = () => {
     setPlayerSearch("");
     setStatusMessage("");
     setClashes([]);
+    setSoftWarnings([]);
     setStockBySize([]);
     setSuggestions([]);
     setAllocationMessage("");
@@ -307,16 +323,19 @@ const Allocation: React.FC = () => {
     setStatusMessage("");
     setAllocationMessage("");
     setClashes([]);
+    setSoftWarnings([]);
     setStockBySize([]);
 
     try {
       const yobNum = deriveCohortYear();
-      const { clashes, stockBySize, statusMessage } = await smartCheckNumber(
+      const teamCtx = deriveTeamContext();
+      const { clashes, softWarnings, stockBySize, statusMessage } = await smartCheckNumber(
         selectedClubId,
         num,
-        { yearOfBirth: yobNum }
+        { yearOfBirth: yobNum, ...teamCtx }
       );
       setClashes(clashes);
+      setSoftWarnings(softWarnings);
       setStockBySize(stockBySize);
       setStatusMessage(statusMessage);
     } catch (err: any) {
@@ -337,7 +356,7 @@ const Allocation: React.FC = () => {
     setAllocationMessage("");
 
     try {
-      const results = await suggestNumbersForClub(selectedClubId, selectedSize, 10);
+      const results = await suggestNumbersForClub(selectedClubId, selectedSize, 10, deriveTeamContext());
       setSuggestions(results);
 
       if (results.length === 0) {
@@ -380,14 +399,15 @@ const Allocation: React.FC = () => {
     }
 
     const yobNum = deriveCohortYear();
+    const teamCtx = deriveTeamContext();
     setAllocating(true);
 
     try {
-      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, num, { yearOfBirth: yobNum });
+      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, num, { yearOfBirth: yobNum, ...teamCtx });
       const stockForSize = findStockForSelectedSize(stockBySize);
 
       if (clashes.length > 0) {
-        setAllocationMessage("Cannot allocate: this number still clashes in the effective cohort.");
+        setAllocationMessage("Cannot allocate: this number is already worn by a teammate.");
         setAllocating(false);
         return;
       }
@@ -552,7 +572,7 @@ const Allocation: React.FC = () => {
     setSwapSuggestions([]);
 
     try {
-      const results = await suggestNumbersForClub(selectedClubId, swapSize, 10);
+      const results = await suggestNumbersForClub(selectedClubId, swapSize, 10, deriveTeamContext());
       setSwapSuggestions(results);
       if (results.length === 0) {
         setAllocationMessage(`No clash-free numbers with stock in size ${swapSize} for this club.`);
@@ -581,14 +601,15 @@ const Allocation: React.FC = () => {
     }
 
     const yobNum = deriveCohortYear();
+    const teamCtx = deriveTeamContext();
     setSwapBusy(true);
 
     try {
-      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, newNumber, { yearOfBirth: yobNum });
+      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, newNumber, { yearOfBirth: yobNum, ...teamCtx });
       const stockForNewSize = findStockForSize(stockBySize, swapSize);
 
       if (clashes.length > 0) {
-        setAllocationMessage(`Cannot exchange: new number ${newNumber} clashes within the effective cohort.`);
+        setAllocationMessage(`Cannot exchange: new number ${newNumber} is already worn by a teammate.`);
         setSwapBusy(false);
         return;
       }
@@ -728,10 +749,11 @@ const Allocation: React.FC = () => {
     <div>
       <h1 className="text-2xl font-bold mb-4">Jersey Allocation (Admin)</h1>
       <p className="text-sm text-gray-600 mb-6">
-        Search for a player, check for cohort-aware number clashes, and commit
-        allocations against live inventory. Use the Exchange / Swap section to
-        process size changes or number changes. Warehouse returns are at the
-        bottom.
+        Search for a player, check for number clashes, and commit allocations
+        against live inventory. Hard clash = same team already using that number
+        (blocked). Advisory warning = adjacent age group, different team (can
+        proceed but consider another number). Use the Exchange / Swap section for
+        size changes or number changes. Warehouse returns are at the bottom.
       </p>
 
       {/* Top form */}
@@ -818,9 +840,9 @@ const Allocation: React.FC = () => {
                 <span className="font-semibold">
                   {currentPlayer.last_name}, {currentPlayer.first_name}
                 </span>
-                {currentPlayer.team_id && (
+                {(currentPlayer.division_code || currentPlayer.team_name) && (
                   <span className="text-gray-500 ml-1">
-                    ({currentPlayer.team_id})
+                    ({currentPlayer.division_code}{currentPlayer.team_name ? ` · ${currentPlayer.team_name}` : ""})
                   </span>
                 )}
                 {currentPlayer.final_shirt != null && (
@@ -871,9 +893,9 @@ const Allocation: React.FC = () => {
                       <span className="font-medium">
                         {p.last_name}, {p.first_name}
                       </span>
-                      {p.team_id && (
+                      {(p.division_code || p.team_name) && (
                         <span className="text-gray-500 ml-1 text-xs">
-                          ({p.team_id})
+                          ({p.division_code}{p.team_name ? ` · ${p.team_name}` : ""})
                         </span>
                       )}
                       {p.final_shirt != null ? (
@@ -910,9 +932,9 @@ const Allocation: React.FC = () => {
                   <span className="font-semibold">
                     {currentPlayer.first_name} {currentPlayer.last_name}
                   </span>
-                  {currentPlayer.team_id && (
+                  {(currentPlayer.division_code || currentPlayer.team_name) && (
                     <span className="text-gray-600 ml-2">
-                      &mdash; {currentPlayer.team_id}
+                      &mdash; {currentPlayer.division_code}{currentPlayer.team_name ? ` · ${currentPlayer.team_name}` : ""}
                     </span>
                   )}
                 </div>
@@ -1155,29 +1177,72 @@ const Allocation: React.FC = () => {
         </div>
       )}
 
-      {/* Clash details */}
+      {/* Hard clash details — same team, blocks allocation */}
       {clashes.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-sm font-semibold mb-2">
-            Clashing players (effective cohort)
+        <div className="mb-4">
+          <h2 className="text-sm font-semibold mb-2 text-red-700">
+            ⛔ Team clash — cannot allocate (same team already uses this number)
           </h2>
-          <div className="overflow-x-auto border rounded">
+          <div className="overflow-x-auto border border-red-200 rounded">
             <table className="min-w-full text-xs">
-              <thead className="bg-gray-100">
+              <thead className="bg-red-50">
                 <tr>
                   <th className="px-2 py-1 text-left">First Name</th>
                   <th className="px-2 py-1 text-left">Last Name</th>
-                  <th className="px-2 py-1 text-left">Team</th>
+                  <th className="px-2 py-1 text-left">Division / Team</th>
+                  <th className="px-2 py-1 text-left">Age Group</th>
                   <th className="px-2 py-1 text-left">Number</th>
-                  <th className="px-2 py-1 text-left">Year of Birth</th>
+                  <th className="px-2 py-1 text-left">YOB</th>
                 </tr>
               </thead>
               <tbody>
                 {clashes.map((p) => (
-                  <tr key={p.id} className="odd:bg-white even:bg-gray-50">
+                  <tr key={p.id} className="odd:bg-white even:bg-red-50">
                     <td className="px-2 py-1">{p.first_name}</td>
                     <td className="px-2 py-1">{p.last_name}</td>
-                    <td className="px-2 py-1">{p.team_id ?? "—"}</td>
+                    <td className="px-2 py-1">
+                      {p.division_code ?? "—"}
+                      {p.team_name ? ` · ${p.team_name}` : ""}
+                    </td>
+                    <td className="px-2 py-1">{p.age_group ?? "—"}</td>
+                    <td className="px-2 py-1">{p.final_shirt ?? "—"}</td>
+                    <td className="px-2 py-1">{p.year_of_birth ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Soft warnings — adjacent age group, different team, advisory only */}
+      {softWarnings.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold mb-2 text-amber-700">
+            ⚠️ Adjacent age group advisory (different team — allocation can proceed, but consider another number)
+          </h2>
+          <div className="overflow-x-auto border border-amber-200 rounded">
+            <table className="min-w-full text-xs">
+              <thead className="bg-amber-50">
+                <tr>
+                  <th className="px-2 py-1 text-left">First Name</th>
+                  <th className="px-2 py-1 text-left">Last Name</th>
+                  <th className="px-2 py-1 text-left">Division / Team</th>
+                  <th className="px-2 py-1 text-left">Age Group</th>
+                  <th className="px-2 py-1 text-left">Number</th>
+                  <th className="px-2 py-1 text-left">YOB</th>
+                </tr>
+              </thead>
+              <tbody>
+                {softWarnings.map((p) => (
+                  <tr key={p.id} className="odd:bg-white even:bg-amber-50">
+                    <td className="px-2 py-1">{p.first_name}</td>
+                    <td className="px-2 py-1">{p.last_name}</td>
+                    <td className="px-2 py-1">
+                      {p.division_code ?? "—"}
+                      {p.team_name ? ` · ${p.team_name}` : ""}
+                    </td>
+                    <td className="px-2 py-1">{p.age_group ?? "—"}</td>
                     <td className="px-2 py-1">{p.final_shirt ?? "—"}</td>
                     <td className="px-2 py-1">{p.year_of_birth ?? "—"}</td>
                   </tr>
