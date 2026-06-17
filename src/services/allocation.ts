@@ -1,6 +1,23 @@
 // FILE: src/services/allocation.ts
 import { supabase } from "./supabase";
 
+// ─── Age group helpers ─────────────────────────────────────────────────────────
+// Used to determine adjacent cohort warnings (different team, close age group).
+const AGE_GROUP_ORDER = ["U8", "U10", "U12", "U14", "U16", "U18", "U20", "SLG"];
+
+function ageGroupIndex(ag: string | null | undefined): number {
+  if (!ag) return -1;
+  return AGE_GROUP_ORDER.indexOf(ag.trim().toUpperCase());
+}
+
+/** Returns true if the two age groups are the same or one step apart in the ladder. */
+function isAdjacentOrSameAgeGroup(ag1?: string | null, ag2?: string | null): boolean {
+  const i1 = ageGroupIndex(ag1);
+  const i2 = ageGroupIndex(ag2);
+  if (i1 === -1 || i2 === -1) return false;
+  return Math.abs(i1 - i2) <= 1;
+}
+
 /**
  * Types shared with the React components
  */
@@ -8,7 +25,9 @@ export interface ClashPlayer {
   id: string;
   first_name: string;
   last_name: string;
-  team_id: string | null;
+  division_code: string | null; // e.g. "JGC1" (GC) or "14B.1" (Seahawks)
+  team_name: string | null;     // e.g. "BLAZES" (GC), null for Seahawks
+  age_group: string | null;     // e.g. "U14"
   final_shirt: number | null;
   year_of_birth: number | null;
 }
@@ -25,13 +44,22 @@ export interface NumberSuggestion {
 }
 
 export interface SmartCheckOptions {
+  // Backward-compat cohort options (used by widget; ignored when team info is provided)
   seasonYear?: number;
   yearOfBirth?: number;
   cohortWindowYears?: number;
+  // Team identity of the requesting player — enables team-aware clash logic.
+  // When provided: same team = hard clash; adjacent age group, different team = soft warning.
+  divisionCode?: string | null;
+  teamName?: string | null;
+  ageGroup?: string | null; // e.g. "U14" — used for soft warning when YOB unavailable
 }
 
 export interface SmartCheckResult {
+  /** Hard clashes: same team as requesting player. Allocation must not proceed. */
   clashes: ClashPlayer[];
+  /** Soft warnings: adjacent age group, different team. Advise choosing another number but can proceed. */
+  softWarnings: ClashPlayer[];
   stockBySize: StockBySize[];
   statusMessage: string;
 }
@@ -68,28 +96,38 @@ const STATUS_AVAILABLE = "Available";
 const STATUS_ALLOCATED = "Allocated";
 
 /**
- * Cohort-aware clash + stock check for a given number in a club.
+ * Team-aware clash + stock check for a given number in a club.
+ *
+ * When divisionCode / teamName / ageGroup are provided:
+ *   - "clashes"      = players on the SAME team wearing this number (hard block)
+ *   - "softWarnings" = players on a DIFFERENT team in the same or adjacent age group (advisory)
+ *
+ * When no team info is provided, falls back to the original cohort-based logic
+ * (backward compatible with the widget flow which supplies yearOfBirth only).
  */
 export async function smartCheckNumber(
   clubId: string,
   jerseyNumber: number,
   options: SmartCheckOptions = {}
 ): Promise<SmartCheckResult> {
-  const { seasonYear: optSeasonYear, yearOfBirth, cohortWindowYears = 0 } = options;
+  const {
+    seasonYear: optSeasonYear,
+    yearOfBirth,
+    cohortWindowYears = 0,
+    divisionCode,
+    teamName,
+    ageGroup,
+  } = options;
 
   const seasonYear =
     typeof optSeasonYear === "number" && Number.isFinite(optSeasonYear)
       ? optSeasonYear
       : new Date().getFullYear();
 
-  const requestedAgeGroup =
-    typeof yearOfBirth === "number" && Number.isFinite(yearOfBirth)
-      ? seasonYear - yearOfBirth
-      : undefined;
-
+  // Fetch all players in this club wearing this jersey number.
   const { data: clashRows, error: clashError } = await supabase
     .from("players")
-    .select("id, first_name, last_name, team_id, final_shirt, year_of_birth")
+    .select("id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth")
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber);
 
@@ -100,18 +138,50 @@ export async function smartCheckNumber(
 
   const allNumberHolders = (clashRows ?? []) as ClashPlayer[];
 
-  let effectiveClashes: ClashPlayer[] = [];
-  if (requestedAgeGroup === undefined) {
-    effectiveClashes = allNumberHolders;
+  let hardClashes: ClashPlayer[] = [];
+  let softWarnings: ClashPlayer[] = [];
+
+  // Team-aware path: at least one of divisionCode / teamName / ageGroup was supplied.
+  const hasTeamContext =
+    divisionCode !== undefined || teamName !== undefined || ageGroup !== undefined;
+
+  if (hasTeamContext) {
+    for (const p of allNumberHolders) {
+      // Same team = same (division_code, team_name) pair, null-safe.
+      const sameTeam =
+        (p.division_code ?? null) === (divisionCode ?? null) &&
+        (p.team_name ?? null) === (teamName ?? null);
+
+      if (sameTeam) {
+        hardClashes.push(p);
+      } else {
+        // Different team — soft warning if same or adjacent age group.
+        if (isAdjacentOrSameAgeGroup(ageGroup, p.age_group)) {
+          softWarnings.push(p);
+        }
+      }
+    }
   } else {
-    const window = Math.max(0, cohortWindowYears);
-    effectiveClashes = allNumberHolders.filter((p) => {
-      if (typeof p.year_of_birth !== "number" || !Number.isFinite(p.year_of_birth)) return false;
-      const playerAgeGroup = seasonYear - p.year_of_birth;
-      return Math.abs(playerAgeGroup - requestedAgeGroup) <= window;
-    });
+    // Backward-compat: cohort-based logic (used by widget, no team info available).
+    const requestedAgeGroup =
+      typeof yearOfBirth === "number" && Number.isFinite(yearOfBirth)
+        ? seasonYear - yearOfBirth
+        : undefined;
+
+    if (requestedAgeGroup === undefined) {
+      hardClashes = allNumberHolders;
+    } else {
+      const window = Math.max(0, cohortWindowYears);
+      hardClashes = allNumberHolders.filter((p) => {
+        if (typeof p.year_of_birth !== "number" || !Number.isFinite(p.year_of_birth))
+          return false;
+        const playerAge = seasonYear - p.year_of_birth;
+        return Math.abs(playerAge - requestedAgeGroup) <= window;
+      });
+    }
   }
 
+  // ── Inventory check ──────────────────────────────────────────────────────────
   const { data: inventoryRows, error: invError } = await supabase
     .from("inventory")
     .select("size, status")
@@ -127,54 +197,86 @@ export async function smartCheckNumber(
   for (const row of inventoryRows ?? []) {
     const sizeLabel = String((row as any).size ?? "");
     if (!sizeLabel) continue;
-
     if (String((row as any).status) === STATUS_AVAILABLE) {
       stockMap.set(sizeLabel, (stockMap.get(sizeLabel) ?? 0) + 1);
     }
   }
 
-  const stockBySize: StockBySize[] = Array.from(stockMap.entries()).map(([size, count]) => ({
-    size,
-    count,
-  }));
+  const stockBySize: StockBySize[] = Array.from(stockMap.entries()).map(
+    ([size, count]) => ({ size, count })
+  );
 
-  const hasClash = effectiveClashes.length > 0;
+  // ── Status message ───────────────────────────────────────────────────────────
+  const hasHardClash = hardClashes.length > 0;
+  const hasSoftWarning = softWarnings.length > 0;
   const hasStock = stockBySize.length > 0;
 
   let statusMessage = "";
-  if (requestedAgeGroup !== undefined) {
-    if (hasClash && hasStock) {
+
+  if (hasTeamContext) {
+    if (hasHardClash) {
+      statusMessage = hasStock
+        ? "This number is already worn by a teammate — choose a different number."
+        : "This number is already worn by a teammate and there is no available stock.";
+    } else if (hasSoftWarning && hasStock) {
       statusMessage =
-        "This number is already used in the same age group for this club, but inventory exists. Proceed with caution.";
-    } else if (hasClash && !hasStock) {
-      statusMessage = "This number clashes in the same age group and there is no available stock.";
-    } else if (!hasClash && hasStock) {
-      statusMessage = "No cohort clash found for this number and there is available stock.";
+        "This number is used in an adjacent age group (different team). Consider another number, but you can proceed.";
+    } else if (!hasHardClash && hasStock) {
+      statusMessage = "No team clash — this number is clear and stock is available.";
     } else {
-      statusMessage = "No cohort clash found, but there is no available inventory for this number in this club.";
+      statusMessage =
+        "No team clash, but there is no available stock for this number in this club.";
     }
   } else {
-    if (hasClash && hasStock) {
-      statusMessage = "This number is already used in this club, but inventory exists. Proceed with caution.";
-    } else if (hasClash && !hasStock) {
-      statusMessage = "This number is already used in this club and there is no available stock.";
-    } else if (!hasClash && hasStock) {
-      statusMessage = "This number is not currently used in this club and there is available stock.";
+    // Original messages (backward compat for widget)
+    const requestedAgeGroup =
+      typeof yearOfBirth === "number" && Number.isFinite(yearOfBirth)
+        ? seasonYear - yearOfBirth
+        : undefined;
+
+    if (requestedAgeGroup !== undefined) {
+      if (hasHardClash && hasStock) {
+        statusMessage =
+          "This number is already used in the same age group for this club, but inventory exists. Proceed with caution.";
+      } else if (hasHardClash && !hasStock) {
+        statusMessage =
+          "This number clashes in the same age group and there is no available stock.";
+      } else if (!hasHardClash && hasStock) {
+        statusMessage =
+          "No cohort clash found for this number and there is available stock.";
+      } else {
+        statusMessage =
+          "No cohort clash found, but there is no available inventory for this number in this club.";
+      }
     } else {
-      statusMessage = "This number is not currently used in this club, but there is no available inventory for it.";
+      if (hasHardClash && hasStock) {
+        statusMessage =
+          "This number is already used in this club, but inventory exists. Proceed with caution.";
+      } else if (hasHardClash && !hasStock) {
+        statusMessage =
+          "This number is already used in this club and there is no available stock.";
+      } else if (!hasHardClash && hasStock) {
+        statusMessage =
+          "This number is not currently used in this club and there is available stock.";
+      } else {
+        statusMessage =
+          "This number is not currently used in this club, but there is no available inventory for it.";
+      }
     }
   }
 
-  return { clashes: effectiveClashes, stockBySize, statusMessage };
+  return { clashes: hardClashes, softWarnings, stockBySize, statusMessage };
 }
 
 /**
- * Existing (basic) suggestion function.
+ * Basic suggestion function (conservative: avoids numbers used anywhere in the club).
+ * Pass team info to get team-aware suggestions.
  */
 export async function suggestNumbersForClub(
   clubId: string,
   size: string,
-  limit: number = 10
+  limit: number = 10,
+  teamContext?: Pick<SmartCheckOptions, "divisionCode" | "teamName" | "ageGroup">
 ): Promise<NumberSuggestion[]> {
   const { data, error } = await supabase
     .from("inventory")
@@ -202,7 +304,11 @@ export async function suggestNumbersForClub(
   const results: NumberSuggestion[] = [];
 
   for (const candidate of candidates) {
-    const { clashes } = await smartCheckNumber(clubId, candidate.jersey_number, {});
+    const { clashes } = await smartCheckNumber(
+      clubId,
+      candidate.jersey_number,
+      teamContext ?? {}
+    );
     if (clashes.length === 0) results.push(candidate);
     if (results.length >= limit) break;
   }
@@ -211,7 +317,11 @@ export async function suggestNumbersForClub(
 }
 
 /**
- * Ranked suggestions (size-aware + cohort-aware + reservation-aware).
+ * Ranked suggestions (size-aware + team/cohort-aware + reservation-aware).
+ *
+ * When divisionCode + teamName are provided, same-team numbers are hard-blocked.
+ * Adjacent age group, different-team numbers incur a scoring penalty.
+ * Falls back to YOB-based cohort logic when no team info is given.
  */
 export async function suggestNumbersForClubRanked(input: {
   clubId: string;
@@ -221,10 +331,18 @@ export async function suggestNumbersForClubRanked(input: {
   limit?: number;
   cohortWindowYears?: number;
   adjacentCohortYears?: number;
+  // Optional team info — enables team-aware blocking
+  divisionCode?: string | null;
+  teamName?: string | null;
+  ageGroup?: string | null;
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
   const cohortWindowYears = Math.max(0, input.cohortWindowYears ?? 0);
   const adjacentCohortYears = Math.max(0, input.adjacentCohortYears ?? 1);
+  const hasTeamContext =
+    input.divisionCode !== undefined ||
+    input.teamName !== undefined ||
+    input.ageGroup !== undefined;
 
   const targetAge = input.seasonYear - input.yearOfBirth;
 
@@ -251,32 +369,63 @@ export async function suggestNumbersForClubRanked(input: {
   if (candidateNums.length === 0) return [];
 
   const yobForAge = (age: number) => input.seasonYear - age;
-
-  const minAgeBlock = targetAge - cohortWindowYears;
-  const maxAgeBlock = targetAge + cohortWindowYears;
-  const minYobBlock = yobForAge(maxAgeBlock);
-  const maxYobBlock = yobForAge(minAgeBlock);
-
-  const { data: playersBlock, error: pbErr } = await supabase
-    .from("players")
-    .select("final_shirt, year_of_birth")
-    .eq("club_id", input.clubId)
-    .in("final_shirt", candidateNums)
-    .gte("year_of_birth", minYobBlock)
-    .lte("year_of_birth", maxYobBlock);
-
-  if (pbErr) {
-    console.error("players block query error", pbErr);
-    throw new Error("Failed to load player clash data for ranked suggestions.");
-  }
-
   const blockedNums = new Set<number>();
-  for (const p of playersBlock ?? []) {
-    const n = Number((p as any).final_shirt);
-    if (!Number.isFinite(n)) continue;
-    blockedNums.add(n);
+
+  if (hasTeamContext) {
+    // Team-aware: block numbers worn by players on the SAME team.
+    const sameTeamQuery = supabase
+      .from("players")
+      .select("final_shirt")
+      .eq("club_id", input.clubId)
+      .in("final_shirt", candidateNums);
+
+    // null-safe team filter
+    if (input.divisionCode != null) {
+      sameTeamQuery.eq("division_code", input.divisionCode);
+    } else {
+      sameTeamQuery.is("division_code", null);
+    }
+    if (input.teamName != null) {
+      sameTeamQuery.eq("team_name", input.teamName);
+    } else {
+      sameTeamQuery.is("team_name", null);
+    }
+
+    const { data: sameTeamPlayers, error: stErr } = await sameTeamQuery;
+    if (stErr) {
+      console.error("same-team block query error", stErr);
+      throw new Error("Failed to load same-team player data.");
+    }
+    for (const p of sameTeamPlayers ?? []) {
+      const n = Number((p as any).final_shirt);
+      if (Number.isFinite(n)) blockedNums.add(n);
+    }
+  } else {
+    // Cohort-based blocking (backward compat — widget path).
+    const minAgeBlock = targetAge - cohortWindowYears;
+    const maxAgeBlock = targetAge + cohortWindowYears;
+    const minYobBlock = yobForAge(maxAgeBlock);
+    const maxYobBlock = yobForAge(minAgeBlock);
+
+    const { data: playersBlock, error: pbErr } = await supabase
+      .from("players")
+      .select("final_shirt, year_of_birth")
+      .eq("club_id", input.clubId)
+      .in("final_shirt", candidateNums)
+      .gte("year_of_birth", minYobBlock)
+      .lte("year_of_birth", maxYobBlock);
+
+    if (pbErr) {
+      console.error("players block query error", pbErr);
+      throw new Error("Failed to load player clash data for ranked suggestions.");
+    }
+    for (const p of playersBlock ?? []) {
+      const n = Number((p as any).final_shirt);
+      if (Number.isFinite(n)) blockedNums.add(n);
+    }
   }
 
+  // Reservation block (same in both paths)
   const { data: resBlock, error: rbErr } = await supabase
     .from("pending_allocations")
     .select("jersey_number, year_of_birth, season_year, expires_at, status, size")
@@ -291,50 +440,87 @@ export async function suggestNumbersForClubRanked(input: {
   }
 
   const now = Date.now();
-  for (const r of resBlock ?? []) {
-    const expiresAt = Date.parse(String((r as any).expires_at));
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
-    const yob = Number((r as any).year_of_birth);
-    const n = Number((r as any).jersey_number);
-    if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
-    const age = input.seasonYear - yob;
-    if (age >= minAgeBlock && age <= maxAgeBlock) blockedNums.add(n);
+  if (!hasTeamContext) {
+    // Only apply reservation blocking in cohort mode (widget path)
+    const minAgeBlock = targetAge - cohortWindowYears;
+    const maxAgeBlock = targetAge + cohortWindowYears;
+    for (const r of resBlock ?? []) {
+      const expiresAt = Date.parse(String((r as any).expires_at));
+      if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+      const yob = Number((r as any).year_of_birth);
+      const n = Number((r as any).jersey_number);
+      if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
+      const age = input.seasonYear - yob;
+      if (age >= minAgeBlock && age <= maxAgeBlock) blockedNums.add(n);
+    }
   }
 
-  const minAgeAdj = targetAge - adjacentCohortYears;
-  const maxAgeAdj = targetAge + adjacentCohortYears;
-  const minYobAdj = yobForAge(maxAgeAdj);
-  const maxYobAdj = yobForAge(minAgeAdj);
-
-  const { data: playersAdj, error: paErr } = await supabase
-    .from("players")
-    .select("final_shirt")
-    .eq("club_id", input.clubId)
-    .in("final_shirt", candidateNums)
-    .gte("year_of_birth", minYobAdj)
-    .lte("year_of_birth", maxYobAdj);
-
-  if (paErr) {
-    console.error("players adjacent query error", paErr);
-    throw new Error("Failed to load adjacent cohort usage for ranking.");
-  }
-
+  // Adjacent cohort penalty: penalise numbers used in nearby age groups (different team).
   const adjCounts = new Map<number, number>();
-  for (const p of playersAdj ?? []) {
-    const n = Number((p as any).final_shirt);
-    if (!Number.isFinite(n)) continue;
-    adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
-  }
 
-  for (const r of resBlock ?? []) {
-    const expiresAt = Date.parse(String((r as any).expires_at));
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
-    const yob = Number((r as any).year_of_birth);
-    const n = Number((r as any).jersey_number);
-    if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
-    const age = input.seasonYear - yob;
-    if (age >= minAgeAdj && age <= maxAgeAdj) {
+  if (hasTeamContext) {
+    // Fetch players in adjacent age groups (using age_group column)
+    const adjacentGroups = AGE_GROUP_ORDER.filter((ag) => {
+      const reqIdx = ageGroupIndex(input.ageGroup);
+      const agIdx = ageGroupIndex(ag);
+      return reqIdx !== -1 && agIdx !== -1 && Math.abs(reqIdx - agIdx) <= 1;
+    });
+
+    if (adjacentGroups.length > 0) {
+      const { data: adjPlayers } = await supabase
+        .from("players")
+        .select("final_shirt, division_code, team_name")
+        .eq("club_id", input.clubId)
+        .in("final_shirt", candidateNums)
+        .in("age_group", adjacentGroups);
+
+      for (const p of adjPlayers ?? []) {
+        const n = Number((p as any).final_shirt);
+        if (!Number.isFinite(n)) continue;
+        // Only penalise if NOT on the same team
+        const sameTeam =
+          ((p as any).division_code ?? null) === (input.divisionCode ?? null) &&
+          ((p as any).team_name ?? null) === (input.teamName ?? null);
+        if (!sameTeam) {
+          adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
+        }
+      }
+    }
+  } else {
+    // Original adjacent cohort penalty (YOB-based, widget path)
+    const minAgeAdj = targetAge - adjacentCohortYears;
+    const maxAgeAdj = targetAge + adjacentCohortYears;
+    const minYobAdj = yobForAge(maxAgeAdj);
+    const maxYobAdj = yobForAge(minAgeAdj);
+
+    const { data: playersAdj, error: paErr } = await supabase
+      .from("players")
+      .select("final_shirt")
+      .eq("club_id", input.clubId)
+      .in("final_shirt", candidateNums)
+      .gte("year_of_birth", minYobAdj)
+      .lte("year_of_birth", maxYobAdj);
+
+    if (paErr) {
+      console.error("players adjacent query error", paErr);
+      throw new Error("Failed to load adjacent cohort usage for ranking.");
+    }
+    for (const p of playersAdj ?? []) {
+      const n = Number((p as any).final_shirt);
+      if (!Number.isFinite(n)) continue;
       adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
+    }
+
+    for (const r of resBlock ?? []) {
+      const expiresAt = Date.parse(String((r as any).expires_at));
+      if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+      const yob = Number((r as any).year_of_birth);
+      const n = Number((r as any).jersey_number);
+      if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
+      const age = input.seasonYear - yob;
+      if (age >= minAgeAdj && age <= maxAgeAdj) {
+        adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
+      }
     }
   }
 
@@ -344,7 +530,6 @@ export async function suggestNumbersForClubRanked(input: {
 
     const stockDepth = stockCounts.get(n) ?? 0;
     const adjUse = adjCounts.get(n) ?? 0;
-
     const lowNumberPenalty = n >= 0 && n <= 10 ? 2 : 0;
     const score = adjUse * 100 + lowNumberPenalty * 10 - stockDepth * 2;
 
@@ -424,7 +609,9 @@ export async function logAllocationEvent(payload: {
     jersey_number: typeof payload.jersey_number === "number" ? payload.jersey_number : null,
     size: payload.size ?? null,
     previous_jersey_number:
-      typeof payload.previous_jersey_number === "number" ? payload.previous_jersey_number : null,
+      typeof payload.previous_jersey_number === "number"
+        ? payload.previous_jersey_number
+        : null,
     previous_size: payload.previous_size ?? null,
     note: payload.note ?? null,
   };
@@ -483,16 +670,13 @@ export async function createPendingAllocation(input: {
 
 /**
  * Look up an existing player by name + YOB within a club.
- * Used by the widget to detect if the player already has a jersey.
- * Tries exact match first; falls back to last-name + YOB fuzzy match
- * to handle nicknames (Mike vs Michael etc.).
  */
 export async function lookupPlayerByName(params: {
   clubId: string;
   firstName: string;
   lastName: string;
   yearOfBirth: number;
-  ageGroup?: string | null; // derived from YOB in widget; used as fallback for BC-imported players who have no YOB stored
+  ageGroup?: string | null;
 }): Promise<{
   found: boolean;
   playerId?: string;
@@ -505,14 +689,10 @@ export async function lookupPlayerByName(params: {
   const firstTrimmed = firstName.trim();
   const lastTrimmed = lastName.trim();
 
-  // Match cohort by YOB (if stored) OR age_group (if YOB missing — common for BC-imported players).
-  // Using OR means a player imported from BC with only age_group = 'U14' is still found when
-  // the parent enters YOB 2013 (which the widget maps to U14).
   const cohortFilter = ageGroup
     ? `year_of_birth.eq.${yearOfBirth},age_group.eq.${ageGroup}`
     : `year_of_birth.eq.${yearOfBirth}`;
 
-  // 1. Exact match: first + last + cohort + club
   const { data: exact } = await supabase
     .from("players")
     .select("id, first_name, last_name, final_shirt, year_of_birth")
@@ -524,7 +704,6 @@ export async function lookupPlayerByName(params: {
 
   let player = (exact ?? [])[0] as any;
 
-  // 2. Fuzzy fallback: same last name + cohort (handles nickname variations e.g. Harry → Harrison)
   if (!player) {
     const { data: fuzzy } = await supabase
       .from("players")
@@ -537,7 +716,6 @@ export async function lookupPlayerByName(params: {
     const candidates = (fuzzy ?? []) as any[];
     if (candidates.length > 0) {
       const firstLower = firstTrimmed.toLowerCase();
-      // Prefer a candidate whose first name starts with the same 3+ characters
       player =
         candidates.find(
           (p) =>
@@ -549,7 +727,6 @@ export async function lookupPlayerByName(params: {
 
   if (!player) return { found: false };
 
-  // If the player already has a jersey, find the inventory row ID for it
   let previousInventoryId: string | null = null;
   if (player.final_shirt) {
     const { data: invData } = await supabase
@@ -580,7 +757,6 @@ export async function reserveNumberForPurchase(input: {
   yearOfBirth: number;
   teamId?: string | null;
   expiresMinutes?: number;
-  // Player identity fields (new)
   playerFirstName?: string;
   playerLastName?: string;
   isNewPlayer?: boolean | null;
@@ -593,12 +769,6 @@ export async function reserveNumberForPurchase(input: {
   pendingAllocationId?: string;
   inventoryId?: string;
 }> {
-  // Atomic, race-safe reservation: a single Postgres transaction locks one
-  // Available inventory row (SKIP LOCKED), allocates it, creates the pending
-  // allocation, and logs the audit event. Two simultaneous shoppers can no
-  // longer be sold the same physical jersey.
-  // Player identity fields are passed directly into the RPC so they're written
-  // atomically in the same transaction — no separate UPDATE needed (and no RLS risk).
   const { data, error } = await supabase.rpc("reserve_jersey", {
     p_club_id: input.clubId,
     p_jersey_number: input.jerseyNumber,
@@ -627,7 +797,8 @@ export async function reserveNumberForPurchase(input: {
   if (!row?.pending_allocation_id) {
     return {
       success: false,
-      message: "That number/size was just taken or is out of stock. Please pick another.",
+      message:
+        "That number/size was just taken or is out of stock. Please pick another.",
     };
   }
 
@@ -660,7 +831,10 @@ export async function returnJerseyToStock(
 
   const row = (data ?? [])[0];
   if (!row) {
-    return { success: false, message: "No matching inventory row found. Nothing to return." };
+    return {
+      success: false,
+      message: "No matching inventory row found. Nothing to return.",
+    };
   }
 
   const inventoryId = row.id as string;
@@ -677,7 +851,10 @@ export async function returnJerseyToStock(
 
   if (updateError) {
     console.error("returnJerseyToStock update error", updateError);
-    return { success: false, message: "Failed to update inventory while returning jersey." };
+    return {
+      success: false,
+      message: "Failed to update inventory while returning jersey.",
+    };
   }
 
   await logAllocationEvent({
@@ -689,5 +866,8 @@ export async function returnJerseyToStock(
     note: "Warehouse return to stock",
   });
 
-  return { success: true, message: `Jersey #${jerseyNumber} (${size}) marked Available.` };
+  return {
+    success: true,
+    message: `Jersey #${jerseyNumber} (${size}) marked Available.`,
+  };
 }
