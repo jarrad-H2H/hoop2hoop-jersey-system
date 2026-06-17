@@ -55,6 +55,19 @@ function dedupScore(p: ParsedPlayer): number {
   return score;
 }
 
+// ─── Club name overrides ──────────────────────────────────────────────────────
+// Corrects known BC typos and maps stray team names back to the right club.
+// Keys are UPPERCASE (matching is done after .toUpperCase()).
+const CLUB_NAME_OVERRIDES: Record<string, string> = {
+  VARSTIY: "Varsity",       // BC typo — should be VARSITY
+  COPPERHEADS: "Varsity",   // Varsity Copperheads team; some rows omit the "VARSITY" prefix
+};
+
+function normalizeClubName(raw: string): string {
+  const upper = raw.trim().toUpperCase();
+  return CLUB_NAME_OVERRIDES[upper] ?? raw.trim();
+}
+
 // ─── Team field parsing ───────────────────────────────────────────────────────
 function looksLikeTeamCode(token: string): boolean {
   return /^(\d{1,2}|[JOS])[A-Z]{1,2}\d/i.test(token);
@@ -188,7 +201,7 @@ const Importer: React.FC = () => {
           bcPlayerId,
           firstName,
           lastName,
-          clubName: clubName.trim(),
+          clubName: normalizeClubName(clubName),
           teamRaw,
           divisionCode,
           teamName,
