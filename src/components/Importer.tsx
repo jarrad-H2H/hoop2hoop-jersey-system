@@ -226,10 +226,11 @@ const Importer: React.FC = () => {
         new Set(parsed.map((r) => r.clubName).filter(Boolean))
       );
 
-      const { data: existingClubs, error: clubsError } = await supabase
+      // Case-insensitive club lookup — fetch all clubs and match by lowercased name
+      // so "BLADES" matches existing "Blades", "HEAT" matches "Heat", etc.
+      const { data: allClubs, error: clubsError } = await supabase
         .from("clubs")
-        .select("id, name")
-        .in("name", uniqueClubNames);
+        .select("id, name");
 
       if (clubsError) {
         setErrorMessage("Failed to load clubs from database.");
@@ -237,8 +238,16 @@ const Importer: React.FC = () => {
         return;
       }
 
-      const clubMap = new Map<string, string>();
-      for (const c of existingClubs ?? []) clubMap.set(c.name, c.id);
+      // Build case-insensitive map: lowercase name → { id, canonical name }
+      const clubMapByLower = new Map<string, { id: string; name: string }>();
+      for (const c of allClubs ?? []) clubMapByLower.set(c.name.toLowerCase(), { id: c.id, name: c.name });
+
+      // Map each imported club name to an existing club id (case-insensitive)
+      const clubMap = new Map<string, string>(); // importedName → club id
+      for (const name of uniqueClubNames) {
+        const match = clubMapByLower.get(name.toLowerCase());
+        if (match) clubMap.set(name, match.id);
+      }
 
       const newClubs = uniqueClubNames.filter((n) => !clubMap.has(n) && n.length > 0);
       setNewClubNames(newClubs);
