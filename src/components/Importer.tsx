@@ -87,8 +87,10 @@ function dedupScore(p: ParsedPlayer): number {
 
 // ─── Club name overrides ──────────────────────────────────────────────────────
 const CLUB_NAME_OVERRIDES: Record<string, string> = {
-  VARSTIY: "Varsity",
+  VARSTIY: "Varsity",   // typo variant
+  VARSITY: "Varsity",   // all-caps variant
   COPPERHEADS: "Varsity",
+  "KING'S": "King's",  // case variants
 };
 
 function normalizeClubName(raw: string): string {
