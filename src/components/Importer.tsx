@@ -1,9 +1,14 @@
 // FILE: src/components/Importer.tsx
-import React, { useState, ChangeEvent } from "react";
+import React, { useState, useEffect, ChangeEvent } from "react";
 import { supabase } from "../services/supabase";
 
 type ParsingStrategy = "north_gc" | "gold_coast";
 type ImportMode = "upsert" | "replace";
+
+interface Competition {
+  id: string;
+  name: string;
+}
 
 interface RawRow {
   [key: string]: string;
@@ -21,9 +26,9 @@ interface ParsedPlayer {
   ageGroupRaw: string;           // raw BC value
   divisionGrade: string;
   finalShirt: number | null;
-  borrowingDivision: string | null; // normalised age group borrowed INTO (null if not borrowed)
+  borrowingDivision: string | null;
   isBorrowed: boolean;
-  playing: string;               // "1", "0", or "" — used for dedup priority only
+  playing: string;
 }
 
 interface PreviewRow extends ParsedPlayer {
@@ -43,10 +48,35 @@ function normalizeAgeGroup(raw: string): string {
   return raw.trim();
 }
 
-// ─── Dedup priority score (lower = higher priority) ──────────────────────────
-// 1. Has a real shirt number (0 is real)
-// 2. Not a borrowed row (home team data is preferred)
-// 3. playing=1 over playing=0 or empty
+// ─── Gender from division code + raw age group string ────────────────────────
+// Returns 'Male' | 'Female' | 'Mixed' | null (unknown)
+function parseGenderFromDivision(
+  divisionCode: string | null,
+  ageGroupRaw: string
+): string | null {
+  const s = `${divisionCode ?? ""} ${ageGroupRaw}`.toUpperCase();
+  if (/MIXED|MIX(\b|$)|\bJMC\b/.test(s)) return "Mixed";
+  // Female: digit followed by G (e.g. "16G", "10G"), or keyword
+  if (/\d+G[\W._]|\d+G$|\bJGC?\b|GIRL|FEMALE|WOMEN/.test(s)) return "Female";
+  // Male: digit followed by B (e.g. "16B", "10B"), or keyword
+  if (/\d+B[\W._]|\d+B$|\bJBC?\b|BOY|\bMALE\b|\bMEN\b/.test(s)) return "Male";
+  return null;
+}
+
+// ─── Age group from division code (for teams table) ──────────────────────────
+// Extracts "U16" from "16B.2", "U10" from "10G.1", etc.
+function parseAgeGroupFromCode(divisionCode: string | null): string | null {
+  if (!divisionCode) return null;
+  const numMatch = divisionCode.match(/^(\d{1,2})[A-Z]/);
+  if (numMatch) return `U${numMatch[1]}`;
+  const uMatch = divisionCode.match(/^U(\d{1,2})/i);
+  if (uMatch) return `U${uMatch[1]}`;
+  if (/^(JB|JG|JMC|JGC|JBC)/i.test(divisionCode)) return "Junior";
+  if (/^(SLG|OPEN)/i.test(divisionCode)) return "Open";
+  return null;
+}
+
+// ─── Dedup priority score ─────────────────────────────────────────────────────
 function dedupScore(p: ParsedPlayer): number {
   let score = 0;
   if (p.finalShirt === null) score += 100;
@@ -56,11 +86,9 @@ function dedupScore(p: ParsedPlayer): number {
 }
 
 // ─── Club name overrides ──────────────────────────────────────────────────────
-// Corrects known BC typos and maps stray team names back to the right club.
-// Keys are UPPERCASE (matching is done after .toUpperCase()).
 const CLUB_NAME_OVERRIDES: Record<string, string> = {
-  VARSTIY: "Varsity",       // BC typo — should be VARSITY
-  COPPERHEADS: "Varsity",   // Varsity Copperheads team; some rows omit the "VARSITY" prefix
+  VARSTIY: "Varsity",
+  COPPERHEADS: "Varsity",
 };
 
 function normalizeClubName(raw: string): string {
@@ -69,18 +97,12 @@ function normalizeClubName(raw: string): string {
 }
 
 // ─── Multi-word club prefixes ─────────────────────────────────────────────────
-// Club names that are more than one word. When the raw team string starts with
-// one of these (case-insensitive), the full prefix is used as the club name and
-// the remainder becomes the team name — instead of splitting on the first word.
-// Add entries here whenever a new multi-word club is introduced.
 const MULTI_WORD_CLUB_PREFIXES: string[] = [
   "EMMANUEL COLLEGE",
   "GOLD COAST BASKETBALL",
   "NORTH GOLD COAST SEAHAWKS",
 ];
 
-// Returns [clubName, remainder] if the raw string starts with a known multi-word
-// club prefix, otherwise returns null.
 function matchMultiWordClub(raw: string): [string, string] | null {
   const upper = raw.trim().toUpperCase();
   for (const prefix of MULTI_WORD_CLUB_PREFIXES) {
@@ -108,15 +130,11 @@ function deriveTeamFields(
   if (parts.length === 0) return { clubName: "", divisionCode: null, teamName: null };
 
   if (strategy === "north_gc") {
-    // "Warriors 16B.2" → club=Warriors, division=16B.2
     const clubName = parts[0] ?? "";
     const divisionCode = parts.slice(1).join(" ") || null;
     return { clubName, divisionCode, teamName: null };
   }
 
-  // gold_coast: "JGC1 HEAT BLAZES"       → division=JGC1, club=HEAT, team=BLAZES
-  //             "BLADES ASSASSINS"        → club=BLADES, team=ASSASSINS (no division code)
-  //             "EMMANUEL COLLEGE WHITE"  → club=Emmanuel College, team=WHITE
   if (looksLikeTeamCode(parts[0])) {
     const divisionCode = parts[0];
     const remainder = parts.slice(1).join(" ");
@@ -161,10 +179,15 @@ const Importer: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [parsingStrategy, setParsingStrategy] = useState<ParsingStrategy>("north_gc");
   const [importMode, setImportMode] = useState<ImportMode>("upsert");
-  const [competitionSource, setCompetitionSource] = useState("");
+
+  // Competition selector
+  const [competitions, setCompetitions] = useState<Competition[]>([]);
+  const [selectedCompetitionId, setSelectedCompetitionId] = useState<string>("");
+  const [newCompetitionName, setNewCompetitionName] = useState<string>("");
+  const [loadingCompetitions, setLoadingCompetitions] = useState(false);
+
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [newClubNames, setNewClubNames] = useState<string[]>([]);
-  const [skippedCount, setSkippedCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -174,25 +197,59 @@ const Importer: React.FC = () => {
   const [resetStatus, setResetStatus] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
 
+  // Derived: is the user creating a new competition?
+  const isCreatingNew = selectedCompetitionId === "__new__";
+
+  // Derived: the competition name for labelling (used as competition_source on players)
+  const competitionLabel = isCreatingNew
+    ? newCompetitionName.trim()
+    : (competitions.find((c) => c.id === selectedCompetitionId)?.name ?? "");
+
+  // ── Load competitions on mount ──────────────────────────────────────────────
+  useEffect(() => {
+    const load = async () => {
+      setLoadingCompetitions(true);
+      const { data, error } = await supabase
+        .from("competitions")
+        .select("id, name")
+        .order("name", { ascending: true });
+      if (!error) setCompetitions((data ?? []) as Competition[]);
+      setLoadingCompetitions(false);
+    };
+    void load();
+  }, []);
+
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
     setFile(f);
     setPreviewRows([]);
     setNewClubNames([]);
-    setSkippedCount(0);
     setStatusMessage(null);
     setErrorMessage(null);
   };
 
+  // ── Validate competition selection ─────────────────────────────────────────
+  const validateCompetition = (): boolean => {
+    if (!selectedCompetitionId) {
+      setErrorMessage("Please select a competition or choose 'Create new'.");
+      return false;
+    }
+    if (isCreatingNew && !newCompetitionName.trim()) {
+      setErrorMessage("Please enter a name for the new competition.");
+      return false;
+    }
+    return true;
+  };
+
+  // ── Preview ────────────────────────────────────────────────────────────────
   const handlePreview = async () => {
     setStatusMessage(null);
     setErrorMessage(null);
     setPreviewRows([]);
     setNewClubNames([]);
-    setSkippedCount(0);
 
     if (!file) { setErrorMessage("Please select a CSV file first."); return; }
-    if (!competitionSource.trim()) { setErrorMessage("Please enter a competition / season label."); return; }
+    if (!validateCompetition()) return;
 
     setLoading(true);
     try {
@@ -201,18 +258,14 @@ const Importer: React.FC = () => {
 
       if (rawRows.length === 0) {
         setErrorMessage("No data rows found in CSV.");
-        setLoading(false);
         return;
       }
 
-      // Parse ALL rows — no playing filter. Dedup handles priority.
       const seenBcIds = new Map<string, ParsedPlayer>();
       const noBcIdRows: ParsedPlayer[] = [];
 
       for (const row of rawRows) {
-        const teamRaw = (
-          row["Played For (Team)"] ?? row["playedForTeam"] ?? ""
-        ).trim();
+        const teamRaw = (row["Played For (Team)"] ?? row["playedForTeam"] ?? "").trim();
         const { clubName, divisionCode, teamName } = deriveTeamFields(teamRaw, parsingStrategy);
 
         const bcPlayerId = (row["Player Id"] ?? row["Player ID"] ?? "").trim();
@@ -228,11 +281,12 @@ const Importer: React.FC = () => {
         const divisionGrade = (row["playerDivisionGrade"] ?? "").trim();
         const playing = (row["playing"] ?? "").trim();
 
-        // Detect genuine borrowing: borrowing division differs from current division
         const currentDiv = (row["Current Team Division"] ?? "").trim().toUpperCase();
         const borrowingDiv = (row["Borrowing Team Division"] ?? "").trim().toUpperCase();
         const isBorrowed = borrowingDiv.length > 0 && borrowingDiv !== currentDiv;
-        const borrowingDivision = isBorrowed ? normalizeAgeGroup(row["Borrowing Team Division"] ?? "") : null;
+        const borrowingDivision = isBorrowed
+          ? normalizeAgeGroup(row["Borrowing Team Division"] ?? "")
+          : null;
 
         const player: ParsedPlayer = {
           bcPlayerId,
@@ -268,7 +322,6 @@ const Importer: React.FC = () => {
 
       if (parsed.length === 0) {
         setErrorMessage("No player rows found after parsing. Check the CSV format.");
-        setLoading(false);
         return;
       }
 
@@ -276,24 +329,20 @@ const Importer: React.FC = () => {
         new Set(parsed.map((r) => r.clubName).filter(Boolean))
       );
 
-      // Case-insensitive club lookup — fetch all clubs and match by lowercased name
-      // so "BLADES" matches existing "Blades", "HEAT" matches "Heat", etc.
       const { data: allClubs, error: clubsError } = await supabase
         .from("clubs")
         .select("id, name");
 
       if (clubsError) {
         setErrorMessage("Failed to load clubs from database.");
-        setLoading(false);
         return;
       }
 
-      // Build case-insensitive map: lowercase name → { id, canonical name }
       const clubMapByLower = new Map<string, { id: string; name: string }>();
-      for (const c of allClubs ?? []) clubMapByLower.set(c.name.toLowerCase(), { id: c.id, name: c.name });
+      for (const c of allClubs ?? [])
+        clubMapByLower.set(c.name.toLowerCase(), { id: c.id, name: c.name });
 
-      // Map each imported club name to an existing club id (case-insensitive)
-      const clubMap = new Map<string, string>(); // importedName → club id
+      const clubMap = new Map<string, string>();
       for (const name of uniqueClubNames) {
         const match = clubMapByLower.get(name.toLowerCase());
         if (match) clubMap.set(name, match.id);
@@ -311,21 +360,27 @@ const Importer: React.FC = () => {
       setPreviewRows(preview);
 
       const totalRaw = rawRows.length;
-      const uniquePlayers = preview.length;
       const borrowedCount = preview.filter((r) => r.borrowingDivision).length;
       const noShirtCount = preview.filter((r) => r.finalShirt === null).length;
 
+      // Count unique teams in this import
+      const uniqueTeams = new Set(
+        preview.map((r) => `${r.clubName}::${r.divisionCode ?? r.teamRaw}`)
+      ).size;
+
       setStatusMessage(
-        `Preview ready: ${uniquePlayers} unique players from ${totalRaw} rows` +
-          (borrowedCount > 0 ? `, ${borrowedCount} borrow across age groups` : "") +
-          (noShirtCount > 0 ? `, ${noShirtCount} with no shirt number` : "") +
+        `Preview ready: ${preview.length} unique players (${totalRaw} raw rows), ` +
+          `${uniqueTeams} teams` +
+          (borrowedCount > 0 ? `, ${borrowedCount} cross-age borrows` : "") +
+          (noShirtCount > 0 ? `, ${noShirtCount} without shirt #` : "") +
           "." +
           (newClubs.length > 0
-            ? ` ${newClubs.length} new club(s) will be auto-created on commit.`
+            ? ` ${newClubs.length} new club(s) will be auto-created.`
             : " All clubs already in database.") +
           (importMode === "replace"
             ? " ⚠ Replace mode: existing players for these clubs will be deleted first."
-            : "")
+            : "") +
+          ` Competition: "${competitionLabel}".`
       );
     } catch (err: any) {
       setErrorMessage(err.message ?? "Unexpected error during preview.");
@@ -334,6 +389,7 @@ const Importer: React.FC = () => {
     }
   };
 
+  // ── Commit ─────────────────────────────────────────────────────────────────
   const handleCommit = async () => {
     setStatusMessage(null);
     setErrorMessage(null);
@@ -342,9 +398,34 @@ const Importer: React.FC = () => {
       setErrorMessage("No preview rows to commit. Run Preview first.");
       return;
     }
+    if (!validateCompetition()) return;
 
     setLoading(true);
     try {
+      // ── Step 1: Resolve competition ID ──────────────────────────────────────
+      let competitionId = selectedCompetitionId === "__new__" ? "" : selectedCompetitionId;
+
+      if (isCreatingNew) {
+        const name = newCompetitionName.trim();
+        const { data: created, error: compErr } = await supabase
+          .from("competitions")
+          .insert({ name })
+          .select("id, name")
+          .single();
+
+        if (compErr) {
+          setErrorMessage(`Failed to create competition: ${compErr.message}`);
+          return;
+        }
+        competitionId = created.id;
+        setCompetitions((prev) => [...prev, { id: created.id, name: created.name }]);
+        setSelectedCompetitionId(created.id);
+        setNewCompetitionName("");
+      }
+
+      const season = competitionLabel; // competition name used as competition_source on players
+
+      // ── Step 2: Resolve clubs (create new if needed) ───────────────────────
       const clubMap = new Map<string, string>();
       for (const row of previewRows) {
         if (row.clubId) clubMap.set(row.clubName, row.clubId);
@@ -358,12 +439,12 @@ const Importer: React.FC = () => {
 
         if (createErr) {
           setErrorMessage(`Failed to create new clubs: ${createErr.message}`);
-          setLoading(false);
           return;
         }
         for (const c of created ?? []) clubMap.set(c.name, c.id);
       }
 
+      // ── Step 3: Replace mode — clear existing players ──────────────────────
       if (importMode === "replace") {
         const allClubIds = Array.from(
           new Set(
@@ -380,14 +461,12 @@ const Importer: React.FC = () => {
 
           if (delErr) {
             setErrorMessage(`Failed to clear existing players: ${delErr.message}`);
-            setLoading(false);
             return;
           }
         }
       }
 
-      const season = competitionSource.trim();
-
+      // ── Step 4: Upsert players ─────────────────────────────────────────────
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
       if (withBcId.length > 0) {
         const upsertPayload = withBcId.map((r) => ({
@@ -412,8 +491,7 @@ const Importer: React.FC = () => {
           .upsert(upsertPayload, { onConflict: "bc_player_id", ignoreDuplicates: false });
 
         if (upsertErr) {
-          setErrorMessage(`Upsert failed: ${upsertErr.message}`);
-          setLoading(false);
+          setErrorMessage(`Player upsert failed: ${upsertErr.message}`);
           return;
         }
       }
@@ -437,17 +515,82 @@ const Importer: React.FC = () => {
 
         const { error: insertErr } = await supabase.from("players").insert(insertPayload);
         if (insertErr) {
-          setErrorMessage(`Insert failed: ${insertErr.message}`);
-          setLoading(false);
+          setErrorMessage(`Player insert failed: ${insertErr.message}`);
           return;
         }
       }
 
+      // ── Step 5: Upsert teams with competition_id, age_group, gender ────────
+      // Collect unique (club, divisionCode) combinations from this import.
+      type TeamRow = {
+        clubId: string;
+        divisionCode: string;
+        ageGroup: string | null;
+        gender: string | null;
+      };
+
+      const teamMap = new Map<string, TeamRow>();
+      for (const r of previewRows) {
+        const clubId = clubMap.get(r.clubName) ?? r.clubId;
+        if (!clubId) continue;
+        const code = r.divisionCode ?? r.teamName ?? r.teamRaw;
+        if (!code) continue;
+        const key = `${clubId}::${code}`;
+        if (!teamMap.has(key)) {
+          teamMap.set(key, {
+            clubId,
+            divisionCode: code,
+            ageGroup: parseAgeGroupFromCode(r.divisionCode) ?? (r.ageGroup || null),
+            gender: parseGenderFromDivision(r.divisionCode, r.ageGroupRaw),
+          });
+        }
+      }
+
+      const teamRows = Array.from(teamMap.values());
+
+      if (teamRows.length > 0 && competitionId) {
+        // Clear existing teams for these clubs in this competition (fresh import)
+        const affectedClubIds = Array.from(new Set(teamRows.map((t) => t.clubId)));
+
+        // Delete teams linked to this competition for affected clubs
+        const { error: delTeamsErr } = await supabase
+          .from("teams")
+          .delete()
+          .eq("competition_id", competitionId)
+          .in("club_id_uuid", affectedClubIds);
+
+        if (delTeamsErr) {
+          console.warn("teams delete warning:", delTeamsErr.message);
+          // Non-fatal — continue with insert
+        }
+
+        const teamInsertPayload = teamRows.map((t) => ({
+          id: `t_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          club_id: t.clubId, // text FK (legacy)
+          club_id_uuid: t.clubId,
+          name: t.divisionCode,
+          age_group: t.ageGroup ?? "N/A",
+          gender: t.gender ?? "Unknown",
+          competition_id: competitionId,
+        }));
+
+        const { error: teamInsertErr } = await supabase
+          .from("teams")
+          .insert(teamInsertPayload);
+
+        if (teamInsertErr) {
+          console.warn("teams insert warning:", teamInsertErr.message);
+          // Non-fatal — players are imported successfully
+        }
+      }
+
+      // ── Done ───────────────────────────────────────────────────────────────
       const parts: string[] = [];
       if (importMode === "replace") parts.push("existing players cleared");
-      if (withBcId.length > 0) parts.push(`${withBcId.length} players upserted (by BC Player ID)`);
-      if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} inserted (no BC Player ID)`);
-      if (newClubNames.length > 0) parts.push(`${newClubNames.length} new club(s) created`);
+      if (withBcId.length > 0) parts.push(`${withBcId.length} players upserted`);
+      if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} players inserted`);
+      if (newClubNames.length > 0) parts.push(`${newClubNames.length} club(s) created`);
+      if (teamRows.length > 0) parts.push(`${teamRows.length} teams linked to "${season}"`);
 
       setStatusMessage("Import complete: " + parts.join(", ") + ".");
       setPreviewRows([]);
@@ -459,6 +602,7 @@ const Importer: React.FC = () => {
     }
   };
 
+  // ── Full data reset ────────────────────────────────────────────────────────
   const handleFullReset = async () => {
     if (resetConfirm !== "RESET") { setResetError("Type RESET to confirm."); return; }
     setResetLoading(true);
@@ -466,16 +610,21 @@ const Importer: React.FC = () => {
     setResetError(null);
 
     try {
-      const tables = ["orders", "pending_allocations", "allocations", "inventory", "players"];
+      const tables = ["orders", "pending_allocations", "allocations", "inventory", "players", "teams"];
       for (const table of tables) {
-        const { error } = await supabase.from(table).delete().neq("id", "00000000-0000-0000-0000-000000000000");
+        const { error } = await supabase
+          .from(table)
+          .delete()
+          .neq("id", "00000000-0000-0000-0000-000000000000");
         if (error) {
           setResetError(`Failed to clear ${table}: ${error.message}`);
           setResetLoading(false);
           return;
         }
       }
-      setResetStatus("All player, inventory, allocation, and order data cleared. Clubs and settings retained.");
+      setResetStatus(
+        "All player, inventory, allocation, order, and team data cleared. Clubs, competitions, and settings retained."
+      );
       setResetConfirm("");
     } catch (err: any) {
       setResetError(err.message ?? "Unexpected error during reset.");
@@ -484,19 +633,20 @@ const Importer: React.FC = () => {
     }
   };
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-8">
       <div>
         <h2 className="text-2xl font-bold mb-2">Game Log Importer</h2>
         <p className="text-gray-600 text-sm">
-          Import Basketball Connect game log exports. All rows are imported and deduplicated
-          by BC Player ID — home team rows are preferred over borrowed rows, and rows with a
-          shirt number are preferred over those without. Age group codes are normalised
-          (e.g. "UNDER 14 BOYS" → "U14").
+          Import Basketball Connect game log exports. Players are deduplicated by BC Player ID.
+          Teams are linked to the selected competition with parsed age group and gender.
         </p>
       </div>
 
       <div className="bg-white rounded-xl shadow p-6 max-w-2xl space-y-4">
+
+        {/* CSV file */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             CSV File (Basketball Connect game log export)
@@ -511,20 +661,50 @@ const Importer: React.FC = () => {
           />
         </div>
 
+        {/* Competition selector */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Competition / Season Label
+            Competition
           </label>
-          <input
-            type="text"
-            value={competitionSource}
-            onChange={(e) => setCompetitionSource(e.target.value)}
-            placeholder="e.g. Gold Coast 2026 Winter Rd1"
-            className="w-full px-3 py-2 border rounded-md text-sm border-gray-300
-                       focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
+          {loadingCompetitions ? (
+            <p className="text-sm text-gray-400">Loading competitions…</p>
+          ) : (
+            <select
+              value={selectedCompetitionId}
+              onChange={(e) => {
+                setSelectedCompetitionId(e.target.value);
+                setNewCompetitionName("");
+              }}
+              className="w-full px-3 py-2 border rounded-md text-sm border-gray-300
+                         focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="">— Select competition —</option>
+              {competitions.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+              <option value="__new__">+ Create new competition…</option>
+            </select>
+          )}
+
+          {isCreatingNew && (
+            <input
+              type="text"
+              value={newCompetitionName}
+              onChange={(e) => setNewCompetitionName(e.target.value)}
+              placeholder="e.g. Gold Coast Basketball 2026 Summer"
+              className="mt-2 w-full px-3 py-2 border rounded-md text-sm border-indigo-300
+                         focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          )}
+
+          {selectedCompetitionId && !isCreatingNew && (
+            <p className="text-xs text-gray-500 mt-1">
+              Teams from this import will be linked to this competition.
+            </p>
+          )}
         </div>
 
+        {/* Parsing strategy */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Parsing Strategy
@@ -540,12 +720,14 @@ const Importer: React.FC = () => {
           </select>
         </div>
 
+        {/* Import mode */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Import Mode</label>
           <div className="space-y-2">
             <label className="flex items-start gap-2 cursor-pointer">
               <input type="radio" name="importMode" value="upsert"
-                checked={importMode === "upsert"} onChange={() => setImportMode("upsert")} className="mt-0.5" />
+                checked={importMode === "upsert"} onChange={() => setImportMode("upsert")}
+                className="mt-0.5" />
               <div>
                 <span className="text-sm font-medium">Upsert (merge)</span>
                 <p className="text-xs text-gray-500">Update existing players by BC Player ID. Safe to re-run.</p>
@@ -553,7 +735,8 @@ const Importer: React.FC = () => {
             </label>
             <label className="flex items-start gap-2 cursor-pointer">
               <input type="radio" name="importMode" value="replace"
-                checked={importMode === "replace"} onChange={() => setImportMode("replace")} className="mt-0.5" />
+                checked={importMode === "replace"} onChange={() => setImportMode("replace")}
+                className="mt-0.5" />
               <div>
                 <span className="text-sm font-medium text-amber-700">Replace (clear first)</span>
                 <p className="text-xs text-gray-500">Deletes all players for clubs in this file, then inserts fresh.</p>
@@ -564,23 +747,30 @@ const Importer: React.FC = () => {
 
         {importMode === "replace" && (
           <div className="text-sm text-amber-700 bg-amber-50 border border-amber-300 rounded-md px-3 py-2">
-            ⚠ Replace mode will permanently delete all player records for clubs in this import file. This cannot be undone.
+            ⚠ Replace mode will permanently delete all player records for clubs in this import. This cannot be undone.
           </div>
         )}
 
+        {/* Buttons */}
         <div className="flex gap-3">
-          <button onClick={handlePreview} disabled={loading || !file}
+          <button
+            onClick={handlePreview}
+            disabled={loading || !file}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white
-                        ${loading || !file ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`}>
+                        ${loading || !file ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`}
+          >
             {loading ? "Working…" : "Preview Import"}
           </button>
-          <button onClick={handleCommit} disabled={loading || previewRows.length === 0}
+          <button
+            onClick={handleCommit}
+            disabled={loading || previewRows.length === 0}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white
                         ${loading || previewRows.length === 0
                           ? "bg-gray-300 cursor-not-allowed"
                           : importMode === "replace"
                           ? "bg-amber-600 hover:bg-amber-700"
-                          : "bg-emerald-600 hover:bg-emerald-700"}`}>
+                          : "bg-emerald-600 hover:bg-emerald-700"}`}
+          >
             {importMode === "replace" ? "Replace & Import" : "Commit Import"}
           </button>
         </div>
@@ -604,6 +794,7 @@ const Importer: React.FC = () => {
         )}
       </div>
 
+      {/* Preview table */}
       {previewRows.length > 0 && (
         <div className="bg-white rounded-xl shadow p-4 max-h-96 overflow-auto">
           <table className="min-w-full text-xs">
@@ -614,65 +805,79 @@ const Importer: React.FC = () => {
                 <th className="text-left px-2 py-1 border-b">First</th>
                 <th className="text-left px-2 py-1 border-b">Last</th>
                 <th className="text-left px-2 py-1 border-b">Division</th>
-                <th className="text-left px-2 py-1 border-b">Team Name</th>
-                <th className="text-left px-2 py-1 border-b">Age Group</th>
-                <th className="text-left px-2 py-1 border-b">Raw Division</th>
-                <th className="text-left px-2 py-1 border-b">Borrows To</th>
+                <th className="text-left px-2 py-1 border-b">Team</th>
+                <th className="text-left px-2 py-1 border-b">Age Grp</th>
+                <th className="text-left px-2 py-1 border-b">Gender</th>
+                <th className="text-left px-2 py-1 border-b">Borrows</th>
                 <th className="text-left px-2 py-1 border-b">Shirt #</th>
               </tr>
             </thead>
             <tbody>
-              {previewRows.map((row, idx) => (
-                <tr key={idx} className={`odd:bg-white even:bg-gray-50 ${row.isNewClub ? "text-amber-700" : ""}`}>
-                  <td className="px-2 py-1 border-b font-mono text-gray-500">{row.bcPlayerId || "—"}</td>
-                  <td className="px-2 py-1 border-b">
-                    {row.clubName}
-                    {row.isNewClub && <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1 rounded">new</span>}
-                  </td>
-                  <td className="px-2 py-1 border-b">{row.firstName}</td>
-                  <td className="px-2 py-1 border-b">{row.lastName}</td>
-                  <td className="px-2 py-1 border-b font-mono">{row.divisionCode ?? "—"}</td>
-                  <td className="px-2 py-1 border-b">{row.teamName ?? "—"}</td>
-                  <td className="px-2 py-1 border-b font-semibold">{row.ageGroup}</td>
-                  <td className="px-2 py-1 border-b text-gray-400">{row.ageGroupRaw}</td>
-                  <td className="px-2 py-1 border-b">
-                    {row.borrowingDivision
-                      ? <span className="text-purple-600 font-semibold">{row.borrowingDivision}</span>
-                      : <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="px-2 py-1 border-b">
-                    {row.finalShirt !== null ? row.finalShirt : <span className="text-gray-300">—</span>}
-                  </td>
-                </tr>
-              ))}
+              {previewRows.map((row, idx) => {
+                const gender = parseGenderFromDivision(row.divisionCode, row.ageGroupRaw);
+                return (
+                  <tr key={idx} className={`odd:bg-white even:bg-gray-50 ${row.isNewClub ? "text-amber-700" : ""}`}>
+                    <td className="px-2 py-1 border-b font-mono text-gray-500">{row.bcPlayerId || "—"}</td>
+                    <td className="px-2 py-1 border-b">
+                      {row.clubName}
+                      {row.isNewClub && <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1 rounded">new</span>}
+                    </td>
+                    <td className="px-2 py-1 border-b">{row.firstName}</td>
+                    <td className="px-2 py-1 border-b">{row.lastName}</td>
+                    <td className="px-2 py-1 border-b font-mono">{row.divisionCode ?? "—"}</td>
+                    <td className="px-2 py-1 border-b">{row.teamName ?? "—"}</td>
+                    <td className="px-2 py-1 border-b font-semibold">{row.ageGroup}</td>
+                    <td className="px-2 py-1 border-b">
+                      {gender === "Male" && <span className="text-blue-600">♂ Male</span>}
+                      {gender === "Female" && <span className="text-pink-600">♀ Female</span>}
+                      {gender === "Mixed" && <span className="text-purple-600">⚥ Mixed</span>}
+                      {!gender && <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-2 py-1 border-b">
+                      {row.borrowingDivision
+                        ? <span className="text-purple-600 font-semibold">{row.borrowingDivision}</span>
+                        : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-2 py-1 border-b">
+                      {row.finalShirt !== null ? row.finalShirt : <span className="text-gray-300">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
+      {/* Full data reset */}
       <div className="bg-white rounded-xl shadow p-6 max-w-2xl border border-red-200">
         <h3 className="text-base font-bold text-red-700 mb-1">Full Data Reset</h3>
         <p className="text-sm text-gray-600 mb-4">
-          Permanently deletes all <strong>players, inventory, allocations, pending allocations,
-          and orders</strong>. Clubs and club settings are retained.
+          Permanently deletes all <strong>players, teams, inventory, allocations, pending allocations,
+          and orders</strong>. Clubs, competitions, and settings are retained.
         </p>
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Type <code className="bg-gray-100 px-1 rounded">RESET</code> to confirm
             </label>
-            <input type="text" value={resetConfirm}
+            <input
+              type="text"
+              value={resetConfirm}
               onChange={(e) => setResetConfirm(e.target.value)}
               placeholder="RESET"
               className="w-full px-3 py-2 border border-red-300 rounded-md text-sm
-                         focus:outline-none focus:ring-2 focus:ring-red-500" />
+                         focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
           </div>
-          <button onClick={handleFullReset}
+          <button
+            onClick={handleFullReset}
             disabled={resetLoading || resetConfirm !== "RESET"}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white
                         ${resetLoading || resetConfirm !== "RESET"
                           ? "bg-red-200 cursor-not-allowed"
-                          : "bg-red-600 hover:bg-red-700"}`}>
+                          : "bg-red-600 hover:bg-red-700"}`}
+          >
             {resetLoading ? "Resetting…" : "Reset All Data"}
           </button>
           {resetStatus && (
