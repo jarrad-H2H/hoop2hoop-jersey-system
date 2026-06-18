@@ -106,11 +106,11 @@ const Players: React.FC = () => {
     loadPlayers();
   }, [selectedClubId]);
 
-  // Derive a display label for a player's team: prefer division_code, fall back to team_name
+  // Derive a display label for a player's team: prefer team_name, fall back to division_code
   const teamLabel = (p: PlayerRow): string | null =>
-    p.division_code ?? p.team_name ?? null;
+    p.team_name ?? p.division_code ?? null;
 
-  // Distinct teams for dropdown (using division_code ?? team_name)
+  // Distinct teams for dropdown (using team_name ?? division_code)
   const teamsForClub = useMemo(() => {
     const set = new Set<string>();
     players.forEach((p) => {
