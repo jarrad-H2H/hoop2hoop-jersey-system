@@ -16,6 +16,7 @@ import StockPlanner from "./pages/StockPlanner";
 import BulkStockUpload from "./pages/BulkStockUpload";
 import ProductClubMapping from "./pages/ProductClubMapping";
 import SalesHistory from "./pages/SalesHistory";
+import CompetitionGenderAdmin from "./pages/CompetitionGenderAdmin";
 
 // Components
 import Importer from "./components/Importer";
@@ -49,6 +50,7 @@ const AppRouter: React.FC = () => {
         <Route path="allocation-history" element={<AllocationHistory />} />
         <Route path="importer" element={<Importer />} />
         <Route path="settings" element={<DataSettings />} />
+        <Route path="competition-gender" element={<CompetitionGenderAdmin />} />
         <Route path="stock-planner" element={<StockPlanner />} />
         <Route path="inventory/bulk-upload/:clubId" element={<BulkStockUpload />} />
         <Route path="sales-history" element={<SalesHistory />} />
