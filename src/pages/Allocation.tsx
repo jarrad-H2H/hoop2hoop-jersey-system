@@ -76,6 +76,9 @@ const Allocation: React.FC = () => {
   const [returnBusy, setReturnBusy] = useState(false);
   const [returnMessage, setReturnMessage] = useState<string>("");
 
+  // All configured sizes for the club (used by return-to-stock dropdown)
+  const [clubSizes, setClubSizes] = useState<string[]>([]);
+
   // Exchange / swap workflow state
   const [swapSize, setSwapSize] = useState<string>("");
   const [swapNumber, setSwapNumber] = useState<string>("");
@@ -243,6 +246,30 @@ const Allocation: React.FC = () => {
     };
 
     loadPlayers();
+  }, [selectedClubId]);
+
+  // Load all configured sizes for the selected club (for return-to-stock dropdown)
+  useEffect(() => {
+    const loadClubSizes = async () => {
+      if (!selectedClubId) {
+        setClubSizes([]);
+        setReturnSize("");
+        return;
+      }
+
+      const { data } = await supabase
+        .from("club_sizes")
+        .select("size_label, sort_order")
+        .eq("club_id", selectedClubId)
+        .order("sort_order", { ascending: true })
+        .order("size_label", { ascending: true });
+
+      const labels = (data ?? []).map((r: any) => String(r.size_label ?? "")).filter(Boolean);
+      setClubSizes(labels);
+      setReturnSize(labels[0] ?? "");
+    };
+
+    void loadClubSizes();
   }, [selectedClubId]);
 
   // Clear swap suggestions when size changes
@@ -1298,13 +1325,21 @@ const Allocation: React.FC = () => {
             <label className="block text-sm font-semibold mb-1">
               Jersey Size
             </label>
-            <input
-              type="text"
+            <select
               value={returnSize}
               onChange={(e) => setReturnSize(e.target.value)}
-              placeholder="e.g. Youth 12"
               className="w-full border p-2 rounded"
-            />
+              disabled={clubSizes.length === 0}
+            >
+              {clubSizes.length === 0 && (
+                <option value="">No sizes configured for this club</option>
+              )}
+              {clubSizes.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="block text-sm font-semibold mb-1">
