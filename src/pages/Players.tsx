@@ -39,6 +39,20 @@ const Players: React.FC = () => {
   const [editingYobValue, setEditingYobValue] = useState<string>("");
   const [savingYobId, setSavingYobId] = useState<string | null>(null);
 
+  // Inline Name edit state
+  const [editingNameId, setEditingNameId] = useState<string | null>(null);
+  const [editingFirstName, setEditingFirstName] = useState<string>("");
+  const [editingLastName, setEditingLastName] = useState<string>("");
+  const [savingNameId, setSavingNameId] = useState<string | null>(null);
+
+  // Inline Number edit state
+  const [editingNumberId, setEditingNumberId] = useState<string | null>(null);
+  const [editingNumberValue, setEditingNumberValue] = useState<string>("");
+  const [savingNumberId, setSavingNumberId] = useState<string | null>(null);
+
+  // Delete state
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   // Load clubs
   useEffect(() => {
     const loadClubs = async () => {
@@ -168,7 +182,9 @@ const Players: React.FC = () => {
   const selectedClubName =
     clubs.find((c) => c.id === selectedClubId)?.name ?? "";
 
+  // --- YOB handlers ---
   const startEditYob = (p: PlayerRow) => {
+    cancelAllEdits();
     setEditingYobId(p.id);
     setEditingYobValue(p.year_of_birth != null ? String(p.year_of_birth) : "");
   };
@@ -207,6 +223,125 @@ const Players: React.FC = () => {
     } finally {
       setSavingYobId(null);
     }
+  };
+
+  // --- Name handlers ---
+  const startEditName = (p: PlayerRow) => {
+    cancelAllEdits();
+    setEditingNameId(p.id);
+    setEditingFirstName(p.first_name ?? "");
+    setEditingLastName(p.last_name ?? "");
+  };
+
+  const cancelEditName = () => {
+    setEditingNameId(null);
+    setEditingFirstName("");
+    setEditingLastName("");
+  };
+
+  const saveName = async (playerId: string) => {
+    const first = editingFirstName.trim();
+    const last = editingLastName.trim();
+    if (!first && !last) {
+      alert("Player must have at least a first or last name.");
+      return;
+    }
+
+    setSavingNameId(playerId);
+    try {
+      const { error } = await supabase
+        .from("players")
+        .update({ first_name: first, last_name: last })
+        .eq("id", playerId);
+
+      if (error) {
+        alert("Failed to save name: " + error.message);
+        return;
+      }
+
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === playerId ? { ...p, first_name: first, last_name: last } : p
+        )
+      );
+      cancelEditName();
+    } finally {
+      setSavingNameId(null);
+    }
+  };
+
+  // --- Number handlers ---
+  const startEditNumber = (p: PlayerRow) => {
+    cancelAllEdits();
+    setEditingNumberId(p.id);
+    setEditingNumberValue(p.final_shirt != null ? String(p.final_shirt) : "");
+  };
+
+  const cancelEditNumber = () => {
+    setEditingNumberId(null);
+    setEditingNumberValue("");
+  };
+
+  const saveNumber = async (playerId: string) => {
+    const trimmed = editingNumberValue.trim();
+    // Allow clearing the number
+    const parsed = trimmed === "" ? null : Number(trimmed);
+    if (trimmed !== "" && (!Number.isFinite(parsed) || (parsed as number) < 0 || (parsed as number) > 99)) {
+      alert("Please enter a jersey number between 0 and 99, or leave blank to clear.");
+      return;
+    }
+
+    setSavingNumberId(playerId);
+    try {
+      const { error } = await supabase
+        .from("players")
+        .update({ final_shirt: parsed })
+        .eq("id", playerId);
+
+      if (error) {
+        alert("Failed to save jersey number: " + error.message);
+        return;
+      }
+
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.id === playerId ? { ...p, final_shirt: parsed } : p
+        )
+      );
+      cancelEditNumber();
+    } finally {
+      setSavingNumberId(null);
+    }
+  };
+
+  // --- Delete handler ---
+  const deletePlayer = async (p: PlayerRow) => {
+    const name = `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || "this player";
+    if (!window.confirm(`Delete ${name}? This cannot be undone.`)) return;
+
+    setDeletingId(p.id);
+    try {
+      const { error } = await supabase
+        .from("players")
+        .delete()
+        .eq("id", p.id);
+
+      if (error) {
+        alert("Failed to delete player: " + error.message);
+        return;
+      }
+
+      setPlayers((prev) => prev.filter((pl) => pl.id !== p.id));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // Cancel any active inline edit
+  const cancelAllEdits = () => {
+    cancelEditYob();
+    cancelEditName();
+    cancelEditNumber();
   };
 
   return (
@@ -361,13 +496,18 @@ const Players: React.FC = () => {
                 <th className="px-3 py-2 text-left">Team</th>
                 <th className="px-3 py-2 text-left">Number</th>
                 <th className="px-3 py-2 text-left">Year of Birth</th>
-                <th className="px-3 py-2 text-left">Edit YOB</th>
+                <th className="px-3 py-2 text-left">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredPlayers.map((p) => {
                 const isEditingYob = editingYobId === p.id;
                 const isSavingYob = savingYobId === p.id;
+                const isEditingName = editingNameId === p.id;
+                const isSavingName = savingNameId === p.id;
+                const isEditingNumber = editingNumberId === p.id;
+                const isSavingNumber = savingNumberId === p.id;
+                const isDeleting = deletingId === p.id;
                 const team = teamLabel(p);
 
                 return (
@@ -375,12 +515,63 @@ const Players: React.FC = () => {
                     key={p.id}
                     className="border-t border-gray-100 odd:bg-white even:bg-gray-50"
                   >
+                    {/* Last Name */}
                     <td className="px-3 py-2 align-middle">
-                      {p.last_name || <span className="text-gray-400">—</span>}
+                      {isEditingName ? (
+                        <input
+                          type="text"
+                          value={editingLastName}
+                          onChange={(e) => setEditingLastName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") cancelEditName();
+                          }}
+                          className="w-28 border rounded px-1 py-0.5 text-xs"
+                          placeholder="Last name"
+                        />
+                      ) : (
+                        p.last_name || <span className="text-gray-400">—</span>
+                      )}
                     </td>
+
+                    {/* First Name */}
                     <td className="px-3 py-2 align-middle">
-                      {p.first_name || <span className="text-gray-400">—</span>}
+                      {isEditingName ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={editingFirstName}
+                            onChange={(e) => setEditingFirstName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveName(p.id);
+                              if (e.key === "Escape") cancelEditName();
+                            }}
+                            className="w-24 border rounded px-1 py-0.5 text-xs"
+                            placeholder="First name"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void saveName(p.id)}
+                            disabled={isSavingName}
+                            className="px-2 py-0.5 rounded bg-emerald-600 text-white text-xs disabled:bg-gray-400"
+                          >
+                            {isSavingName ? "…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditName}
+                            disabled={isSavingName}
+                            className="px-2 py-0.5 rounded bg-gray-200 text-gray-700 text-xs"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        p.first_name || <span className="text-gray-400">—</span>
+                      )}
                     </td>
+
+                    {/* Team */}
                     <td className="px-3 py-2 align-middle">
                       {team ? (
                         <span className="font-mono text-xs">{team}</span>
@@ -388,20 +579,52 @@ const Players: React.FC = () => {
                         <span className="text-gray-400">—</span>
                       )}
                     </td>
+
+                    {/* Number */}
                     <td className="px-3 py-2 align-middle">
-                      {p.final_shirt != null ? (
-                        <span className="font-semibold">#{p.final_shirt}</span>
+                      {isEditingNumber ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            value={editingNumberValue}
+                            onChange={(e) => setEditingNumberValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void saveNumber(p.id);
+                              if (e.key === "Escape") cancelEditNumber();
+                            }}
+                            className="w-16 border rounded px-1 py-0.5 text-xs"
+                            placeholder="0–99"
+                            min={0}
+                            max={99}
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void saveNumber(p.id)}
+                            disabled={isSavingNumber}
+                            className="px-2 py-0.5 rounded bg-emerald-600 text-white text-xs disabled:bg-gray-400"
+                          >
+                            {isSavingNumber ? "…" : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEditNumber}
+                            disabled={isSavingNumber}
+                            className="px-2 py-0.5 rounded bg-gray-200 text-gray-700 text-xs"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       ) : (
-                        <span className="text-red-500 font-medium">Missing</span>
+                        p.final_shirt != null ? (
+                          <span className="font-semibold">#{p.final_shirt}</span>
+                        ) : (
+                          <span className="text-red-500 font-medium">Missing</span>
+                        )
                       )}
                     </td>
-                    <td className="px-3 py-2 align-middle">
-                      {p.year_of_birth != null ? (
-                        <span>{p.year_of_birth}</span>
-                      ) : (
-                        <span className="text-orange-600 font-medium">Missing</span>
-                      )}
-                    </td>
+
+                    {/* Year of Birth */}
                     <td className="px-3 py-2 align-middle">
                       {isEditingYob ? (
                         <div className="flex items-center gap-1">
@@ -435,13 +658,55 @@ const Players: React.FC = () => {
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => startEditYob(p)}
-                          className="text-indigo-600 hover:text-indigo-800 text-xs"
-                        >
-                          {p.year_of_birth != null ? "Edit" : "Add YOB"}
-                        </button>
+                        p.year_of_birth != null ? (
+                          <span>{p.year_of_birth}</span>
+                        ) : (
+                          <span className="text-orange-600 font-medium">Missing</span>
+                        )
+                      )}
+                    </td>
+
+                    {/* Actions */}
+                    <td className="px-3 py-2 align-middle">
+                      {!isEditingName && !isEditingNumber && !isEditingYob && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => startEditName(p)}
+                            className="text-indigo-600 hover:text-indigo-800 text-xs"
+                            title="Edit name"
+                          >
+                            Edit Name
+                          </button>
+                          <span className="text-gray-300">|</span>
+                          <button
+                            type="button"
+                            onClick={() => startEditNumber(p)}
+                            className="text-indigo-600 hover:text-indigo-800 text-xs"
+                            title="Edit jersey number"
+                          >
+                            {p.final_shirt != null ? "Edit #" : "Add #"}
+                          </button>
+                          <span className="text-gray-300">|</span>
+                          <button
+                            type="button"
+                            onClick={() => startEditYob(p)}
+                            className="text-indigo-600 hover:text-indigo-800 text-xs"
+                            title="Edit year of birth"
+                          >
+                            {p.year_of_birth != null ? "Edit YOB" : "Add YOB"}
+                          </button>
+                          <span className="text-gray-300">|</span>
+                          <button
+                            type="button"
+                            onClick={() => void deletePlayer(p)}
+                            disabled={isDeleting}
+                            className="text-red-500 hover:text-red-700 text-xs disabled:opacity-50"
+                            title="Delete player"
+                          >
+                            {isDeleting ? "…" : "Delete"}
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

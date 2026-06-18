@@ -12,7 +12,8 @@ interface Player {
   id: string;
   first_name: string;
   last_name: string;
-  team_id: string | null;
+  division_code: string | null;
+  team_name: string | null;
   final_shirt: number | null;
   year_of_birth: number | null;
 }
@@ -99,7 +100,7 @@ const ClubOverview: React.FC = () => {
       const { data: playersData, error: playersError } = await supabase
         .from("players")
         .select(
-          "id, first_name, last_name, team_id, final_shirt, year_of_birth"
+          "id, first_name, last_name, division_code, team_name, final_shirt, year_of_birth"
         )
         .eq("club_id", clubId);
 
@@ -378,9 +379,9 @@ const ClubOverview: React.FC = () => {
                           <span className="font-semibold">
                             {p.last_name}, {p.first_name}
                           </span>{" "}
-                          {p.team_id && (
+                          {(p.team_name ?? p.division_code) && (
                             <span className="text-gray-500">
-                              &mdash; {p.team_id}
+                              &mdash; {p.team_name ?? p.division_code}
                             </span>
                           )}
                         </li>
@@ -413,9 +414,9 @@ const ClubOverview: React.FC = () => {
                           <span className="font-semibold">
                             {p.last_name}, {p.first_name}
                           </span>{" "}
-                          {p.team_id && (
+                          {(p.team_name ?? p.division_code) && (
                             <span className="text-gray-500">
-                              &mdash; {p.team_id}
+                              &mdash; {p.team_name ?? p.division_code}
                             </span>
                           )}
                           {p.final_shirt !== null && (
