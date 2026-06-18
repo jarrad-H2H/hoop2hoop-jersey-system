@@ -21,14 +21,15 @@ import SalesHistory from "./pages/SalesHistory";
 import Importer from "./components/Importer";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Layout from "./components/Layout";
-import WidgetDemo from "./components/JerseyWidget";
+import JerseyWidget from "./components/JerseyWidget";
+import WidgetDemo from "./pages/WidgetDemo";
 
 const AppRouter: React.FC = () => {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/embed/widget-demo" element={<WidgetDemo />} />
+      <Route path="/embed/widget-demo" element={<JerseyWidget />} />
 
       <Route
         path="/admin"
