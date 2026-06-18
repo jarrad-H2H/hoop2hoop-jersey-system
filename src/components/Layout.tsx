@@ -14,6 +14,7 @@ import {
   Link2,
   ShoppingBag,
   KeyRound,
+  SplitSquareVertical,
 } from "lucide-react";
 
 type NavItem = {
@@ -92,6 +93,12 @@ const Layout: React.FC = () => {
       label: "CSV Importer",
       icon: <Upload size={20} />,
       match: (p) => p.startsWith("/admin/importer"),
+    },
+    {
+      path: "/admin/competition-gender",
+      label: "Competition Gender",
+      icon: <SplitSquareVertical size={20} />,
+      match: (p) => p.startsWith("/admin/competition-gender"),
     },
     {
       path: "/admin/settings",
