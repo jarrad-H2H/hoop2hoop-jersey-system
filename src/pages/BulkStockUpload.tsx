@@ -187,8 +187,22 @@ const BulkStockUpload: React.FC = () => {
   };
 
   const handleNumbersChange = (id: string, value: string) => {
+    // Auto-calculate quantity from valid jersey numbers entered
+    const validCount = value
+      .split(",")
+      .map((n) => n.trim())
+      .filter((n) => n !== "" && !isNaN(Number(n))).length;
+
     setSizeRows((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, numbersInput: value } : r))
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              numbersInput: value,
+              quantityInput: validCount > 0 ? String(validCount) : "",
+            }
+          : r
+      )
     );
   };
 
@@ -622,7 +636,7 @@ const BulkStockUpload: React.FC = () => {
       <p className="text-sm text-gray-600 mb-6">
         Seed or adjust jersey inventory for a club in bulk. Sizes are linked to
         that club&apos;s configured labels to keep everything consistent.
-        Enter comma-separated jersey numbers and a total quantity per size.
+        Enter comma-separated jersey numbers per size — quantity is calculated automatically.
       </p>
 
       {/* Club selector */}
@@ -748,7 +762,7 @@ const BulkStockUpload: React.FC = () => {
                   <th className="px-3 py-2 text-left">
                     Add Jersey Numbers (comma-separated)
                   </th>
-                  <th className="px-3 py-2 text-left w-28">Add Quantity</th>
+                  <th className="px-3 py-2 text-left w-28">Add Qty (auto)</th>
                 </tr>
               </thead>
               <tbody>
@@ -874,19 +888,17 @@ const BulkStockUpload: React.FC = () => {
                       </p>
                     </td>
 
-                    {/* Stock quantity input */}
+                    {/* Stock quantity — auto-calculated from jersey numbers */}
                     <td className="px-3 py-2 align-top">
-                      <input
-                        type="number"
-                        min={0}
-                        value={row.quantityInput}
-                        onChange={(e) =>
-                          handleQuantityChange(row.id, e.target.value)
-                        }
-                        placeholder="e.g. 10"
-                        className="w-full border rounded px-2 py-1 text-xs"
-                        disabled={submitting}
-                      />
+                      {row.quantityInput ? (
+                        <span className="inline-flex items-center justify-center w-full border border-gray-200 bg-gray-50 rounded px-2 py-1 text-xs font-semibold text-emerald-700">
+                          {row.quantityInput}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center justify-center w-full border border-dashed border-gray-200 rounded px-2 py-1 text-xs text-gray-400">
+                          —
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
