@@ -19,7 +19,10 @@ interface InventoryRow {
 
 interface InventoryBySizeRow {
   size: string;
-  numbers: number[]; // duplicates preserved
+  availableNumbers: number[];
+  allocatedNumbers: number[];
+  availableQty: number;
+  allocatedQty: number;
   totalQty: number;
 }
 
@@ -70,50 +73,55 @@ const InventoryManager: React.FC = () => {
     loadInventory();
   }, [selectedClubId]);
 
-  // Group into one row per size
+  // Group into one row per size, split by status
   const groupedBySize: InventoryBySizeRow[] = useMemo(() => {
-    const map = new Map<string, number[]>();
+    const map = new Map<string, { available: number[]; allocated: number[] }>();
 
     for (const row of inventory) {
       const size = String(row.size ?? "").trim();
       if (!size) continue;
 
       const n = Number(row.jersey_number);
-      if (!Number.isFinite(n)) continue; // allow 0
+      if (!Number.isFinite(n)) continue;
 
-      const existing = map.get(size);
-      if (!existing) {
-        map.set(size, [n]);
+      if (!map.has(size)) {
+        map.set(size, { available: [], allocated: [] });
+      }
+      const entry = map.get(size)!;
+      if (row.status === "Available") {
+        entry.available.push(n);
       } else {
-        existing.push(n);
+        entry.allocated.push(n);
       }
     }
 
     const rows: InventoryBySizeRow[] = [];
-    for (const [size, numbers] of map.entries()) {
-      numbers.sort((a, b) => a - b);
+    for (const [size, { available, allocated }] of map.entries()) {
+      available.sort((a, b) => a - b);
+      allocated.sort((a, b) => a - b);
       rows.push({
         size,
-        numbers,
-        totalQty: numbers.length,
+        availableNumbers: available,
+        allocatedNumbers: allocated,
+        availableQty: available.length,
+        allocatedQty: allocated.length,
+        totalQty: available.length + allocated.length,
       });
     }
 
-    // Keep size ordering stable (matches previous .order("size"))
-    rows.sort((a, b) => a.size.localeCompare(b.size, undefined, { numeric: true }));
+    rows.sort((a, b) =>
+      a.size.localeCompare(b.size, undefined, { numeric: true })
+    );
 
     return rows;
   }, [inventory]);
 
-  const renderNumbersCell = (nums: number[]) => {
-    // duplicates preserved e.g. "2, 2, 2, 4, 4"
-    const text = nums.join(", ");
-    return <span className="whitespace-normal break-words">{text}</span>;
-  };
+  const totalAvailable = groupedBySize.reduce((s, r) => s + r.availableQty, 0);
+  const totalAllocated = groupedBySize.reduce((s, r) => s + r.allocatedQty, 0);
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">Inventory Manager</h1>
+      <h1 className="text-2xl font-bold mb-4">Inventory</h1>
 
       {/* Club selector */}
       <div className="mb-4">
@@ -143,6 +151,24 @@ const InventoryManager: React.FC = () => {
         </div>
       )}
 
+      {/* Summary totals */}
+      {!loading && groupedBySize.length > 0 && (
+        <div className="flex gap-4 mb-4">
+          <div className="bg-emerald-50 border border-emerald-200 rounded px-4 py-2 text-sm">
+            <span className="font-semibold text-emerald-700">{totalAvailable}</span>
+            <span className="text-emerald-600 ml-1">available</span>
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded px-4 py-2 text-sm">
+            <span className="font-semibold text-amber-700">{totalAllocated}</span>
+            <span className="text-amber-600 ml-1">allocated</span>
+          </div>
+          <div className="bg-gray-50 border border-gray-200 rounded px-4 py-2 text-sm">
+            <span className="font-semibold text-gray-700">{totalAvailable + totalAllocated}</span>
+            <span className="text-gray-600 ml-1">total</span>
+          </div>
+        </div>
+      )}
+
       {/* Inventory Table */}
       {loading && <p>Loading inventory…</p>}
 
@@ -155,17 +181,50 @@ const InventoryManager: React.FC = () => {
           <table className="min-w-full text-xs">
             <thead className="bg-gray-100">
               <tr>
-                <th className="px-3 py-2 text-left w-28">Size</th>
-                <th className="px-3 py-2 text-left">Playing numbers in stock</th>
-                <th className="px-3 py-2 text-left w-28">Total qty</th>
+                <th className="px-3 py-2 text-left w-24">Size</th>
+                <th className="px-3 py-2 text-left w-20 text-emerald-700">Available</th>
+                <th className="px-3 py-2 text-left">Available numbers</th>
+                <th className="px-3 py-2 text-left w-24 text-amber-700">Allocated</th>
+                <th className="px-3 py-2 text-left w-20">Total</th>
               </tr>
             </thead>
             <tbody>
               {groupedBySize.map((row) => (
-                <tr key={row.size} className="border-t odd:bg-white even:bg-gray-50 align-top">
+                <tr
+                  key={row.size}
+                  className="border-t odd:bg-white even:bg-gray-50 align-top"
+                >
                   <td className="px-3 py-2 font-semibold">{row.size}</td>
-                  <td className="px-3 py-2">{renderNumbersCell(row.numbers)}</td>
-                  <td className="px-3 py-2">{row.totalQty}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`font-semibold ${
+                        row.availableQty === 0
+                          ? "text-red-500"
+                          : "text-emerald-600"
+                      }`}
+                    >
+                      {row.availableQty}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-gray-600 whitespace-normal break-words">
+                    {row.availableQty === 0 ? (
+                      <span className="text-gray-400 italic">none</span>
+                    ) : (
+                      row.availableNumbers.join(", ")
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`font-semibold ${
+                        row.allocatedQty > 0 ? "text-amber-600" : "text-gray-400"
+                      }`}
+                    >
+                      {row.allocatedQty}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 font-semibold text-gray-700">
+                    {row.totalQty}
+                  </td>
                 </tr>
               ))}
             </tbody>

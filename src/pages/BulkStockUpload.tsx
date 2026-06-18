@@ -20,6 +20,10 @@ interface ClubSizeRow {
   // UI-only fields for editing size labels:
   isEditing?: boolean;
   draftLabel?: string;
+
+  // Current stock counts (loaded from inventory)
+  currentAvailable: number;
+  currentAllocated: number;
 }
 
 const BulkStockUpload: React.FC = () => {
@@ -37,6 +41,11 @@ const BulkStockUpload: React.FC = () => {
 
   // Add-size UI
   const [newSizeLabel, setNewSizeLabel] = useState<string>("");
+
+  // Current stock per size (keyed by size_label)
+  const [stockMap, setStockMap] = useState<
+    Map<string, { available: number; allocated: number }>
+  >(new Map());
 
   const selectedClubName = useMemo(
     () => clubs.find((c) => c.id === selectedClubId)?.name ?? "",
@@ -135,6 +144,38 @@ const BulkStockUpload: React.FC = () => {
     };
 
     void loadSizes();
+  }, [selectedClubId]);
+
+  // Load current inventory stock counts for the selected club
+  useEffect(() => {
+    const loadStock = async () => {
+      if (!selectedClubId) {
+        setStockMap(new Map());
+        return;
+      }
+
+      const { data } = await supabase
+        .from("inventory")
+        .select("size, status")
+        .eq("club_id", selectedClubId)
+        .neq("status", "Written Off");
+
+      const map = new Map<string, { available: number; allocated: number }>();
+      for (const row of data ?? []) {
+        const size = String(row.size ?? "").trim();
+        if (!size) continue;
+        if (!map.has(size)) map.set(size, { available: 0, allocated: 0 });
+        const entry = map.get(size)!;
+        if (row.status === "Available") {
+          entry.available += 1;
+        } else {
+          entry.allocated += 1;
+        }
+      }
+      setStockMap(map);
+    };
+
+    void loadStock();
   }, [selectedClubId]);
 
   const handleClubChange = (clubId: string) => {
@@ -553,6 +594,20 @@ const BulkStockUpload: React.FC = () => {
           quantityInput: "",
         }))
       );
+
+      // Refresh stock counts
+      const addedBySize = new Map<string, number>();
+      for (const r of inventoryRows) {
+        addedBySize.set(r.size, (addedBySize.get(r.size) ?? 0) + 1);
+      }
+      setStockMap((prev) => {
+        const next = new Map(prev);
+        for (const [size, qty] of addedBySize.entries()) {
+          const existing = next.get(size) ?? { available: 0, allocated: 0 };
+          next.set(size, { ...existing, available: existing.available + qty });
+        }
+        return next;
+      });
     } catch (err: any) {
       console.error("BulkStockUpload handleSubmit error", err);
       setError(err.message ?? "Unexpected error during bulk upload.");
@@ -687,12 +742,13 @@ const BulkStockUpload: React.FC = () => {
               <thead className="bg-gray-100">
                 <tr>
                   <th className="px-3 py-2 text-left w-32">Size</th>
+                  <th className="px-3 py-2 text-left w-36">Current Stock</th>
                   <th className="px-3 py-2 text-left w-40">Manage</th>
                   <th className="px-3 py-2 text-left w-28">Order</th>
                   <th className="px-3 py-2 text-left">
-                    Jersey Numbers (comma-separated)
+                    Add Jersey Numbers (comma-separated)
                   </th>
-                  <th className="px-3 py-2 text-left w-28">Total Quantity</th>
+                  <th className="px-3 py-2 text-left w-28">Add Quantity</th>
                 </tr>
               </thead>
               <tbody>
@@ -713,6 +769,32 @@ const BulkStockUpload: React.FC = () => {
                           disabled={submitting}
                         />
                       )}
+                    </td>
+
+                    {/* Current stock */}
+                    <td className="px-3 py-2 align-top text-xs">
+                      {(() => {
+                        const stock = stockMap.get(row.size_label);
+                        if (!stock) {
+                          return <span className="text-gray-400">—</span>;
+                        }
+                        return (
+                          <div className="space-y-0.5">
+                            <div>
+                              <span className="font-semibold text-emerald-600">
+                                {stock.available}
+                              </span>
+                              <span className="text-gray-500 ml-1">avail</span>
+                            </div>
+                            <div>
+                              <span className="font-semibold text-amber-600">
+                                {stock.allocated}
+                              </span>
+                              <span className="text-gray-500 ml-1">alloc</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </td>
 
                     {/* Manage buttons */}
