@@ -195,9 +195,11 @@ const Players: React.FC = () => {
   };
 
   const saveYob = async (playerId: string) => {
-    const parsed = Number(editingYobValue.trim());
-    if (!editingYobValue.trim() || !Number.isFinite(parsed) || parsed < 1990 || parsed > 2025) {
-      alert("Please enter a valid year between 1990 and 2025.");
+    const trimmed = editingYobValue.trim();
+    // Allow blank to clear the YOB
+    const parsed = trimmed === "" ? null : Number(trimmed);
+    if (trimmed !== "" && (!Number.isFinite(parsed) || (parsed as number) < 1950 || (parsed as number) > 2025)) {
+      alert("Please enter a valid year between 1950 and 2025, or leave blank to clear.");
       return;
     }
 
@@ -638,6 +640,8 @@ const Players: React.FC = () => {
                             }}
                             className="w-20 border rounded px-1 py-0.5 text-xs"
                             placeholder="e.g. 2012"
+                            min={1950}
+                            max={2025}
                             autoFocus
                           />
                           <button
