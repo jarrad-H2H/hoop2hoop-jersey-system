@@ -110,15 +110,22 @@ const YesNoButtons: React.FC<{
   </div>
 );
 
-const JerseyWidget: React.FC = () => {
+interface JerseyWidgetProps {
+  /** Demo mode: bypass postMessage/product-ID detection and use these directly */
+  clubId?: string;
+  size?: string | null;
+  demoMode?: boolean;
+}
+
+const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: propSize, demoMode }) => {
   const SEASON_YEAR = new Date().getFullYear();
 
   // Shopify context
   const [shopifyProductId, setShopifyProductId] = useState<string>("");
-  const [selectedSize, setSelectedSize] = useState<string>("");
+  const [selectedSize, setSelectedSize] = useState<string>(propSize ?? "");
 
   // Club detection
-  const [selectedClubId, setSelectedClubId] = useState<string>("");
+  const [selectedClubId, setSelectedClubId] = useState<string>(propClubId ?? "");
   const [clubDetectError, setClubDetectError] = useState<string | null>(null);
 
   // ── Player identity (new) ──────────────────────────────────────────────────
@@ -129,6 +136,9 @@ const JerseyWidget: React.FC = () => {
   const [existingPlayerJersey, setExistingPlayerJersey] = useState<number | null>(null);
   const [existingPlayerInventoryId, setExistingPlayerInventoryId] = useState<string | null>(null);
   const [keepExistingJersey, setKeepExistingJersey] = useState<boolean | null>(null);
+  const [matchedPlayerId, setMatchedPlayerId] = useState<string | null>(null);
+  const [matchedPlayerDisplayName, setMatchedPlayerDisplayName] = useState<string | null>(null);
+  const [identityConfirmed, setIdentityConfirmed] = useState<boolean | null>(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -172,9 +182,13 @@ const JerseyWidget: React.FC = () => {
   const teamSelected = Boolean((teamChoice || "").trim());
   const namesFilled = firstName.trim().length > 0 && lastName.trim().length > 0;
 
-  // Whether the "keeping jersey" prompt needs to be answered
+  // Whether identity confirmation is needed (player found but not yet confirmed)
+  const needsIdentityConfirm =
+    isNewPlayer === false && matchedPlayerDisplayName !== null && identityConfirmed === null && !lookingUpPlayer;
+
+  // Whether the "keeping jersey" prompt needs to be answered (only after identity confirmed)
   const needsKeepPrompt =
-    isNewPlayer === false && existingPlayerJersey !== null;
+    isNewPlayer === false && identityConfirmed === true && existingPlayerJersey !== null;
 
   const canSuggest =
     Boolean(selectedClubId) &&
@@ -182,6 +196,7 @@ const JerseyWidget: React.FC = () => {
     namesFilled &&
     yobValid &&
     isNewPlayer !== null &&
+    (matchedPlayerDisplayName === null || identityConfirmed !== null) &&
     (!needsKeepPrompt || keepExistingJersey !== null) &&
     teamSelected &&
     !loadingSuggest &&
@@ -207,18 +222,37 @@ const JerseyWidget: React.FC = () => {
     } catch (_) {}
   };
 
-  // Read query params
+  // Demo mode: sync club + size from props when they change
   useEffect(() => {
+    if (!demoMode) return;
+    if (propClubId) {
+      setSelectedClubId(propClubId);
+      setClubDetectError(null);
+    }
+  }, [demoMode, propClubId]);
+
+  useEffect(() => {
+    if (!demoMode) return;
+    setSelectedSize(propSize ?? "");
+    setSuggestions([]);
+    setSelectedNumber(null);
+    setError(null);
+  }, [demoMode, propSize]);
+
+  // Read query params (production: ?productId=... in iframe URL)
+  useEffect(() => {
+    if (demoMode) return; // skip in demo mode — club comes from props
     try {
       const params = new URLSearchParams(window.location.search);
       const pid = (params.get("productId") || params.get("product_id") || "").trim();
       if (pid) setShopifyProductId(pid);
     } catch (_) {}
     setTeamChoice("not_sure");
-  }, []);
+  }, [demoMode]);
 
-  // Listen for Shopify variant changes
+  // Listen for Shopify variant changes (production iframe only)
   useEffect(() => {
+    if (demoMode) return; // skip in demo mode — size comes from props
     const onMsg = (event: MessageEvent) => {
       try {
         const data: any = event?.data;
@@ -236,10 +270,11 @@ const JerseyWidget: React.FC = () => {
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, []);
+  }, [demoMode]);
 
-  // Detect club via mapping table
+  // Detect club via mapping table (production: productId → club lookup)
   useEffect(() => {
+    if (demoMode) return; // skip in demo mode — club set directly from propClubId
     const run = async () => {
       setClubDetectError(null);
       setSelectedClubId("");
@@ -259,7 +294,7 @@ const JerseyWidget: React.FC = () => {
       setSelectedClubId(row.club_id);
     };
     void run();
-  }, [shopifyProductId]);
+  }, [demoMode, shopifyProductId]);
 
   // Countdown tick
   useEffect(() => {
@@ -322,6 +357,9 @@ const JerseyWidget: React.FC = () => {
       setExistingPlayerJersey(null);
       setExistingPlayerInventoryId(null);
       setKeepExistingJersey(null);
+      setMatchedPlayerId(null);
+      setMatchedPlayerDisplayName(null);
+      setIdentityConfirmed(null);
       return;
     }
     if (!selectedClubId || !namesFilled || !yobValid) return;
@@ -331,6 +369,9 @@ const JerseyWidget: React.FC = () => {
       setExistingPlayerJersey(null);
       setExistingPlayerInventoryId(null);
       setKeepExistingJersey(null);
+      setMatchedPlayerId(null);
+      setMatchedPlayerDisplayName(null);
+      setIdentityConfirmed(null);
       try {
         const ageGroup = yobNum ? deriveAgeGroupFromYob(SEASON_YEAR, yobNum) : null;
         const result = await lookupPlayerByName({
@@ -340,9 +381,15 @@ const JerseyWidget: React.FC = () => {
           yearOfBirth: yobNum,
           ageGroup, // fallback for BC-imported players who have no YOB stored
         });
-        if (result.found && result.currentJerseyNumber != null) {
-          setExistingPlayerJersey(result.currentJerseyNumber);
-          setExistingPlayerInventoryId(result.previousInventoryId ?? null);
+        if (result.found) {
+          setMatchedPlayerId(result.playerId ?? null);
+          const displayName = [result.matchedFirstName, result.matchedLastName]
+            .filter(Boolean).join(" ");
+          setMatchedPlayerDisplayName(displayName || null);
+          if (result.currentJerseyNumber != null) {
+            setExistingPlayerJersey(result.currentJerseyNumber);
+            setExistingPlayerInventoryId(result.previousInventoryId ?? null);
+          }
         }
       } catch (_) {
         // Non-fatal — user can still proceed
@@ -565,6 +612,9 @@ const JerseyWidget: React.FC = () => {
               setExistingPlayerJersey(null);
               setExistingPlayerInventoryId(null);
               setKeepExistingJersey(null);
+              setMatchedPlayerId(null);
+              setMatchedPlayerDisplayName(null);
+              setIdentityConfirmed(null);
             }}
           />
         </div>
@@ -585,6 +635,9 @@ const JerseyWidget: React.FC = () => {
               setExistingPlayerJersey(null);
               setExistingPlayerInventoryId(null);
               setKeepExistingJersey(null);
+              setMatchedPlayerId(null);
+              setMatchedPlayerDisplayName(null);
+              setIdentityConfirmed(null);
             }}
           />
         </div>
@@ -619,6 +672,31 @@ const JerseyWidget: React.FC = () => {
         {/* Player lookup spinner */}
         {lookingUpPlayer && (
           <div className="text-xs text-indigo-600">Looking up player record…</div>
+        )}
+
+        {/* Identity confirmation — shown when a matching player record is found */}
+        {needsIdentityConfirm && (
+          <div className="bg-amber-50 border border-amber-200 rounded p-3">
+            <div className="text-sm font-semibold text-amber-900 mb-1">
+              We found <span className="font-bold">{matchedPlayerDisplayName}</span> in our records.
+            </div>
+            <div className="text-xs text-amber-800 mb-2">Is that you?</div>
+            <YesNoButtons
+              value={identityConfirmed}
+              onChange={(v) => {
+                setIdentityConfirmed(v);
+                if (!v) {
+                  // Player said "No" — treat as genuinely new; clear matched state
+                  setMatchedPlayerId(null);
+                  setExistingPlayerJersey(null);
+                  setExistingPlayerInventoryId(null);
+                  setKeepExistingJersey(null);
+                }
+              }}
+              yesLabel="Yes, that's me"
+              noLabel="No, I'm someone else"
+            />
+          </div>
         )}
 
         {/* Keeping jersey? — only shown if existing player has a jersey */}
@@ -712,6 +790,9 @@ const JerseyWidget: React.FC = () => {
                     ].join(" ")}
                   >
                     #{s.jersey_number}
+                    {s.reason && (
+                      <span className="block text-[10px] font-normal">{s.reason}</span>
+                    )}
                   </button>
                 );
               })}
@@ -719,47 +800,49 @@ const JerseyWidget: React.FC = () => {
           </div>
         )}
 
-        {/* Disclaimer checkbox — only show once a number is selected */}
-        {suggestions.length > 0 && (
-          <label className="flex items-start gap-3 cursor-pointer select-none">
+        {/* Disclaimer */}
+        {selectedNumber !== null && (
+          <label className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
             <input
               type="checkbox"
+              className="mt-0.5"
               checked={disclaimerChecked}
               onChange={(e) => setDisclaimerChecked(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-gray-400 accent-indigo-600 flex-shrink-0"
             />
-            <span className="text-xs text-gray-700 leading-snug">
-              I accept responsibility for ensuring this number doesn't clash with my team — if unsure, I'll check with my coach or manager first.
+            <span>
+              I understand this number is reserved for 15 minutes. My reservation
+              will be confirmed once payment is complete.
             </span>
           </label>
         )}
 
         {/* Confirm & Reserve */}
-        <button
-          type="button"
-          onClick={handleReserve}
-          disabled={!canConfirm}
-          className="w-full px-4 py-2 rounded font-semibold text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors"
-        >
-          {reserving ? "Reserving…" : "Confirm & Reserve"}
-        </button>
+        {selectedNumber !== null && (
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={!canConfirm}
+            className="w-full px-4 py-2 rounded font-semibold text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors"
+          >
+            {reserving ? "Reserving…" : `Confirm & Reserve #${selectedNumber}`}
+          </button>
+        )}
 
-        {/* Status / expiry */}
+        {/* Status / countdown */}
         {statusMessage && (
-          <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded text-sm">
-            <div className="font-semibold">{statusMessage}</div>
-            <div className="text-xs mt-1">Now add this item to your cart and complete checkout before the hold expires.</div>
-            {expiresAt && (
-              <div className="text-xs mt-1">
-                Hold expires in {Math.floor(remainingSeconds / 60)}:
-                {(remainingSeconds % 60).toString().padStart(2, "0")}
-              </div>
-            )}
-            {pendingAllocationId && (
-              <div className="text-[11px] mt-1 text-amber-900/80">
-                              Reservation ID saved for checkout.
-              </div>
-            )}
+          <div className="text-sm text-emerald-700 font-medium">{statusMessage}</div>
+        )}
+
+        {expiresAt !== null && remainingSeconds > 0 && (
+          <div className="text-xs text-gray-500">
+            Reservation expires in {Math.floor(remainingSeconds / 60)}:
+            {String(remainingSeconds % 60).padStart(2, "0")}
+          </div>
+        )}
+
+        {pendingAllocationId && (
+          <div className="text-[11px] mt-1 text-amber-900/80">
+            Reservation ID saved for checkout.
           </div>
         )}
       </div>
