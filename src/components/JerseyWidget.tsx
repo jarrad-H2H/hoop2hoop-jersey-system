@@ -6,6 +6,7 @@ import {
   suggestNumbersForClubRanked,
   reserveNumberForPurchase,
   lookupPlayerByName,
+  isAgeGroupCrossPool,
 } from "../services/allocation";
 
 interface MappingRow {
@@ -150,6 +151,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // Teams
   const [allTeams, setAllTeams] = useState<TeamRow[]>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
+
+  // Cross-pool check: true when the player's age group has cross-pool jersey uniqueness
+  const [crossPoolCheck, setCrossPoolCheck] = useState<boolean>(false);
 
   // Suggestions
   const [suggestions, setSuggestions] = useState<NumberSuggestion[]>([]);
@@ -350,6 +354,15 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     void load();
   }, [selectedClubId]);
 
+  // Cross-pool flag: recompute when club or derived age group changes
+  useEffect(() => {
+    if (!selectedClubId || !derivedAgeGroup) {
+      setCrossPoolCheck(false);
+      return;
+    }
+    void isAgeGroupCrossPool(selectedClubId, derivedAgeGroup).then(setCrossPoolCheck);
+  }, [selectedClubId, derivedAgeGroup]);
+
   // When isNewPlayer set to false AND we have club+name+yob, look up the player
   useEffect(() => {
     if (isNewPlayer !== false) {
@@ -481,6 +494,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         size: selectedSize,
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
+        ageGroup: derivedAgeGroup ?? undefined,
+        crossPoolCheck,
         limit: 12,
       });
 
@@ -490,7 +505,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           const check = await smartCheckNumber(selectedClubId, pref, {
             seasonYear: SEASON_YEAR,
             yearOfBirth: yobNum,
-            // No cohortWindowYears — new YOB-window logic uses age-group-derived windows
+            ageGroup: derivedAgeGroup ?? undefined,
+            crossPoolCheck,
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
             (s) => String(s.size).toLowerCase() === String(selectedSize).toLowerCase() && s.count > 0
@@ -553,7 +569,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobNum,
         teamId: teamChoice === "not_sure" ? null : teamChoice,
-        expiresMinutes: 15,
+        expiresMinutes: 30,
         // Player identity
         playerFirstName: firstName.trim(),
         playerLastName: lastName.trim(),
@@ -568,7 +584,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         return;
       }
 
-      const expiry = Date.now() + 15 * 60 * 1000;
+      const expiry = Date.now() + 30 * 60 * 1000;
       setExpiresAt(expiry);
 
       const pid = result.pendingAllocationId || "";
