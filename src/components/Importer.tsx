@@ -311,7 +311,11 @@ const Importer: React.FC = () => {
         // Use grade as primary; fall back to name if grade is missing
         const divisionGrade = (row["playerDivisionGrade"] ?? "").trim();
         const ageGroupRaw = (divisionGrade || (row["playerDivisionName"] ?? "")).trim();
-        const ageGroup = normalizeAgeGroup(ageGroupRaw);
+        // Prefer age group derived from the division code (e.g. "14G.1" → "U14") over
+        // the raw BC text field (e.g. playerDivisionGrade = "Super League Girls 1" → "SLG"),
+        // which can be misleading when a player has a cross-pool grade assignment.
+        const ageGroupFromCode = parseAgeGroupFromCode(divisionCode ?? null);
+        const ageGroup = ageGroupFromCode ?? normalizeAgeGroup(ageGroupRaw);
         const playing = (row["playing"] ?? "").trim();
 
         const currentDiv = (row["Current Team Division"] ?? "").trim().toUpperCase();
