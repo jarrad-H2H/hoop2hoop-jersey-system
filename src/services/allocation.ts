@@ -3,11 +3,12 @@ import { supabase } from "./supabase";
 
 // ─── Age group helpers ─────────────────────────────────────────────────────────
 // Used to determine adjacent cohort warnings (different team, close age group).
-const AGE_GROUP_ORDER = ["U8", "U10", "U12", "U14", "U16", "U18", "U20", "SLG"];
+const AGE_GROUP_ORDER = ["U8", "U10", "U12", "U14", "U16", "U18", "U20", "Junior", "Open Girls", "Open", "Seniors", "SLG"];
 
 function ageGroupIndex(ag: string | null | undefined): number {
   if (!ag) return -1;
-  return AGE_GROUP_ORDER.indexOf(ag.trim().toUpperCase());
+  const upper = ag.trim().toUpperCase();
+  return AGE_GROUP_ORDER.findIndex((g) => g.toUpperCase() === upper);
 }
 
 /** Returns true if the two age groups are the same or one step apart in the ladder. */
@@ -85,7 +86,9 @@ function estimateYobFromAgeGroup(
   if (ag === "U14")  return { min: seasonYear - 13, max: seasonYear - 12 };
   if (ag === "U16")  return { min: seasonYear - 15, max: seasonYear - 14 };
   if (ag === "U18")  return { min: seasonYear - 17, max: seasonYear - 16 };
-  if (ag === "SLG" || ag === "OPEN") return { min: seasonYear - 99, max: seasonYear - 18 };
+  if (ag === "JUNIOR") return { min: seasonYear - 17, max: seasonYear - 14 };
+  if (ag === "SLG" || ag === "OPEN" || ag === "OPEN GIRLS" || ag === "SENIORS")
+    return { min: seasonYear - 99, max: seasonYear - 18 };
   return null;
 }
 
@@ -162,6 +165,12 @@ export interface SmartCheckOptions {
   divisionCode?: string | null;
   teamName?: string | null;
   ageGroup?: string | null; // e.g. "U14" — used for soft warning when YOB unavailable
+  /**
+   * When true, players in the SAME age group at this club count as hard clashes —
+   * even if they are on a different team. Set when the age group runs cross-pool
+   * (Mixed gender detected or admin manual override via competition_age_groups).
+   */
+  crossPoolCheck?: boolean;
 }
 
 export interface SmartCheckResult {
@@ -205,6 +214,50 @@ const STATUS_AVAILABLE = "Available";
 const STATUS_ALLOCATED = "Allocated";
 
 /**
+ * Returns true if jersey numbers must be unique across ALL teams in this age
+ * group at this club — i.e. if any team in that age group runs Mixed gender
+ * competition, or an admin has manually set a cross-pool override in
+ * competition_age_groups.
+ *
+ * Call this once per widget session (when club + age group are known) and pass
+ * the result as `crossPoolCheck` into smartCheckNumber / suggestNumbersForClubRanked.
+ */
+export async function isAgeGroupCrossPool(
+  clubId: string,
+  ageGroup: string
+): Promise<boolean> {
+  // Support both UUID and string club IDs
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clubId);
+  const baseQuery = supabase
+    .from("teams")
+    .select("competition_id, gender")
+    .eq("age_group", ageGroup)
+    .limit(20);
+
+  const { data: teamData } = isUuid
+    ? await baseQuery.eq("club_id_uuid", clubId)
+    : await baseQuery.eq("club_id", clubId);
+
+  if (!teamData || (teamData as any[]).length === 0) return false;
+
+  // Auto cross-pool: any team in this age group is Mixed
+  if ((teamData as any[]).some((t: any) => t.gender === "Mixed")) return true;
+
+  // Check for manual override in competition_age_groups
+  const competitionId: string | null = (teamData as any[])[0]?.competition_id ?? null;
+  if (!competitionId) return false;
+
+  const { data: overrideData } = await supabase
+    .from("competition_age_groups")
+    .select("id")
+    .eq("competition_id", competitionId)
+    .eq("age_label", ageGroup)
+    .limit(1);
+
+  return ((overrideData ?? []) as any[]).length > 0;
+}
+
+/**
  * Team-aware clash + stock check for a given number in a club.
  *
  * When divisionCode / teamName / ageGroup are provided:
@@ -226,6 +279,7 @@ export async function smartCheckNumber(
     divisionCode,
     teamName,
     ageGroup,
+    crossPoolCheck = false,
   } = options;
 
   const seasonYear =
@@ -264,8 +318,15 @@ export async function smartCheckNumber(
       if (sameTeam) {
         hardClashes.push(p);
       } else {
-        // Different team — soft warning if same or adjacent age group.
-        if (isAdjacentOrSameAgeGroup(ageGroup, p.age_group)) {
+        // Cross-pool: same age group, different team = hard clash
+        const sameAgeGroup =
+          ageGroup != null && p.age_group != null &&
+          ageGroup.trim().toLowerCase() === p.age_group.trim().toLowerCase();
+
+        if (crossPoolCheck && sameAgeGroup) {
+          hardClashes.push(p);
+        } else if (isAdjacentOrSameAgeGroup(ageGroup, p.age_group)) {
+          // Different team, adjacent/same age group — soft warning only
           softWarnings.push(p);
         }
       }
@@ -287,6 +348,11 @@ export async function smartCheckNumber(
         if (p.bc_last_seen_season !== null && p.bc_last_seen_season !== undefined &&
             p.bc_last_seen_season < seasonYear - 2) {
           return false;
+        }
+        // Cross-pool: same age group = hard clash regardless of YOB window
+        if (crossPoolCheck && ageGroup != null && p.age_group != null &&
+            ageGroup.trim().toLowerCase() === p.age_group.trim().toLowerCase()) {
+          return true;
         }
         return yobOverlapsWindow(
           p.year_of_birth,
@@ -334,9 +400,18 @@ export async function smartCheckNumber(
 
   if (hasTeamContext) {
     if (hasHardClash) {
-      statusMessage = hasStock
-        ? "This number is already worn by a teammate — choose a different number."
-        : "This number is already worn by a teammate and there is no available stock.";
+      // Distinguish same-team clash vs cross-pool (different team, same age group)
+      const hasCrossPoolClash = crossPoolCheck && hardClashes.some(
+        (p) => !((p.division_code ?? null) === (divisionCode ?? null) &&
+                 (p.team_name ?? null) === (teamName ?? null))
+      );
+      statusMessage = hasCrossPoolClash
+        ? hasStock
+          ? "This number is worn by another team in the same age group (cross-pool check) — choose a different number."
+          : "This number is worn by another team in the same age group and there is no available stock."
+        : hasStock
+          ? "This number is already worn by a teammate — choose a different number."
+          : "This number is already worn by a teammate and there is no available stock.";
     } else if (hasSoftWarning && hasStock) {
       statusMessage =
         "This number is used in an adjacent age group (different team). Consider another number, but you can proceed.";
@@ -454,6 +529,8 @@ export async function suggestNumbersForClubRanked(input: {
   divisionCode?: string | null;
   teamName?: string | null;
   ageGroup?: string | null;
+  /** When true, block same-age-group numbers across all teams (cross-pool). */
+  crossPoolCheck?: boolean;
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
   // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
@@ -590,6 +667,28 @@ export async function suggestNumbersForClubRanked(input: {
       } else if (resYob >= adjWindow.min && resYob <= adjWindow.max) {
         adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
       }
+    }
+  }
+
+  // ── Cross-pool blocking: additionally hard-block same-age-group numbers ──────
+  // Runs in BOTH team-aware and widget paths when crossPoolCheck is active.
+  // Inactive players (bc_last_seen_season < currentYear - 2) are excluded.
+  if (input.crossPoolCheck && input.ageGroup) {
+    const { data: cpPlayers, error: cpErr } = await supabase
+      .from("players")
+      .select("final_shirt")
+      .eq("club_id", input.clubId)
+      .eq("age_group", input.ageGroup)
+      .in("final_shirt", candidateNums)
+      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
+
+    if (cpErr) {
+      console.error("cross-pool block query error", cpErr);
+      throw new Error("Failed to load cross-pool player data.");
+    }
+    for (const p of cpPlayers ?? []) {
+      const n = Number((p as any).final_shirt);
+      if (Number.isFinite(n)) blockedNums.add(n);
     }
   }
 
