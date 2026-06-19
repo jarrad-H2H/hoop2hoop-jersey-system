@@ -76,7 +76,7 @@ const CompetitionGenderAdmin: React.FC = () => {
         (overrideData ?? []).map((r: any) => r.age_label as string)
       );
 
-      // Build map of age_group → set of detected genders
+      // Build map of age_group -> set of detected genders
       const ageMap = new Map<string, Set<string>>();
       for (const row of teamData ?? []) {
         const ag = row.age_group as string;
@@ -85,7 +85,7 @@ const CompetitionGenderAdmin: React.FC = () => {
         if (g) ageMap.get(ag)!.add(g);
       }
 
-      // Sort age groups numerically (U8 < U10 < U12 … < Junior < SLG)
+      // Sort age groups numerically (U8 < U10 < U12 ... < Junior < SLG)
       const sorted = Array.from(ageMap.keys()).sort((a, b) => {
         const numA = parseInt(a.replace(/\D/g, ""), 10);
         const numB = parseInt(b.replace(/\D/g, ""), 10);
@@ -174,10 +174,9 @@ const CompetitionGenderAdmin: React.FC = () => {
         <select
           value={selectedId}
           onChange={(e) => setSelectedId(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm
-                     focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
-          <option value="">— Select competition —</option>
+          <option value="">-- Select competition --</option>
           {competitions.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
@@ -193,12 +192,12 @@ const CompetitionGenderAdmin: React.FC = () => {
             <h3 className="font-semibold text-gray-800">{competition?.name}</h3>
             <p className="text-xs text-gray-500 mt-0.5">
               Detected from imported teams. Each age group may contain multiple
-              gender pools — all are shown.
+              gender pools -- all are shown.
             </p>
           </div>
 
           {loading ? (
-            <p className="text-sm text-gray-400 py-4">Loading age groups…</p>
+            <p className="text-sm text-gray-400 py-4">Loading age groups...</p>
           ) : rows.length === 0 ? (
             <p className="text-sm text-gray-400 py-4">
               No teams found for this competition. Import a BC CSV first.
@@ -255,7 +254,7 @@ const CompetitionGenderAdmin: React.FC = () => {
                       <td className="py-3 pr-4">
                         {crossPool ? (
                           <span className="inline-flex items-center gap-1 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-full">
-                            ⚥ Yes
+                            Yes
                           </span>
                         ) : (
                           <span className="text-xs text-gray-400">No</span>
@@ -266,7 +265,7 @@ const CompetitionGenderAdmin: React.FC = () => {
                       <td className="py-3">
                         {row.hasMixed ? (
                           <span className="text-xs text-gray-400 italic">
-                            Auto — Mixed detected
+                            Auto -- Mixed detected
                           </span>
                         ) : (
                           <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -277,12 +276,11 @@ const CompetitionGenderAdmin: React.FC = () => {
                               onChange={() =>
                                 void toggleOverride(row.ageGroup, row.hasOverride)
                               }
-                              className="rounded border-gray-300 text-indigo-600
-                                         focus:ring-indigo-500 disabled:opacity-50"
+                              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-50"
                             />
                             <span className="text-xs text-gray-600">
                               {saving === row.ageGroup
-                                ? "Saving…"
+                                ? "Saving..."
                                 : "Force cross-pool"}
                             </span>
                           </label>
@@ -309,54 +307,18 @@ const CompetitionGenderAdmin: React.FC = () => {
           {/* Legend */}
           <div className="mt-6 pt-4 border-t text-xs text-gray-500 space-y-1.5">
             <p>
-              <strong>Cross-pool check — Yes</strong> means jersey numbers must
+              <strong>Cross-pool check -- Yes</strong> means jersey numbers must
               be unique across both the mens and womens pools for players in that
               age group. Only applies to clubs with both a mens and womens product
               configured.
             </p>
             <p>
-              <strong>Mixed detected</strong> — the BC import found teams running
+              <strong>Mixed detected</strong> -- the BC import found teams running
               mixed-gender competition in this age group. Cross-pool check is
               triggered automatically.
             </p>
             <p>
-              <strong>Manual override</strong> — forces cross-pool for an age
-              group where BC data shows only single-gender teams but mixed play
-              is known to occur.
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default CompetitionGenderAdmin;
-py-2">
-              {statusMsg}
-            </div>
-          )}
-          {errorMsg && (
-            <div className="mt-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
-              {errorMsg}
-            </div>
-          )}
-
-          {/* Legend */}
-          <div className="mt-6 pt-4 border-t text-xs text-gray-500 space-y-1.5">
-            <p>
-              <strong>Cross-pool check — Yes</strong> means jersey numbers must
-              be unique across both the mens and womens pools for players in that
-              age group. Only applies to clubs with both a mens and womens product
-              configured.
-            </p>
-            <p>
-              <strong>Mixed detected</strong> — the BC import found teams running
-              mixed-gender competition in this age group. Cross-pool check is
-              triggered automatically.
-            </p>
-            <p>
-              <strong>Manual override</strong> — forces cross-pool for an age
+              <strong>Manual override</strong> -- forces cross-pool for an age
               group where BC data shows only single-gender teams but mixed play
               is known to occur.
             </p>
