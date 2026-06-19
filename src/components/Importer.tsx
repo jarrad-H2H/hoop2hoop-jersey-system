@@ -319,7 +319,7 @@ const Importer: React.FC = () => {
         const isBorrowed = borrowingDiv.length > 0 && borrowingDiv !== currentDiv;
         const borrowingDivision = isBorrowed
           ? normalizeAgeGroup(
-              (row["Borrowing Team Grade"] || row["Borrowing Team Division"] ?? "")
+              (row["Borrowing Team Grade"] || (row["Borrowing Team Division"] ?? ""))
             )
           : null;
 
