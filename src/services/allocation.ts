@@ -18,6 +18,112 @@ function isAdjacentOrSameAgeGroup(ag1?: string | null, ag2?: string | null): boo
   return Math.abs(i1 - i2) <= 1;
 }
 
+// ─── YOB clash-window helpers (ALLOCATION_LOGIC.md rules) ─────────────────────
+
+/**
+ * Check whether the club has a U8 division.
+ * Only needed for U10 buyers (age 8-9) to decide whether to widen the clash window.
+ */
+async function hasU8Division(clubId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from("teams")
+    .select("id")
+    .eq("club_id_uuid", clubId)
+    .eq("age_group", "U8")
+    .limit(1);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Compute the birth-year range that clashes with a buyer born in buyerYob.
+ *
+ * Clash windows (from ALLOCATION_LOGIC.md):
+ *   U8  (age ≤7)         → all ages ≤7 at this club
+ *   U10 (age 8-9, U8 ✓) → ±1 year = ages 7–10
+ *   U10 (age 8-9, no U8) → all ages ≤9
+ *   U12 (age 10-11)      → ±1 = ages 9–12
+ *   U14 (age 12-13)      → ±1 = ages 11–14
+ *   U16 (age 14-15)      → ±1 = ages 13–16
+ *   U18 (age 16-17)      → ±1 = ages 15–18
+ *   Open/SLG (age ≥18)   → all ages 18+
+ *
+ * Returns { min, max } where min ≤ max are birth years (higher = younger).
+ */
+function getClashYobWindow(
+  buyerYob: number,
+  currentYear: number,
+  hasU8: boolean
+): { min: number; max: number } {
+  const age = currentYear - buyerYob;
+  if (age <= 7)  return { min: currentYear - 7,  max: currentYear };     // U8: all ≤7
+  if (age <= 9) {
+    return hasU8
+      ? { min: currentYear - 10, max: currentYear - 7 }   // ±1: ages 7–10
+      : { min: currentYear - 9,  max: currentYear };       // no U8: all ≤9
+  }
+  if (age <= 11) return { min: currentYear - 12, max: currentYear - 9  }; // U12
+  if (age <= 13) return { min: currentYear - 14, max: currentYear - 11 }; // U14
+  if (age <= 15) return { min: currentYear - 16, max: currentYear - 13 }; // U16
+  if (age <= 17) return { min: currentYear - 18, max: currentYear - 15 }; // U18
+  return { min: 1900, max: currentYear - 18 };                            // Open/SLG: all 18+
+}
+
+/**
+ * Estimate a YOB range from age_group label + season year.
+ * Used as a fallback for BC-imported players who have age_group but not yet
+ * estimated_yob_min/max (i.e., imported before the importer fix was deployed).
+ */
+function estimateYobFromAgeGroup(
+  ageGroup: string | null | undefined,
+  seasonYear: number
+): { min: number; max: number } | null {
+  if (!ageGroup) return null;
+  const ag = ageGroup.trim().toUpperCase();
+  if (ag === "U8")   return { min: seasonYear - 7,  max: seasonYear - 5  };
+  if (ag === "U10")  return { min: seasonYear - 9,  max: seasonYear - 8  };
+  if (ag === "U12")  return { min: seasonYear - 11, max: seasonYear - 10 };
+  if (ag === "U14")  return { min: seasonYear - 13, max: seasonYear - 12 };
+  if (ag === "U16")  return { min: seasonYear - 15, max: seasonYear - 14 };
+  if (ag === "U18")  return { min: seasonYear - 17, max: seasonYear - 16 };
+  if (ag === "SLG" || ag === "OPEN") return { min: seasonYear - 99, max: seasonYear - 18 };
+  return null;
+}
+
+/**
+ * Returns true if any YOB information for this player overlaps the given clash window.
+ *
+ * Priority:
+ *  1. Exact year_of_birth (widget-purchased players)
+ *  2. estimated_yob_min / estimated_yob_max (BC imports after importer fix)
+ *  3. Derived from age_group + seasonYear (BC imports before importer fix — transitional)
+ *  4. No data at all → conservatively returns true (treat as potential clash)
+ */
+function yobOverlapsWindow(
+  exactYob: number | null | undefined,
+  estMin: number | null | undefined,
+  estMax: number | null | undefined,
+  ageGroup: string | null | undefined,
+  seasonYear: number,
+  window: { min: number; max: number }
+): boolean {
+  // 1. Exact YOB
+  if (typeof exactYob === "number" && Number.isFinite(exactYob)) {
+    return exactYob >= window.min && exactYob <= window.max;
+  }
+  // 2. Estimated range
+  if (typeof estMin === "number" && typeof estMax === "number" &&
+      Number.isFinite(estMin) && Number.isFinite(estMax)) {
+    return estMin <= window.max && estMax >= window.min;
+  }
+  // 3. Fallback: derive from age_group (transitional BC imports)
+  const fromAg = estimateYobFromAgeGroup(ageGroup, seasonYear);
+  if (fromAg) {
+    return fromAg.min <= window.max && fromAg.max >= window.min;
+  }
+  // 4. No data — conservatively count as potential clash
+  return true;
+}
+
 /**
  * Types shared with the React components
  */
@@ -30,6 +136,9 @@ export interface ClashPlayer {
   age_group: string | null;     // e.g. "U14"
   final_shirt: number | null;
   year_of_birth: number | null;
+  estimated_yob_min?: number | null;
+  estimated_yob_max?: number | null;
+  bc_last_seen_season?: number | null;
 }
 
 export interface StockBySize {
@@ -127,7 +236,7 @@ export async function smartCheckNumber(
   // Fetch all players in this club wearing this jersey number.
   const { data: clashRows, error: clashError } = await supabase
     .from("players")
-    .select("id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth")
+    .select("id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, bc_last_seen_season")
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber);
 
@@ -162,21 +271,31 @@ export async function smartCheckNumber(
       }
     }
   } else {
-    // Backward-compat: cohort-based logic (used by widget, no team info available).
-    const requestedAgeGroup =
-      typeof yearOfBirth === "number" && Number.isFinite(yearOfBirth)
-        ? seasonYear - yearOfBirth
-        : undefined;
-
-    if (requestedAgeGroup === undefined) {
-      hardClashes = allNumberHolders;
+    // Widget path: YOB-window clash logic (ALLOCATION_LOGIC.md rules).
+    // Note: hasU8Division requires an async query but smartCheckNumber is called
+    // per-number so we pass hasU8=false here (conservative: uses ±1 window for U10).
+    // The proactive filter in suggestNumbersForClubRanked does the full U8 check.
+    if (typeof yearOfBirth !== "number" || !Number.isFinite(yearOfBirth)) {
+      // No YOB at all — flag all active holders as clashes (safe fallback)
+      hardClashes = allNumberHolders.filter(
+        (p) => p.bc_last_seen_season === null || (p.bc_last_seen_season ?? 0) >= seasonYear - 2
+      );
     } else {
-      const window = Math.max(0, cohortWindowYears);
+      const clashWin = getClashYobWindow(yearOfBirth, seasonYear, /* hasU8 */ false);
       hardClashes = allNumberHolders.filter((p) => {
-        if (typeof p.year_of_birth !== "number" || !Number.isFinite(p.year_of_birth))
+        // Inactive players don't block numbers
+        if (p.bc_last_seen_season !== null && p.bc_last_seen_season !== undefined &&
+            p.bc_last_seen_season < seasonYear - 2) {
           return false;
-        const playerAge = seasonYear - p.year_of_birth;
-        return Math.abs(playerAge - requestedAgeGroup) <= window;
+        }
+        return yobOverlapsWindow(
+          p.year_of_birth,
+          p.estimated_yob_min,
+          p.estimated_yob_max,
+          p.age_group,
+          seasonYear,
+          clashWin
+        );
       });
     }
   }
@@ -337,14 +456,15 @@ export async function suggestNumbersForClubRanked(input: {
   ageGroup?: string | null;
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
-  const cohortWindowYears = Math.max(0, input.cohortWindowYears ?? 0);
-  const adjacentCohortYears = Math.max(0, input.adjacentCohortYears ?? 1);
+  // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
+  // but the widget path now uses age-group-derived windows (ALLOCATION_LOGIC.md).
   const hasTeamContext =
     input.divisionCode !== undefined ||
     input.teamName !== undefined ||
     input.ageGroup !== undefined;
 
-  const targetAge = input.seasonYear - input.yearOfBirth;
+  const currentYear = input.seasonYear || new Date().getFullYear();
+  const targetAge = currentYear - input.yearOfBirth;
 
   const { data: invRows, error: invErr } = await supabase
     .from("inventory")
@@ -368,8 +488,8 @@ export async function suggestNumbersForClubRanked(input: {
   const candidateNums = Array.from(stockCounts.keys());
   if (candidateNums.length === 0) return [];
 
-  const yobForAge = (age: number) => input.seasonYear - age;
   const blockedNums = new Set<number>();
+  const adjCounts = new Map<number, number>();
 
   if (hasTeamContext) {
     // Team-aware: block numbers worn by players on the SAME team.
@@ -401,68 +521,83 @@ export async function suggestNumbersForClubRanked(input: {
       if (Number.isFinite(n)) blockedNums.add(n);
     }
   } else {
-    // Cohort-based blocking (backward compat — widget path).
-    const minAgeBlock = targetAge - cohortWindowYears;
-    const maxAgeBlock = targetAge + cohortWindowYears;
-    const minYobBlock = yobForAge(maxAgeBlock);
-    const maxYobBlock = yobForAge(minAgeBlock);
+    // ── Widget path: full YOB-window clash logic (ALLOCATION_LOGIC.md) ──────────
 
-    const { data: playersBlock, error: pbErr } = await supabase
+    // For U10 buyers (age 8-9) check whether U8 exists at this club —
+    // that determines whether the clash window is ±1 year or "all ages ≤9".
+    let hasU8 = false;
+    if (targetAge === 8 || targetAge === 9) {
+      hasU8 = await hasU8Division(input.clubId);
+    }
+    const clashWindow = getClashYobWindow(input.yearOfBirth, currentYear, hasU8);
+    // Adjacent window: one birth-year step beyond the clash boundary (scoring penalty only)
+    const adjWindow = { min: clashWindow.min - 2, max: clashWindow.max + 2 };
+
+    // Single query: all active holders of candidate numbers at this club.
+    // "Active" = bc_last_seen_season IS NULL (transitional) OR >= currentYear - 2.
+    const { data: allHolders, error: pbErr } = await supabase
       .from("players")
-      .select("final_shirt, year_of_birth")
+      .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
-      .gte("year_of_birth", minYobBlock)
-      .lte("year_of_birth", maxYobBlock);
+      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
 
     if (pbErr) {
       console.error("players block query error", pbErr);
       throw new Error("Failed to load player clash data for ranked suggestions.");
     }
-    for (const p of playersBlock ?? []) {
+
+    for (const p of allHolders ?? []) {
       const n = Number((p as any).final_shirt);
-      if (Number.isFinite(n)) blockedNums.add(n);
+      if (!Number.isFinite(n)) continue;
+      const exactYob  = (p as any).year_of_birth ?? null;
+      const estMin    = (p as any).estimated_yob_min ?? null;
+      const estMax    = (p as any).estimated_yob_max ?? null;
+      const ageGrp    = (p as any).age_group ?? null;
+
+      if (yobOverlapsWindow(exactYob, estMin, estMax, ageGrp, currentYear, clashWindow)) {
+        blockedNums.add(n);
+      } else if (yobOverlapsWindow(exactYob, estMin, estMax, ageGrp, currentYear, adjWindow)) {
+        adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
+      }
     }
-  }
 
-  // Reservation block (same in both paths)
-  const { data: resBlock, error: rbErr } = await supabase
-    .from("pending_allocations")
-    .select("jersey_number, year_of_birth, season_year, expires_at, status, size")
-    .eq("club_id", input.clubId)
-    .eq("size", input.size)
-    .eq("season_year", input.seasonYear)
-    .eq("status", "reserved");
+    // Source 2: active pending reservations / purchases
+    const { data: resBlock, error: rbErr } = await supabase
+      .from("pending_allocations")
+      .select("jersey_number, year_of_birth, expires_at, status")
+      .eq("club_id", input.clubId)
+      .in("jersey_number", candidateNums)
+      .in("status", ["reserved", "purchased"]);
 
-  if (rbErr) {
-    console.error("reservations block query error", rbErr);
-    throw new Error("Failed to load reservation data for ranked suggestions.");
-  }
+    if (rbErr) {
+      console.error("reservations block query error", rbErr);
+      throw new Error("Failed to load reservation data for ranked suggestions.");
+    }
 
-  const now = Date.now();
-  if (!hasTeamContext) {
-    // Only apply reservation blocking in cohort mode (widget path)
-    const minAgeBlock = targetAge - cohortWindowYears;
-    const maxAgeBlock = targetAge + cohortWindowYears;
+    const now = Date.now();
     for (const r of resBlock ?? []) {
-      const expiresAt = Date.parse(String((r as any).expires_at));
-      if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
-      const yob = Number((r as any).year_of_birth);
-      const n = Number((r as any).jersey_number);
-      if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
-      const age = input.seasonYear - yob;
-      if (age >= minAgeBlock && age <= maxAgeBlock) blockedNums.add(n);
+      const n      = Number((r as any).jersey_number);
+      const resYob = Number((r as any).year_of_birth);
+      if (!Number.isFinite(n) || !Number.isFinite(resYob)) continue;
+      // Skip expired reservations (purchased ones are always active)
+      if ((r as any).status === "reserved") {
+        const expiresAt = Date.parse(String((r as any).expires_at));
+        if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+      }
+      if (resYob >= clashWindow.min && resYob <= clashWindow.max) {
+        blockedNums.add(n);
+      } else if (resYob >= adjWindow.min && resYob <= adjWindow.max) {
+        adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
+      }
     }
   }
 
-  // Adjacent cohort penalty: penalise numbers used in nearby age groups (different team).
-  const adjCounts = new Map<number, number>();
-
+  // Team path adjacent penalty (runs when hasTeamContext)
   if (hasTeamContext) {
-    // Fetch players in adjacent age groups (using age_group column)
     const adjacentGroups = AGE_GROUP_ORDER.filter((ag) => {
       const reqIdx = ageGroupIndex(input.ageGroup);
-      const agIdx = ageGroupIndex(ag);
+      const agIdx  = ageGroupIndex(ag);
       return reqIdx !== -1 && agIdx !== -1 && Math.abs(reqIdx - agIdx) <= 1;
     });
 
@@ -477,7 +612,6 @@ export async function suggestNumbersForClubRanked(input: {
       for (const p of adjPlayers ?? []) {
         const n = Number((p as any).final_shirt);
         if (!Number.isFinite(n)) continue;
-        // Only penalise if NOT on the same team
         const sameTeam =
           ((p as any).division_code ?? null) === (input.divisionCode ?? null) &&
           ((p as any).team_name ?? null) === (input.teamName ?? null);
@@ -486,43 +620,9 @@ export async function suggestNumbersForClubRanked(input: {
         }
       }
     }
-  } else {
-    // Original adjacent cohort penalty (YOB-based, widget path)
-    const minAgeAdj = targetAge - adjacentCohortYears;
-    const maxAgeAdj = targetAge + adjacentCohortYears;
-    const minYobAdj = yobForAge(maxAgeAdj);
-    const maxYobAdj = yobForAge(minAgeAdj);
-
-    const { data: playersAdj, error: paErr } = await supabase
-      .from("players")
-      .select("final_shirt")
-      .eq("club_id", input.clubId)
-      .in("final_shirt", candidateNums)
-      .gte("year_of_birth", minYobAdj)
-      .lte("year_of_birth", maxYobAdj);
-
-    if (paErr) {
-      console.error("players adjacent query error", paErr);
-      throw new Error("Failed to load adjacent cohort usage for ranking.");
-    }
-    for (const p of playersAdj ?? []) {
-      const n = Number((p as any).final_shirt);
-      if (!Number.isFinite(n)) continue;
-      adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
-    }
-
-    for (const r of resBlock ?? []) {
-      const expiresAt = Date.parse(String((r as any).expires_at));
-      if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
-      const yob = Number((r as any).year_of_birth);
-      const n = Number((r as any).jersey_number);
-      if (!Number.isFinite(yob) || !Number.isFinite(n)) continue;
-      const age = input.seasonYear - yob;
-      if (age >= minAgeAdj && age <= maxAgeAdj) {
-        adjCounts.set(n, (adjCounts.get(n) ?? 0) + 1);
-      }
-    }
   }
+
+  // adjCounts is already populated for the widget path above
 
   const scored: NumberSuggestion[] = [];
   for (const n of candidateNums) {
