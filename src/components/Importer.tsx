@@ -43,8 +43,11 @@ function normalizeAgeGroup(raw: string): string {
   if (underMatch) return `U${underMatch[1]}`;
   const uMatch = s.match(/^U(\d+)/);
   if (uMatch) return `U${uMatch[1]}`;
-  if (s.startsWith("JUNIOR")) return "U14";
-  if (/^OPEN|SUPERLEA[GU]|^SENIOR/.test(s)) return "SLG";
+  if (s.startsWith("JUNIOR")) return "Junior";          // "Junior" age group (not U14)
+  if (/SUPERLEA[GU]/i.test(s)) return "SLG";           // Super League Girls only
+  if (/^OPEN\s+GIRLS?/i.test(s)) return "Open Girls";  // Open Girls competition
+  if (/^OPEN/i.test(s)) return "Open";                 // Other Open divisions
+  if (/^SENIOR/i.test(s)) return "Seniors";            // Senior / adult
   return raw.trim();
 }
 
@@ -72,7 +75,8 @@ function parseAgeGroupFromCode(divisionCode: string | null): string | null {
   const uMatch = divisionCode.match(/^U(\d{1,2})/i);
   if (uMatch) return `U${uMatch[1]}`;
   if (/^(JB|JG|JMC|JGC|JBC)/i.test(divisionCode)) return "Junior";
-  if (/^(SLG|OPEN)/i.test(divisionCode)) return "Open";
+  if (/^OGC/i.test(divisionCode)) return "Open Girls"; // Open Girls (e.g. OGC1, OGC2)
+  if (/^SLG/i.test(divisionCode)) return "SLG";        // Super League Girls
   return null;
 }
 
@@ -83,6 +87,30 @@ function dedupScore(p: ParsedPlayer): number {
   if (p.isBorrowed) score += 10;
   if (p.playing !== "1") score += 1;
   return score;
+}
+
+// ─── YOB range estimation from age group ─────────────────────────────────────
+// Returns estimated birth year range for clash-window calculations.
+// min = oldest possible birth year, max = youngest possible birth year.
+// Derived dynamically from competition year — never hardcoded year constants.
+function estimateYobRange(
+  ageGroup: string,
+  competitionYear: number
+): { min: number | null; max: number | null } {
+  switch (ageGroup) {
+    case "U8":   return { min: competitionYear - 7,  max: competitionYear - 5  }; // ages 5–7
+    case "U10":  return { min: competitionYear - 9,  max: competitionYear - 8  }; // ages 8–9
+    case "U12":  return { min: competitionYear - 11, max: competitionYear - 10 }; // ages 10–11
+    case "U14":  return { min: competitionYear - 13, max: competitionYear - 12 }; // ages 12–13
+    case "U16":  return { min: competitionYear - 15, max: competitionYear - 14 }; // ages 14–15
+    case "U18":  return { min: competitionYear - 17, max: competitionYear - 16 }; // ages 16–17
+    case "Open":
+    case "Open Girls":
+    case "Seniors":
+    case "SLG":  return { min: competitionYear - 99, max: competitionYear - 18 }; // 18+
+    case "Junior": return { min: null, max: null }; // TBD — awaiting GCB confirmation
+    default:     return { min: null, max: null };
+  }
 }
 
 // ─── Club name overrides ──────────────────────────────────────────────────────
@@ -469,24 +497,30 @@ const Importer: React.FC = () => {
       }
 
       // ── Step 4: Upsert players ─────────────────────────────────────────────
+      const currentYear = new Date().getFullYear();
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
       if (withBcId.length > 0) {
-        const upsertPayload = withBcId.map((r) => ({
-          bc_player_id: r.bcPlayerId,
-          first_name: r.firstName,
-          last_name: r.lastName,
-          club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
-          team_id: (r.divisionCode ?? r.teamRaw) || null,
-          team_name_raw: r.teamRaw || null,
-          division_code: r.divisionCode ?? null,
-          team_name: r.teamName ?? null,
-          age_group: r.ageGroup || null,
-          division_grade: r.divisionGrade || null,
-          final_shirt: r.finalShirt ?? null,
-          borrowing_division: r.borrowingDivision ?? null,
-          competition_source: season,
-          bc_last_seen_season: season,
-        }));
+        const upsertPayload = withBcId.map((r) => {
+          const yob = estimateYobRange(r.ageGroup, currentYear);
+          return {
+            bc_player_id: r.bcPlayerId,
+            first_name: r.firstName,
+            last_name: r.lastName,
+            club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
+            team_id: (r.divisionCode ?? r.teamRaw) || null,
+            team_name_raw: r.teamRaw || null,
+            division_code: r.divisionCode ?? null,
+            team_name: r.teamName ?? null,
+            age_group: r.ageGroup || null,
+            division_grade: r.divisionGrade || null,
+            final_shirt: r.finalShirt ?? null,
+            borrowing_division: r.borrowingDivision ?? null,
+            competition_source: season,
+            bc_last_seen_season: currentYear,        // integer year, not competition name
+            estimated_yob_min: yob.min,
+            estimated_yob_max: yob.max,
+          };
+        });
 
         const { error: upsertErr } = await supabase
           .from("players")
@@ -500,20 +534,25 @@ const Importer: React.FC = () => {
 
       const withoutBcId = previewRows.filter((r) => !r.bcPlayerId);
       if (withoutBcId.length > 0) {
-        const insertPayload = withoutBcId.map((r) => ({
-          first_name: r.firstName,
-          last_name: r.lastName,
-          club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
-          team_id: (r.divisionCode ?? r.teamRaw) || null,
-          team_name_raw: r.teamRaw || null,
-          division_code: r.divisionCode ?? null,
-          team_name: r.teamName ?? null,
-          age_group: r.ageGroup || null,
-          division_grade: r.divisionGrade || null,
-          final_shirt: r.finalShirt ?? null,
-          borrowing_division: r.borrowingDivision ?? null,
-          competition_source: season,
-        }));
+        const insertPayload = withoutBcId.map((r) => {
+          const yob = estimateYobRange(r.ageGroup, currentYear);
+          return {
+            first_name: r.firstName,
+            last_name: r.lastName,
+            club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
+            team_id: (r.divisionCode ?? r.teamRaw) || null,
+            team_name_raw: r.teamRaw || null,
+            division_code: r.divisionCode ?? null,
+            team_name: r.teamName ?? null,
+            age_group: r.ageGroup || null,
+            division_grade: r.divisionGrade || null,
+            final_shirt: r.finalShirt ?? null,
+            borrowing_division: r.borrowingDivision ?? null,
+            competition_source: season,
+            estimated_yob_min: yob.min,
+            estimated_yob_max: yob.max,
+          };
+        });
 
         const { error: insertErr } = await supabase.from("players").insert(insertPayload);
         if (insertErr) {
