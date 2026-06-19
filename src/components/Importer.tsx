@@ -306,16 +306,21 @@ const Importer: React.FC = () => {
         const shirtNum = shirtStr !== "" ? Number(shirtStr) : NaN;
         const finalShirt = Number.isFinite(shirtNum) ? shirtNum : null;
 
-        const ageGroupRaw = (row["playerDivisionName"] ?? "").trim();
-        const ageGroup = normalizeAgeGroup(ageGroupRaw);
+        // playerDivisionGrade = "UNDER 10 MIXED 3" — age + gender + specific grade number
+        // playerDivisionName  = "UNDER 10 MIXED"   — age + gender only (no grade)
+        // Use grade as primary; fall back to name if grade is missing
         const divisionGrade = (row["playerDivisionGrade"] ?? "").trim();
+        const ageGroupRaw = (divisionGrade || (row["playerDivisionName"] ?? "")).trim();
+        const ageGroup = normalizeAgeGroup(ageGroupRaw);
         const playing = (row["playing"] ?? "").trim();
 
         const currentDiv = (row["Current Team Division"] ?? "").trim().toUpperCase();
         const borrowingDiv = (row["Borrowing Team Division"] ?? "").trim().toUpperCase();
         const isBorrowed = borrowingDiv.length > 0 && borrowingDiv !== currentDiv;
         const borrowingDivision = isBorrowed
-          ? normalizeAgeGroup(row["Borrowing Team Division"] ?? "")
+          ? normalizeAgeGroup(
+              (row["Borrowing Team Grade"] || row["Borrowing Team Division"] ?? "")
+            )
           : null;
 
         const player: ParsedPlayer = {
