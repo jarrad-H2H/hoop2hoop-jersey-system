@@ -332,3 +332,39 @@ const CompetitionGenderAdmin: React.FC = () => {
 };
 
 export default CompetitionGenderAdmin;
+py-2">
+              {statusMsg}
+            </div>
+          )}
+          {errorMsg && (
+            <div className="mt-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              {errorMsg}
+            </div>
+          )}
+
+          {/* Legend */}
+          <div className="mt-6 pt-4 border-t text-xs text-gray-500 space-y-1.5">
+            <p>
+              <strong>Cross-pool check — Yes</strong> means jersey numbers must
+              be unique across both the mens and womens pools for players in that
+              age group. Only applies to clubs with both a mens and womens product
+              configured.
+            </p>
+            <p>
+              <strong>Mixed detected</strong> — the BC import found teams running
+              mixed-gender competition in this age group. Cross-pool check is
+              triggered automatically.
+            </p>
+            <p>
+              <strong>Manual override</strong> — forces cross-pool for an age
+              group where BC data shows only single-gender teams but mixed play
+              is known to occur.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default CompetitionGenderAdmin;
