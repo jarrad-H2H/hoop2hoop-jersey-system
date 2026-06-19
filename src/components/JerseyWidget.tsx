@@ -1,5 +1,5 @@
 // FILE: src/components/JerseyWidget.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase";
 import {
   smartCheckNumber,
@@ -436,6 +436,29 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     return [...notSure, ...filteredTeams];
   }, [filteredTeams, derivedAgeGroup]);
 
+  // ── Stable ref so effects can call handleSuggest without stale closure issues ──
+  // (defined before handleSuggest; always kept up-to-date in the render body below)
+  const handleSuggestRef = useRef<() => Promise<void>>(async () => {});
+
+  // Clear stale suggestions whenever the inputs that determine the number pool change.
+  // This ensures the grid is always in sync with what the user has entered.
+  useEffect(() => {
+    setSuggestions([]);
+    setSelectedNumber(null);
+    setError(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedClubId, selectedSize, yobNum]);
+
+  // Auto-trigger the suggestion query when all required fields are complete.
+  // The user doesn't need to click the button — the safe number grid just appears.
+  // A 700ms debounce prevents firing on every keystroke.
+  useEffect(() => {
+    if (!canSuggest || suggestions.length > 0 || loadingSuggest) return;
+    const timer = setTimeout(() => void handleSuggestRef.current(), 700);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSuggest, suggestions.length, loadingSuggest]);
+
   const handleSuggest = async () => {
     clearMessages();
     if (!selectedClubId) { setError(clubDetectError || "Club could not be detected for this product."); return; }
@@ -467,7 +490,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           const check = await smartCheckNumber(selectedClubId, pref, {
             seasonYear: SEASON_YEAR,
             yearOfBirth: yobNum,
-            cohortWindowYears: 0,
+            // No cohortWindowYears — new YOB-window logic uses age-group-derived windows
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
             (s) => String(s.size).toLowerCase() === String(selectedSize).toLowerCase() && s.count > 0
@@ -498,6 +521,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       setLoadingSuggest(false);
     }
   };
+  // Keep ref in sync with the latest closure on every render
+  handleSuggestRef.current = handleSuggest;
 
   const handlePickSuggestion = (num: number) => {
     setSelectedNumber(num);
@@ -765,7 +790,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           disabled={!canSuggest}
           className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors"
         >
-          {loadingSuggest ? "Checking…" : "Check & Suggest Playing Numbers"}
+          {loadingSuggest ? "Checking…" : suggestions.length > 0 ? "Refresh Numbers" : "Find Available Numbers"}
         </button>
 
         {/* Suggestions */}
@@ -820,7 +845,48 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {selectedNumber !== null && (
           <button
             type="button"
-            onClick={handleConfirm}
+            onClick={handleReserve}
+            disabled={!canConfirm}
+            className="w-full px-4 py-2 rounded font-semibold text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors"
+          >
+            {reserving ? "Reserving…" : `Confirm & Reserve #${selectedNumber}`}
+          </button>
+        )}
+
+        {/* Status / countdown */}
+        {statusMessage && (
+          <div className="text-sm text-emerald-700 font-medium">{statusMessage}</div>
+        )}
+
+        {expiresAt !== null && remainingSeconds > 0 && (
+          <div className="text-xs text-gray-500">
+            Reservation expires in {Math.floor(remainingSeconds / 60)}:
+            {String(remainingSeconds % 60).padStart(2, "0")}
+          </div>
+        )}
+
+        {pendingAllocationId && (
+          <div className="text-[11px] mt-1 text-amber-900/80">
+            Reservation ID saved for checkout.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default JerseyWidget;
+reserved for 15 minutes. My reservation
+              will be confirmed once payment is complete.
+            </span>
+          </label>
+        )}
+
+        {/* Confirm & Reserve */}
+        {selectedNumber !== null && (
+          <button
+            type="button"
+            onClick={handleReserve}
             disabled={!canConfirm}
             className="w-full px-4 py-2 rounded font-semibold text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors"
           >
