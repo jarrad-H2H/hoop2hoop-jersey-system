@@ -116,9 +116,11 @@ interface JerseyWidgetProps {
   clubId?: string;
   size?: string | null;
   demoMode?: boolean;
+  /** Gender segment for this Shopify product: 'mens' | 'womens' | 'unisex' (default) */
+  gender?: "mens" | "womens" | "unisex";
 }
 
-const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: propSize, demoMode }) => {
+const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: propSize, demoMode, gender = "unisex" }) => {
   const SEASON_YEAR = new Date().getFullYear();
 
   // Shopify context
