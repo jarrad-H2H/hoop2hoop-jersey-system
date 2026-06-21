@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 
+type Gender = "unisex" | "mens" | "womens";
+
+const GENDER_LABELS: Record<Gender, string> = {
+  unisex: "Unisex",
+  mens: "Men's",
+  womens: "Women's",
+};
+
 interface Club {
   id: string;
   name: string;
@@ -11,6 +19,7 @@ interface MappingRow {
   id: string;
   shopify_product_id: string;
   club_id: string;
+  gender: Gender;
   created_at: string;
   updated_at: string;
   clubs?: { name: string } | null;
@@ -31,6 +40,7 @@ function extractShopifyProductId(input: string): string | null {
 const ProductClubMapping: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
+  const [selectedGender, setSelectedGender] = useState<Gender>("unisex");
 
   const [productInput, setProductInput] = useState("");
   const [parsedProductId, setParsedProductId] = useState<string | null>(null);
@@ -61,7 +71,7 @@ const ProductClubMapping: React.FC = () => {
   const loadMappings = async () => {
     const { data, error } = await supabase
       .from("shopify_product_club_map")
-      .select("id, shopify_product_id, club_id, created_at, updated_at, clubs(name)")
+      .select("id, shopify_product_id, club_id, gender, created_at, updated_at, clubs(name)")
       .order("updated_at", { ascending: false });
 
     if (error) {
@@ -112,7 +122,7 @@ const ProductClubMapping: React.FC = () => {
       const { error: upsertError } = await supabase
         .from("shopify_product_club_map")
         .upsert(
-          [{ shopify_product_id: parsedProductId, club_id: selectedClubId }],
+          [{ shopify_product_id: parsedProductId, club_id: selectedClubId, gender: selectedGender }],
           { onConflict: "shopify_product_id" }
         );
 
@@ -121,7 +131,7 @@ const ProductClubMapping: React.FC = () => {
         return;
       }
 
-      setStatus(`Saved mapping: product ${parsedProductId} -> club`);
+      setStatus(`Saved: product ${parsedProductId} → club (${GENDER_LABELS[selectedGender]})`);
       setProductInput("");
       await loadMappings();
     } finally {
@@ -153,8 +163,8 @@ const ProductClubMapping: React.FC = () => {
       <div>
         <h1 className="text-2xl font-bold">Product {"->"} Club Mapping</h1>
         <p className="text-sm text-gray-600 mt-1">
-          Paste a Shopify <b>Admin product URL</b> (recommended) or a numeric <b>Product ID</b>, then assign it to a club.
-          This is how the widget detects the club safely.
+          Paste a Shopify <b>Admin product URL</b> (recommended) or a numeric <b>Product ID</b>, then assign it to a
+          club and gender. A club can have up to three products — one each for Unisex, Men's, and Women's.
         </p>
       </div>
 
@@ -170,7 +180,7 @@ const ProductClubMapping: React.FC = () => {
       )}
 
       <form onSubmit={handleSave} className="bg-white border rounded p-4 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
           <div>
             <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Club</label>
             <select
@@ -184,6 +194,20 @@ const ProductClubMapping: React.FC = () => {
                   {c.name}
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Gender</label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={selectedGender}
+              onChange={(e) => setSelectedGender(e.target.value as Gender)}
+              disabled={loading}
+            >
+              <option value="unisex">Unisex</option>
+              <option value="mens">Men's</option>
+              <option value="womens">Women's</option>
             </select>
           </div>
 
@@ -230,6 +254,7 @@ const ProductClubMapping: React.FC = () => {
               <tr>
                 <th className="px-3 py-2 text-left">Shopify Product ID</th>
                 <th className="px-3 py-2 text-left">Club</th>
+                <th className="px-3 py-2 text-left">Gender</th>
                 <th className="px-3 py-2 text-left">Updated</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
@@ -239,6 +264,19 @@ const ProductClubMapping: React.FC = () => {
                 <tr key={m.id} className="border-t odd:bg-white even:bg-gray-50">
                   <td className="px-3 py-2 font-mono">{m.shopify_product_id}</td>
                   <td className="px-3 py-2">{m.clubs?.name ?? m.club_id}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
+                        m.gender === "mens"
+                          ? "bg-blue-100 text-blue-800"
+                          : m.gender === "womens"
+                          ? "bg-pink-100 text-pink-800"
+                          : "bg-gray-100 text-gray-700"
+                      }`}
+                    >
+                      {GENDER_LABELS[m.gender] ?? m.gender}
+                    </span>
+                  </td>
                   <td className="px-3 py-2">{new Date(m.updated_at).toLocaleString()}</td>
                   <td className="px-3 py-2 text-right">
                     <button
@@ -254,7 +292,7 @@ const ProductClubMapping: React.FC = () => {
               ))}
               {mappings.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-8 text-center text-gray-500">
+                  <td colSpan={5} className="px-3 py-8 text-center text-gray-500">
                     No mappings yet.
                   </td>
                 </tr>
