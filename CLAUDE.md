@@ -233,10 +233,7 @@ Key pages: Club Manager, Club Overview, Players, Importer, Stock Planner, Alloca
 
 | # | Task | Notes |
 |---|---|---|
-| #30 | Confirm Junior age group YOB range | Jarrad to call Gold Coast Basketball. Currently treated conservatively. |
-| — | Test #32 (cross-pool) and #35 (30-min hold) | Needs H2H test club with synthetic inventory in Supabase |
 | — | Shopify theme snippet update | Add `jerseyGender` metafield to `buy-buttons.liquid` for dual product support (when ready to configure Shopify products for a second club) |
-| — | Admin: change password / forgot password links | Missing from admin panel login screen |
 
 ---
 
