@@ -151,6 +151,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [playingUp, setPlayingUp] = useState<boolean | null>(null);
   const [matchedPlayerId, setMatchedPlayerId] = useState<string | null>(null);
   const [matchedPlayerDisplayName, setMatchedPlayerDisplayName] = useState<string | null>(null);
+  const [matchedPlayerDivisionCode, setMatchedPlayerDivisionCode] = useState<string | null>(null);
+  const [matchedPlayerTeamName, setMatchedPlayerTeamName] = useState<string | null>(null);
   const [identityConfirmed, setIdentityConfirmed] = useState<boolean | null>(null);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   // ──────────────────────────────────────────────────────────────────────────
@@ -405,6 +407,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setPlayingUp(null);
     setMatchedPlayerId(null);
     setMatchedPlayerDisplayName(null);
+    setMatchedPlayerDivisionCode(null);
+    setMatchedPlayerTeamName(null);
     setIdentityConfirmed(null);
     setSuggestions([]);
     setSelectedNumber(null);
@@ -487,6 +491,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             setExistingPlayerJersey(result.currentJerseyNumber);
             setExistingPlayerInventoryId(result.previousInventoryId ?? null);
           }
+          // Plan B: store team identifiers for team-aware clash checking after identity confirmed
+          setMatchedPlayerDivisionCode(result.divisionCode ?? null);
+          setMatchedPlayerTeamName(result.teamName ?? null);
           // Stop here — let the identity confirm / keep jersey prompts appear
           return;
         }
@@ -524,6 +531,20 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     const yobForSearch =
       keepExistingJersey === true && playingUp === true ? undefined : yobNum;
 
+    // Plan B: returning player with confirmed identity and a known team.
+    // Passing divisionCode + teamName switches the allocation functions from the
+    // conservative YOB-window path to team-aware logic: only same-team numbers
+    // are hard-blocked; different-team numbers (even within ±1 YOB) are allowed.
+    const planBDivisionCode =
+      isNewPlayer === false &&
+      identityConfirmed === true &&
+      matchedPlayerId !== null &&
+      matchedPlayerDivisionCode !== null
+        ? matchedPlayerDivisionCode
+        : undefined;
+    const planBTeamName =
+      planBDivisionCode !== undefined ? matchedPlayerTeamName ?? undefined : undefined;
+
     setLoadingSuggest(true);
     setSuggestions([]);
     setSelectedNumber(null);
@@ -535,6 +556,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobForSearch,
         ageGroup: effectiveAgeGroup ?? undefined,
+        divisionCode: planBDivisionCode,
+        teamName: planBTeamName,
         crossPoolCheck,
         limit: 12,
       });
@@ -546,6 +569,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             seasonYear: SEASON_YEAR,
             yearOfBirth: yobForSearch,
             ageGroup: effectiveAgeGroup ?? undefined,
+            divisionCode: planBDivisionCode,
+            teamName: planBTeamName,
             crossPoolCheck,
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
@@ -693,6 +718,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               setPlayingUp(null);
               setMatchedPlayerId(null);
               setMatchedPlayerDisplayName(null);
+              setMatchedPlayerDivisionCode(null);
+              setMatchedPlayerTeamName(null);
               setIdentityConfirmed(null);
             }}
           />
@@ -717,6 +744,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               setPlayingUp(null);
               setMatchedPlayerId(null);
               setMatchedPlayerDisplayName(null);
+              setMatchedPlayerDivisionCode(null);
+              setMatchedPlayerTeamName(null);
               setIdentityConfirmed(null);
             }}
           />
@@ -768,6 +797,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 if (!v) {
                   // Player said "No" — treat as genuinely new; clear matched state
                   setMatchedPlayerId(null);
+                  setMatchedPlayerDivisionCode(null);
+                  setMatchedPlayerTeamName(null);
                   setExistingPlayerJersey(null);
                   setExistingPlayerInventoryId(null);
                   setKeepExistingJersey(null);
@@ -901,8 +932,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </div>
         )}
 
-        {/* Disclaimer */}
-        {selectedNumber !== null && (
+        {/* Disclaimer — shown once suggestions are available */}
+        {suggestions.length > 0 && (
           <label className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
             <input
               type="checkbox"
@@ -911,8 +942,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               onChange={(e) => setDisclaimerChecked(e.target.checked)}
             />
             <span>
-              I understand this number is reserved for 30 minutes. My reservation
-              will be confirmed once payment is complete.
+              I accept responsibility for ensuring my playing number won't clash with other players in my team.
             </span>
           </label>
         )}
