@@ -344,9 +344,11 @@ export async function smartCheckNumber(
   let hardClashes: ClashPlayer[] = [];
   let softWarnings: ClashPlayer[] = [];
 
-  // Team-aware path: at least one of divisionCode / teamName / ageGroup was supplied.
-  const hasTeamContext =
-    divisionCode !== undefined || teamName !== undefined || ageGroup !== undefined;
+  // Team-aware path: an actual team identity is known (divisionCode or teamName).
+  // ageGroup alone does NOT imply team context — it's always known once YOB is entered,
+  // even for "I don't know my team" players, who must fall through to the conservative
+  // YOB-window hard-block below (ALLOCATION_LOGIC.md 2b) rather than the team-aware path.
+  const hasTeamContext = divisionCode !== undefined || teamName !== undefined;
 
   if (hasTeamContext) {
     for (const p of allNumberHolders) {
@@ -575,10 +577,10 @@ export async function suggestNumbersForClubRanked(input: {
   const limit = Math.max(1, input.limit ?? 10);
   // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
   // but the widget path now uses age-group-derived windows (ALLOCATION_LOGIC.md).
+  // Team-aware path: an actual team identity is known. ageGroup alone does NOT imply
+  // team context — see matching comment in smartCheckNumber.
   const hasTeamContext =
-    input.divisionCode !== undefined ||
-    input.teamName !== undefined ||
-    input.ageGroup !== undefined;
+    input.divisionCode !== undefined || input.teamName !== undefined;
 
   const currentYear = input.seasonYear || new Date().getFullYear();
   const targetAge = currentYear - input.yearOfBirth;

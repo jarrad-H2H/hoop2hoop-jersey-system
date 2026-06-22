@@ -26,6 +26,7 @@ Update this file whenever new rules are agreed, then update the code to match.
 - When the player's team is unknown (new player, not found by name lookup), ±1 year YOB is the proxy for same-team risk
 - If any existing holder within ±1 YOB year already holds that number, do NOT suggest it
 - The ±1 year window is derived from the Age Group Clash Windows table (Section 3)
+- **Bug fixed 2026-06-22**: `hasTeamContext` in `smartCheckNumber`/`suggestNumbersForClubRanked` used to flip true whenever `ageGroup` was supplied — but the widget always supplies `ageGroup` once YOB is known, even for "I don't know my team" players. That routed unknown-team players into the team-aware branch (which only soft-warns on age-group adjacency) instead of this hard-blocking YOB-window rule, silently disabling the documented safety net. Fixed: `hasTeamContext` now requires an actual `divisionCode`/`teamName`, not just `ageGroup`.
 
 ### 2c. Plan B — Different Team Override
 - A ±1 year YOB clash is **acceptable** if both players are confirmed on **different teams**
