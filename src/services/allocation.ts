@@ -1013,7 +1013,7 @@ export async function reserveNumberForPurchase(input: {
     p_season_year: input.seasonYear,
     p_year_of_birth: input.yearOfBirth,
     p_team_id: input.teamId ?? null,
-    p_expires_minutes: input.expiresMinutes ?? 15,
+    p_expires_minutes: input.expiresMinutes ?? 30,
     p_player_first_name: input.playerFirstName ?? null,
     p_player_last_name: input.playerLastName ?? null,
     p_is_new_player: input.isNewPlayer ?? null,
