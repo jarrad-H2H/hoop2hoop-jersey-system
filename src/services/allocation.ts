@@ -335,12 +335,16 @@ export async function smartCheckNumber(
       ? optSeasonYear
       : new Date().getFullYear();
 
-  // Fetch all players in this club wearing this jersey number.
+  // Fetch all ACTIVE players in this club wearing this jersey number. Inactive/released
+  // players (bc_last_seen_season < seasonYear - 2) must not block their old number for
+  // the team-aware path either -- this filter previously only applied in the YOB-window
+  // fallback branch, so the (far more common) team-aware path never freed up old numbers.
   let clashQuery = supabase
     .from("players")
     .select("id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, bc_last_seen_season")
     .eq("club_id", clubId)
-    .eq("final_shirt", jerseyNumber);
+    .eq("final_shirt", jerseyNumber)
+    .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${seasonYear - 2}`);
   if (excludePlayerId) {
     clashQuery = clashQuery.neq("id", excludePlayerId);
   }
@@ -626,12 +630,15 @@ export async function suggestNumbersForClubRanked(input: {
   const adjCounts = new Map<number, number>();
 
   if (hasTeamContext) {
-    // Team-aware: block numbers worn by players on the SAME team.
+    // Team-aware: block numbers worn by ACTIVE players on the SAME team. Inactive/released
+    // players (bc_last_seen_season < currentYear - 2) must not block their old number here
+    // either -- this filter previously only applied in the YOB-window fallback branch.
     const sameTeamQuery = supabase
       .from("players")
       .select("final_shirt")
       .eq("club_id", input.clubId)
-      .in("final_shirt", candidateNums);
+      .in("final_shirt", candidateNums)
+      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
 
     // null-safe team filter
     if (input.divisionCode != null) {
@@ -777,7 +784,8 @@ export async function suggestNumbersForClubRanked(input: {
         .select("final_shirt, division_code, team_name")
         .eq("club_id", input.clubId)
         .in("final_shirt", candidateNums)
-        .in("age_group", adjacentGroups);
+        .in("age_group", adjacentGroups)
+        .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
       if (input.excludePlayerId) {
         adjQuery = adjQuery.neq("id", input.excludePlayerId);
       }

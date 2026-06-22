@@ -241,7 +241,7 @@ Key pages: Club Manager, Club Overview, Players, Importer, Stock Planner, Alloca
 
 1. **`is_client` flag**: All BC clubs are imported regardless. `is_client = true` is the only switch that activates the widget for a club. Flip it in the `clubs` table when a club goes live.
 
-2. **Player inactivity**: `bc_last_seen_season < current_year - 2` = released. `bc_last_seen_season IS NULL` = treat as active (conservative — these are widget-purchase players who've never appeared in a BC import).
+2. **Player inactivity**: `bc_last_seen_season < current_year - 2` = released. `bc_last_seen_season IS NULL` = treat as active (conservative — these are widget-purchase players who've never appeared in a BC import). **Bug fixed 2026-06-22**: this filter previously only applied in the YOB-window fallback path (`smartCheckNumber`/`suggestNumbersForClubRanked`'s `else` branch) — the team-aware path (the default whenever a team is known, i.e. almost always) never checked it at all, so a released player's old number could never free up in the common case. Fixed by applying the active-player filter directly in the SQL queries for both paths.
 
 3. **YOB is null for BC players**: BC CSV has no YOB. The `year_of_birth` column on `players` is only populated when a player completes a widget purchase. Clash checking uses `estimated_yob_min`/`estimated_yob_max` for BC-imported players.
 
