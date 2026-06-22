@@ -562,6 +562,18 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     const planBTeamName =
       planBDivisionCode !== undefined ? matchedPlayerTeamName ?? undefined : undefined;
 
+    // New (or unconfirmed) players who picked an actual team from the dropdown still
+    // need same-team clash protection — teamChoice was previously only used to tag the
+    // reservation record (teamId) and never passed into clash checking, so a new player
+    // could be shown a number already worn by a teammate. Resolve the chosen team's
+    // name here and fall back to it whenever Plan B's team identity isn't available.
+    const selectedTeamName =
+      teamChoice !== "not_sure"
+        ? allTeams.find((t) => t.id === teamChoice)?.name ?? undefined
+        : undefined;
+    const effectiveDivisionCode = planBDivisionCode;
+    const effectiveTeamName = planBTeamName ?? selectedTeamName;
+
     setLoadingSuggest(true);
     setSuggestions([]);
     setSelectedNumber(null);
@@ -573,8 +585,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobForSearch,
         ageGroup: effectiveAgeGroup ?? undefined,
-        divisionCode: planBDivisionCode,
-        teamName: planBTeamName,
+        divisionCode: effectiveDivisionCode,
+        teamName: effectiveTeamName,
         crossPoolCheck,
         productType: selectedProductType,
         limit: 12,
@@ -587,8 +599,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             seasonYear: SEASON_YEAR,
             yearOfBirth: yobForSearch,
             ageGroup: effectiveAgeGroup ?? undefined,
-            divisionCode: planBDivisionCode,
-            teamName: planBTeamName,
+            divisionCode: effectiveDivisionCode,
+            teamName: effectiveTeamName,
             crossPoolCheck,
             productType: selectedProductType,
           });
