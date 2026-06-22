@@ -4,7 +4,7 @@
 //   2. ageGroup alone no longer forces the team-aware path, so "I don't know my team"
 //      players correctly fall through to the +/-1 YOB-window hard-block (ALLOCATION_LOGIC.md 2b)
 // Run with: npx tsx scripts/test-demo-scenarios.ts
-import { isAgeGroupCrossPool, smartCheckNumber } from "../src/services/allocation";
+import { isAgeGroupCrossPool, smartCheckNumber, lookupPlayerByName } from "../src/services/allocation";
 
 const CLUB_ID = "00000000-0000-0000-0000-0000000000aa";
 let failures = 0;
@@ -60,6 +60,30 @@ async function main() {
   check(
     "Scenario D: #5 blocked via +/-1 YOB proxy when team is unknown (Sam vs Ethan)",
     d.clashes.length === 1
+  );
+
+  // Scenario E: Olivia Reed, RETURNING player (found via lookupPlayerByName), confirmed
+  // team B -> ALLOWED for #5, contrasting directly with Scenario D's same #5 + same YOB
+  // band but no confirmed team. This is Plan B (ALLOCATION_LOGIC.md 2c) in action.
+  const lookup = await lookupPlayerByName({
+    clubId: CLUB_ID,
+    firstName: "Olivia",
+    lastName: "Reed",
+    yearOfBirth: 2009,
+    ageGroup: "U18",
+    productType: "default",
+  });
+  const e = await smartCheckNumber(CLUB_ID, 5, {
+    divisionCode: lookup.divisionCode,
+    teamName: lookup.teamName ?? undefined,
+    ageGroup: "U18",
+    crossPoolCheck: u18CrossPool,
+    productType: "default",
+  });
+  check("Scenario E: lookupPlayerByName found Olivia on Team B", lookup.found === true);
+  check(
+    "Scenario E: #5 NOT blocked for Olivia (Plan B, confirmed different team)",
+    e.clashes.length === 0
   );
 
   console.log(`\n${failures === 0 ? "ALL PASSED" : `${failures} FAILED`}`);
