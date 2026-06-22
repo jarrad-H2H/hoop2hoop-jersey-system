@@ -883,6 +883,9 @@ export async function lookupPlayerByName(params: {
   matchedLastName?: string;
   currentJerseyNumber?: number | null;
   previousInventoryId?: string | null;
+  /** Plan B: the player's team identifiers from the DB — used for team-aware clash checking. */
+  divisionCode?: string | null;
+  teamName?: string | null;
 }> {
   const { clubId, firstName, lastName, yearOfBirth, ageGroup } = params;
   const firstTrimmed = firstName.trim();
@@ -894,7 +897,7 @@ export async function lookupPlayerByName(params: {
 
   const { data: exact } = await supabase
     .from("players")
-    .select("id, first_name, last_name, final_shirt, year_of_birth")
+    .select("id, first_name, last_name, final_shirt, year_of_birth, division_code, team_name")
     .eq("club_id", clubId)
     .ilike("first_name", firstTrimmed)
     .ilike("last_name", lastTrimmed)
@@ -906,7 +909,7 @@ export async function lookupPlayerByName(params: {
   if (!player) {
     const { data: fuzzy } = await supabase
       .from("players")
-      .select("id, first_name, last_name, final_shirt, year_of_birth")
+      .select("id, first_name, last_name, final_shirt, year_of_birth, division_code, team_name")
       .eq("club_id", clubId)
       .ilike("last_name", lastTrimmed)
       .or(cohortFilter)
@@ -945,6 +948,8 @@ export async function lookupPlayerByName(params: {
     matchedLastName: player.last_name ?? undefined,
     currentJerseyNumber: player.final_shirt ?? null,
     previousInventoryId,
+    divisionCode: player.division_code ?? null,
+    teamName: player.team_name ?? null,
   };
 }
 
