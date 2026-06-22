@@ -218,6 +218,7 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 - Importer estimates YOB range and stores `estimated_yob_min` / `estimated_yob_max` on each player
 - `bc_last_seen_season` is updated to the import year on every player seen in that run
 - Club name normalisation handles known aliases: VARSITY → Varsity, COPPERHEADS → Varsity, king's → King's
+- **BC ID columns (2026-06-22)**: the CSV's `Player Id` column (stored as `bc_player_id`, used as the upsert conflict key — one row per team registration) is **not** reliably stable across a player's separate team registrations. The CSV's `User ID` column **is** stable across teams for the same person — confirmed by direct analysis of real export data (e.g. "Annabel Ashton": same `User ID` on both her LEPRECHAUNS and SHAMROCKS rows, but a different `Player Id` for each). `User ID` is now also captured, into `bc_user_id`, purely for linking/display purposes — it is NOT an upsert key, since multi-team players are intentionally represented as separate rows (one per team).
 
 ### Club name structure differences
 - **Gold Coast**: division embedded in team name (e.g., "JGC1 Celtics Leprechauns")

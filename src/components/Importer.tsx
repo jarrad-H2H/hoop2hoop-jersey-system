@@ -16,6 +16,7 @@ interface RawRow {
 
 interface ParsedPlayer {
   bcPlayerId: string;
+  bcUserId: string;
   firstName: string;
   lastName: string;
   clubName: string;
@@ -299,6 +300,9 @@ const Importer: React.FC = () => {
         const { clubName, divisionCode, teamName } = deriveTeamFields(teamRaw, parsingStrategy);
 
         const bcPlayerId = (row["Player Id"] ?? row["Player ID"] ?? "").trim();
+        // "User ID" is the stable cross-team identifier in BC's export -- unlike "Player Id"
+        // (above), which can change between separate team registrations for the same person.
+        const bcUserId = (row["User ID"] ?? row["UserId"] ?? "").trim();
         const firstName = (row["First Name"] ?? row["FirstName"] ?? "").trim();
         const lastName = (row["Last Name"] ?? row["LastName"] ?? "").trim();
 
@@ -329,6 +333,7 @@ const Importer: React.FC = () => {
 
         const player: ParsedPlayer = {
           bcPlayerId,
+          bcUserId,
           firstName,
           lastName,
           clubName: normalizeClubName(clubName),
@@ -513,6 +518,7 @@ const Importer: React.FC = () => {
           const yob = estimateYobRange(r.ageGroup, currentYear);
           return {
             bc_player_id: r.bcPlayerId,
+            bc_user_id: r.bcUserId || null,
             first_name: r.firstName,
             last_name: r.lastName,
             club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
@@ -548,6 +554,7 @@ const Importer: React.FC = () => {
           return {
             first_name: r.firstName,
             last_name: r.lastName,
+            bc_user_id: r.bcUserId || null,
             club_id: clubMap.get(r.clubName) ?? r.clubId ?? null,
             team_id: (r.divisionCode ?? r.teamRaw) || null,
             team_name_raw: r.teamRaw || null,
@@ -851,6 +858,7 @@ const Importer: React.FC = () => {
             <thead className="bg-gray-50 sticky top-0">
               <tr>
                 <th className="text-left px-2 py-1 border-b">BC Player ID</th>
+                <th className="text-left px-2 py-1 border-b">BC User ID</th>
                 <th className="text-left px-2 py-1 border-b">Club</th>
                 <th className="text-left px-2 py-1 border-b">First</th>
                 <th className="text-left px-2 py-1 border-b">Last</th>
@@ -868,6 +876,7 @@ const Importer: React.FC = () => {
                 return (
                   <tr key={idx} className={`odd:bg-white even:bg-gray-50 ${row.isNewClub ? "text-amber-700" : ""}`}>
                     <td className="px-2 py-1 border-b font-mono text-gray-500">{row.bcPlayerId || "—"}</td>
+                    <td className="px-2 py-1 border-b font-mono text-gray-500">{row.bcUserId || "—"}</td>
                     <td className="px-2 py-1 border-b">
                       {row.clubName}
                       {row.isNewClub && <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1 rounded">new</span>}
