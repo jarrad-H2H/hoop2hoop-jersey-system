@@ -11,8 +11,40 @@ function ageGroupIndex(ag: string | null | undefined): number {
   return AGE_GROUP_ORDER.findIndex((g) => g.toUpperCase() === upper);
 }
 
-/** Returns true if the two age groups are the same or one step apart in the ladder. */
+/**
+ * Gold Coast girls-only divisions merge multiple standard age groups into one team:
+ *   Junior     = U14 + U16 merged (ages 12-15)
+ *   Open Girls = U18 + Open/Seniors merged (ages 16+)
+ * A girl whose YOB derives to "U14" via the standard ladder may actually be on a
+ * "Junior" team, so these labels must be treated as the same/adjacent group for
+ * clash-matching purposes. Safe to apply regardless of buyer gender — "Junior" and
+ * "Open Girls" never appear on boys' teams structurally.
+ */
+// Canonical casing matches what's stored in players.age_group / teams.age_group (see Importer.tsx normalizeAgeGroup).
+const AGE_GROUP_MERGE_BUCKETS: string[][] = [
+  ["U14", "U16", "Junior"],
+  ["U18", "Open", "Seniors", "SLG", "Open Girls"],
+];
+
+/** Returns the merge-bucket siblings (canonical casing, for DB .in() queries) including the group itself. */
+function ageGroupBucketSiblings(ag: string | null | undefined): string[] {
+  if (!ag) return [];
+  const upper = ag.trim().toUpperCase();
+  const bucket = AGE_GROUP_MERGE_BUCKETS.find((b) => b.some((g) => g.toUpperCase() === upper));
+  return bucket ?? [ag.trim()];
+}
+
+/** Case-insensitive check: is ag2 in ag1's merge-bucket sibling set (or vice versa)? */
+function isSameMergeBucket(ag1?: string | null, ag2?: string | null): boolean {
+  if (!ag1 || !ag2) return false;
+  const ag2Upper = ag2.trim().toUpperCase();
+  return ageGroupBucketSiblings(ag1).some((g) => g.toUpperCase() === ag2Upper);
+}
+
+/** Returns true if the two age groups are the same, merge-bucket siblings, or one step apart in the ladder. */
 function isAdjacentOrSameAgeGroup(ag1?: string | null, ag2?: string | null): boolean {
+  if (!ag1 || !ag2) return false;
+  if (isSameMergeBucket(ag1, ag2)) return true;
   const i1 = ageGroupIndex(ag1);
   const i2 = ageGroupIndex(ag2);
   if (i1 === -1 || i2 === -1) return false;
@@ -319,10 +351,8 @@ export async function smartCheckNumber(
       if (sameTeam) {
         hardClashes.push(p);
       } else {
-        // Cross-pool: same age group, different team = hard clash
-        const sameAgeGroup =
-          ageGroup != null && p.age_group != null &&
-          ageGroup.trim().toLowerCase() === p.age_group.trim().toLowerCase();
+        // Cross-pool: same age group (or girls Junior/Open Girls merge bucket), different team = hard clash
+        const sameAgeGroup = isSameMergeBucket(ageGroup, p.age_group);
 
         if (crossPoolCheck && sameAgeGroup) {
           hardClashes.push(p);
@@ -350,9 +380,8 @@ export async function smartCheckNumber(
             p.bc_last_seen_season < seasonYear - 2) {
           return false;
         }
-        // Cross-pool: same age group = hard clash regardless of YOB window
-        if (crossPoolCheck && ageGroup != null && p.age_group != null &&
-            ageGroup.trim().toLowerCase() === p.age_group.trim().toLowerCase()) {
+        // Cross-pool: same age group (or girls Junior/Open Girls merge bucket) = hard clash regardless of YOB window
+        if (crossPoolCheck && isSameMergeBucket(ageGroup, p.age_group)) {
           return true;
         }
         return yobOverlapsWindow(
@@ -679,7 +708,7 @@ export async function suggestNumbersForClubRanked(input: {
       .from("players")
       .select("final_shirt")
       .eq("club_id", input.clubId)
-      .eq("age_group", input.ageGroup)
+      .in("age_group", ageGroupBucketSiblings(input.ageGroup))
       .in("final_shirt", candidateNums)
       .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
 
@@ -695,11 +724,14 @@ export async function suggestNumbersForClubRanked(input: {
 
   // Team path adjacent penalty (runs when hasTeamContext)
   if (hasTeamContext) {
-    const adjacentGroups = AGE_GROUP_ORDER.filter((ag) => {
-      const reqIdx = ageGroupIndex(input.ageGroup);
-      const agIdx  = ageGroupIndex(ag);
-      return reqIdx !== -1 && agIdx !== -1 && Math.abs(reqIdx - agIdx) <= 1;
-    });
+    const adjacentGroups = Array.from(new Set([
+      ...AGE_GROUP_ORDER.filter((ag) => {
+        const reqIdx = ageGroupIndex(input.ageGroup);
+        const agIdx  = ageGroupIndex(ag);
+        return reqIdx !== -1 && agIdx !== -1 && Math.abs(reqIdx - agIdx) <= 1;
+      }),
+      ...ageGroupBucketSiblings(input.ageGroup),
+    ]));
 
     if (adjacentGroups.length > 0) {
       const { data: adjPlayers } = await supabase

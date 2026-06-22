@@ -33,6 +33,12 @@ Update this file whenever new rules are agreed, then update the code to match.
 - New players (not found in DB) cannot benefit from Plan B — the soft rule applies conservatively
 - **Implemented**: `lookupPlayerByName` returns `divisionCode` + `teamName` from the player record; widget stores these and passes them to `suggestNumbersForClubRanked` / `smartCheckNumber` when the player is confirmed; this activates the team-aware path (only same-team numbers are hard-blocked; different-team numbers are allowed even within ±1 YOB window)
 
+### 2d. Girls Merge-Bucket Matching
+- The widget derives a NEW player's age group from YOB alone, via the standard ladder (U10/U12/U14/.../U18) — it has no gender input, so it never outputs "Junior" or "Open Girls" directly
+- But existing Gold Coast girls players are imported with `age_group = "Junior"` or `"Open Girls"` (merged divisions — see Section 3)
+- Without reconciliation, a new 13-year-old girl (derived "U14") would not be flagged as same/adjacent age group against an existing "Junior" player, even if they're on the same team
+- **Implemented**: `ageGroupBucketSiblings()` / `isSameMergeBucket()` in `allocation.ts` treat `{U14, U16, Junior}` and `{U18, Open, Seniors, SLG, Open Girls}` as equivalent for all same-age-group / adjacent-age-group / cross-pool comparisons. Safe for boys too — "Junior"/"Open Girls" labels never appear on boys' teams structurally, so this can't introduce a false match for them
+
 ---
 
 ## 3. Age Group Clash Windows
