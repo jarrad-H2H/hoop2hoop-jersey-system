@@ -200,6 +200,8 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 - If confirmed: use the player's known team membership for Plan B (Section 2c)
 - If player holds an existing jersey: offer choice — keep existing number vs. buy a new one
 - Keeping existing number: system verifies it is still in stock / producible (don't re-allocate; flag if jersey is written off)
+- **Second jersey, same number (spare/replacement)**: a returning player can buy an additional physical jersey under their own current number (e.g. a spare kept at another parent's house). **Bug fixed 2026-06-22**: clash checks had no self-exclusion — a player's own existing jersey record was flagged as a "same-team clash" against themselves, blocking this entirely. Fixed via `excludePlayerId` (the confirmed `playerId` from `lookupPlayerByName`) threaded through `smartCheckNumber`/`suggestNumbersForClubRanked`.
+- **Second jersey, different team/age group (playing up)**: a returning player playing up needs a second jersey for the higher team, with its own number. **Bug fixed 2026-06-22**: the team dropdown filtered by the player's raw YOB-derived age group, not the playing-up-adjusted one, so the higher team was never selectable; and Plan B's matched team (their primary/lower team) was incorrectly used instead of the dropdown-selected higher team for clash checking. Both fixed in `JerseyWidget.tsx`.
 
 ---
 

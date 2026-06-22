@@ -436,22 +436,24 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setStatusMessage("");
   };
 
+  // Filter by effectiveAgeGroup, not derivedAgeGroup -- when playing up, the team being
+  // selected for THIS purchase is in the higher age group, not the player's own raw-YOB band.
   const filteredTeams = useMemo(() => {
-    if (!derivedAgeGroup) return [];
+    if (!effectiveAgeGroup) return [];
     return (allTeams ?? []).filter((t) => {
       const fromAgeGroupCol = normalizeAgeGroup(t.age_group);
       const fromName = inferTeamAgeGroupFromName(t.name);
       const tag = fromAgeGroupCol ?? fromName;
-      return tag === derivedAgeGroup;
+      return tag === effectiveAgeGroup;
     });
-  }, [allTeams, derivedAgeGroup]);
+  }, [allTeams, effectiveAgeGroup]);
 
   useEffect(() => {
-    if (!derivedAgeGroup || teamChoice === "not_sure") return;
+    if (!effectiveAgeGroup || teamChoice === "not_sure") return;
     const exists = filteredTeams.some((t) => t.id === teamChoice);
     if (!exists) setTeamChoice("not_sure");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [derivedAgeGroup, filteredTeams]);
+  }, [effectiveAgeGroup, filteredTeams]);
 
   const orderedTeamOptions = useMemo(() => {
     const notSure: TeamRow[] = [{
@@ -571,8 +573,12 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       teamChoice !== "not_sure"
         ? allTeams.find((t) => t.id === teamChoice)?.name ?? undefined
         : undefined;
-    const effectiveDivisionCode = planBDivisionCode;
-    const effectiveTeamName = planBTeamName ?? selectedTeamName;
+    // Playing up: Plan B's matched team is the player's PRIMARY (lower) team, which does
+    // NOT apply to this purchase — they're buying a second jersey for a DIFFERENT, higher
+    // team selected from the dropdown. Prioritise that dropdown selection in this case.
+    const effectiveDivisionCode = playingUp === true ? undefined : planBDivisionCode;
+    const effectiveTeamName =
+      playingUp === true ? selectedTeamName : planBTeamName ?? selectedTeamName;
 
     setLoadingSuggest(true);
     setSuggestions([]);
@@ -589,6 +595,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         teamName: effectiveTeamName,
         crossPoolCheck,
         productType: selectedProductType,
+        excludePlayerId: matchedPlayerId,
         limit: 12,
       });
 
@@ -603,6 +610,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             teamName: effectiveTeamName,
             crossPoolCheck,
             productType: selectedProductType,
+            excludePlayerId: matchedPlayerId,
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
             (s) => String(s.size).toLowerCase() === String(selectedSize).toLowerCase() && s.count > 0

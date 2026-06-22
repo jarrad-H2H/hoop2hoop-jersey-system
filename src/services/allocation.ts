@@ -210,6 +210,13 @@ export interface SmartCheckOptions {
    * Filters which inventory pool stock is checked against.
    */
   productType?: string;
+  /**
+   * The confirmed player's own DB id (from lookupPlayerByName). Excludes their own
+   * existing jersey record from clash checks — without this, a returning player
+   * re-buying their own current number (season replacement, or a spare) would be
+   * flagged as a "same-team clash" against themselves.
+   */
+  excludePlayerId?: string | null;
 }
 
 export interface SmartCheckResult {
@@ -320,6 +327,7 @@ export async function smartCheckNumber(
     ageGroup,
     crossPoolCheck = false,
     productType = "default",
+    excludePlayerId,
   } = options;
 
   const seasonYear =
@@ -328,11 +336,15 @@ export async function smartCheckNumber(
       : new Date().getFullYear();
 
   // Fetch all players in this club wearing this jersey number.
-  const { data: clashRows, error: clashError } = await supabase
+  let clashQuery = supabase
     .from("players")
     .select("id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, bc_last_seen_season")
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber);
+  if (excludePlayerId) {
+    clashQuery = clashQuery.neq("id", excludePlayerId);
+  }
+  const { data: clashRows, error: clashError } = await clashQuery;
 
   if (clashError) {
     console.error("smartCheckNumber: clash query error", clashError);
@@ -573,6 +585,8 @@ export async function suggestNumbersForClubRanked(input: {
   crossPoolCheck?: boolean;
   /** Shopify product type for dual mens/womens clubs. Defaults to "default". */
   productType?: string;
+  /** Excludes the confirmed player's own existing jersey record from clash checks. */
+  excludePlayerId?: string | null;
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
   // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
@@ -630,6 +644,9 @@ export async function suggestNumbersForClubRanked(input: {
     } else {
       sameTeamQuery.is("team_name", null);
     }
+    if (input.excludePlayerId) {
+      sameTeamQuery.neq("id", input.excludePlayerId);
+    }
 
     const { data: sameTeamPlayers, error: stErr } = await sameTeamQuery;
     if (stErr) {
@@ -655,12 +672,16 @@ export async function suggestNumbersForClubRanked(input: {
 
     // Single query: all active holders of candidate numbers at this club.
     // "Active" = bc_last_seen_season IS NULL (transitional) OR >= currentYear - 2.
-    const { data: allHolders, error: pbErr } = await supabase
+    let allHoldersQuery = supabase
       .from("players")
       .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
       .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
+    if (input.excludePlayerId) {
+      allHoldersQuery = allHoldersQuery.neq("id", input.excludePlayerId);
+    }
+    const { data: allHolders, error: pbErr } = await allHoldersQuery;
 
     if (pbErr) {
       console.error("players block query error", pbErr);
@@ -717,13 +738,17 @@ export async function suggestNumbersForClubRanked(input: {
   // Runs in BOTH team-aware and widget paths when crossPoolCheck is active.
   // Inactive players (bc_last_seen_season < currentYear - 2) are excluded.
   if (input.crossPoolCheck && input.ageGroup) {
-    const { data: cpPlayers, error: cpErr } = await supabase
+    let cpQuery = supabase
       .from("players")
       .select("final_shirt")
       .eq("club_id", input.clubId)
       .in("age_group", ageGroupBucketSiblings(input.ageGroup))
       .in("final_shirt", candidateNums)
       .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
+    if (input.excludePlayerId) {
+      cpQuery = cpQuery.neq("id", input.excludePlayerId);
+    }
+    const { data: cpPlayers, error: cpErr } = await cpQuery;
 
     if (cpErr) {
       console.error("cross-pool block query error", cpErr);
@@ -747,12 +772,16 @@ export async function suggestNumbersForClubRanked(input: {
     ]));
 
     if (adjacentGroups.length > 0) {
-      const { data: adjPlayers } = await supabase
+      let adjQuery = supabase
         .from("players")
         .select("final_shirt, division_code, team_name")
         .eq("club_id", input.clubId)
         .in("final_shirt", candidateNums)
         .in("age_group", adjacentGroups);
+      if (input.excludePlayerId) {
+        adjQuery = adjQuery.neq("id", input.excludePlayerId);
+      }
+      const { data: adjPlayers } = await adjQuery;
 
       for (const p of adjPlayers ?? []) {
         const n = Number((p as any).final_shirt);
