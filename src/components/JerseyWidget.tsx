@@ -1,5 +1,5 @@
 // FILE: src/components/JerseyWidget.tsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 import {
   smartCheckNumber,
@@ -86,6 +86,15 @@ function inferTeamAgeGroupFromName(name: string): AgeGroupLabel | null {
   return null;
 }
 
+const AGE_GROUP_LADDER: AgeGroupLabel[] = ["U10", "U12", "U14", "U16", "U18", "U20", "SLG"];
+
+function nextAgeGroup(ag: AgeGroupLabel | null): AgeGroupLabel | null {
+  if (!ag) return null;
+  const idx = AGE_GROUP_LADDER.indexOf(ag);
+  if (idx === -1 || idx >= AGE_GROUP_LADDER.length - 1) return null;
+  return AGE_GROUP_LADDER[idx + 1];
+}
+
 const YesNoButtons: React.FC<{
   value: boolean | null;
   onChange: (v: boolean) => void;
@@ -139,6 +148,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [existingPlayerJersey, setExistingPlayerJersey] = useState<number | null>(null);
   const [existingPlayerInventoryId, setExistingPlayerInventoryId] = useState<string | null>(null);
   const [keepExistingJersey, setKeepExistingJersey] = useState<boolean | null>(null);
+  const [playingUp, setPlayingUp] = useState<boolean | null>(null);
   const [matchedPlayerId, setMatchedPlayerId] = useState<string | null>(null);
   const [matchedPlayerDisplayName, setMatchedPlayerDisplayName] = useState<string | null>(null);
   const [identityConfirmed, setIdentityConfirmed] = useState<boolean | null>(null);
@@ -180,6 +190,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     return deriveAgeGroupFromYob(SEASON_YEAR, yobNum);
   }, [SEASON_YEAR, yobNum, yobValid]);
 
+  // When player is playing up, search against the age group ABOVE their YOB-derived group
+  const effectiveAgeGroup: AgeGroupLabel | null = useMemo(() => {
+    if (keepExistingJersey === true && playingUp === true) {
+      return nextAgeGroup(derivedAgeGroup);
+    }
+    return derivedAgeGroup;
+  }, [derivedAgeGroup, keepExistingJersey, playingUp]);
+
   const remainingSeconds = expiresAt
     ? Math.max(0, Math.floor((expiresAt - tick) / 1000))
     : 0;
@@ -196,6 +214,17 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const needsKeepPrompt =
     isNewPlayer === false && identityConfirmed === true && existingPlayerJersey !== null;
 
+  // Whether the "playing up?" prompt needs to be answered
+  // Only shown when: returning player, confirmed identity, keeping their jersey,
+  // AND there is a valid age group above their YOB-derived one
+  const needsPlayingUpPrompt =
+    isNewPlayer === false &&
+    identityConfirmed === true &&
+    existingPlayerJersey !== null &&
+    keepExistingJersey === true &&
+    playingUp === null &&
+    nextAgeGroup(derivedAgeGroup) !== null;
+
   const canSuggest =
     Boolean(selectedClubId) &&
     sizeSelected &&
@@ -204,6 +233,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     isNewPlayer !== null &&
     (matchedPlayerDisplayName === null || identityConfirmed !== null) &&
     (!needsKeepPrompt || keepExistingJersey !== null) &&
+    !needsPlayingUpPrompt &&
     teamSelected &&
     !loadingSuggest &&
     !reserving &&
@@ -356,65 +386,30 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     void load();
   }, [selectedClubId]);
 
-  // Cross-pool flag: recompute when club or derived age group changes
+  // Cross-pool flag: recompute when club or effective age group changes
+  // Uses effectiveAgeGroup so playing-up searches check cross-pool for the target group
   useEffect(() => {
-    if (!selectedClubId || !derivedAgeGroup) {
+    if (!selectedClubId || !effectiveAgeGroup) {
       setCrossPoolCheck(false);
       return;
     }
-    void isAgeGroupCrossPool(selectedClubId, derivedAgeGroup).then(setCrossPoolCheck);
-  }, [selectedClubId, derivedAgeGroup]);
+    void isAgeGroupCrossPool(selectedClubId, effectiveAgeGroup).then(setCrossPoolCheck);
+  }, [selectedClubId, effectiveAgeGroup]);
 
-  // When isNewPlayer set to false AND we have club+name+yob, look up the player
+  // Reset all lookup + question state whenever identity inputs change.
+  // Lookup itself is triggered by the "Find Available Numbers" button, not auto-fired.
   useEffect(() => {
-    if (isNewPlayer !== false) {
-      // Reset lookup state whenever user flips to "new"
-      setExistingPlayerJersey(null);
-      setExistingPlayerInventoryId(null);
-      setKeepExistingJersey(null);
-      setMatchedPlayerId(null);
-      setMatchedPlayerDisplayName(null);
-      setIdentityConfirmed(null);
-      return;
-    }
-    if (!selectedClubId || !namesFilled || !yobValid) return;
-
-    const run = async () => {
-      setLookingUpPlayer(true);
-      setExistingPlayerJersey(null);
-      setExistingPlayerInventoryId(null);
-      setKeepExistingJersey(null);
-      setMatchedPlayerId(null);
-      setMatchedPlayerDisplayName(null);
-      setIdentityConfirmed(null);
-      try {
-        const ageGroup = yobNum ? deriveAgeGroupFromYob(SEASON_YEAR, yobNum) : null;
-        const result = await lookupPlayerByName({
-          clubId: selectedClubId,
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          yearOfBirth: yobNum,
-          ageGroup, // fallback for BC-imported players who have no YOB stored
-        });
-        if (result.found) {
-          setMatchedPlayerId(result.playerId ?? null);
-          const displayName = [result.matchedFirstName, result.matchedLastName]
-            .filter(Boolean).join(" ");
-          setMatchedPlayerDisplayName(displayName || null);
-          if (result.currentJerseyNumber != null) {
-            setExistingPlayerJersey(result.currentJerseyNumber);
-            setExistingPlayerInventoryId(result.previousInventoryId ?? null);
-          }
-        }
-      } catch (_) {
-        // Non-fatal — user can still proceed
-      } finally {
-        setLookingUpPlayer(false);
-      }
-    };
-    void run();
+    setExistingPlayerJersey(null);
+    setExistingPlayerInventoryId(null);
+    setKeepExistingJersey(null);
+    setPlayingUp(null);
+    setMatchedPlayerId(null);
+    setMatchedPlayerDisplayName(null);
+    setIdentityConfirmed(null);
+    setSuggestions([]);
+    setSelectedNumber(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isNewPlayer, selectedClubId, firstName, lastName, yobNum, yobValid]);
+  }, [isNewPlayer, selectedClubId, firstName, lastName, yobNum]);
 
   const clearMessages = () => {
     setError(null);
@@ -451,10 +446,6 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     return [...notSure, ...filteredTeams];
   }, [filteredTeams, derivedAgeGroup]);
 
-  // ── Stable ref so effects can call handleSuggest without stale closure issues ──
-  // (defined before handleSuggest; always kept up-to-date in the render body below)
-  const handleSuggestRef = useRef<() => Promise<void>>(async () => {});
-
   // Clear stale suggestions whenever the inputs that determine the number pool change.
   // This ensures the grid is always in sync with what the user has entered.
   useEffect(() => {
@@ -464,15 +455,57 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClubId, selectedSize, yobNum]);
 
-  // Auto-trigger the suggestion query when all required fields are complete.
-  // The user doesn't need to click the button — the safe number grid just appears.
-  // A 700ms debounce prevents firing on every keystroke.
-  useEffect(() => {
-    if (!canSuggest || suggestions.length > 0 || loadingSuggest) return;
-    const timer = setTimeout(() => void handleSuggestRef.current(), 700);
-    return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canSuggest, suggestions.length, loadingSuggest]);
+  // Triggered by "Find Available Numbers" button.
+  // For returning players who haven't been looked up yet, runs lookup first;
+  // if that surfaces prompts (identity confirm, keep jersey, playing up) we
+  // return early and let the UI questions appear before the next click.
+  const handleFindNumbers = async () => {
+    clearMessages();
+    if (!selectedClubId) { setError(clubDetectError || "Club could not be detected for this product."); return; }
+    if (!namesFilled) { setError("Please enter first name and surname."); return; }
+    if (!yobValid) { setError("Please enter a valid year of birth."); return; }
+    if (isNewPlayer === null) { setError("Please answer whether you're new to this club."); return; }
+
+    // If returning player and lookup not yet done, run it now
+    if (isNewPlayer === false && matchedPlayerId === null && !lookingUpPlayer) {
+      setLookingUpPlayer(true);
+      try {
+        const ageGroup = yobNum ? deriveAgeGroupFromYob(SEASON_YEAR, yobNum) : null;
+        const result = await lookupPlayerByName({
+          clubId: selectedClubId,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          yearOfBirth: yobNum,
+          ageGroup,
+        });
+        if (result.found) {
+          setMatchedPlayerId(result.playerId ?? null);
+          const displayName = [result.matchedFirstName, result.matchedLastName]
+            .filter(Boolean).join(" ");
+          setMatchedPlayerDisplayName(displayName || null);
+          if (result.currentJerseyNumber != null) {
+            setExistingPlayerJersey(result.currentJerseyNumber);
+            setExistingPlayerInventoryId(result.previousInventoryId ?? null);
+          }
+          // Stop here — let the identity confirm / keep jersey prompts appear
+          return;
+        }
+      } catch (_) {
+        // Non-fatal — fall through to suggest
+      } finally {
+        setLookingUpPlayer(false);
+      }
+    }
+
+    // If prompts are still pending, stop — user must answer them first
+    if (needsIdentityConfirm) return;
+    if (needsKeepPrompt && keepExistingJersey === null) {
+      setError("Please answer whether you're keeping your current jersey number."); return;
+    }
+    if (needsPlayingUpPrompt) return;
+
+    await handleSuggest();
+  };
 
   const handleSuggest = async () => {
     clearMessages();
@@ -486,6 +519,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     }
     if (!teamSelected) { setError("Please select a team (or choose Not sure/Not assigned yet)."); return; }
 
+    // When playing up, bypass the player's own YOB so clash detection uses
+    // the higher age group's YOB window rather than the player's actual year.
+    const yobForSearch =
+      keepExistingJersey === true && playingUp === true ? undefined : yobNum;
+
     setLoadingSuggest(true);
     setSuggestions([]);
     setSelectedNumber(null);
@@ -495,8 +533,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         clubId: selectedClubId,
         size: selectedSize,
         seasonYear: SEASON_YEAR,
-        yearOfBirth: yobNum,
-        ageGroup: derivedAgeGroup ?? undefined,
+        yearOfBirth: yobForSearch,
+        ageGroup: effectiveAgeGroup ?? undefined,
         crossPoolCheck,
         limit: 12,
       });
@@ -506,8 +544,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         try {
           const check = await smartCheckNumber(selectedClubId, pref, {
             seasonYear: SEASON_YEAR,
-            yearOfBirth: yobNum,
-            ageGroup: derivedAgeGroup ?? undefined,
+            yearOfBirth: yobForSearch,
+            ageGroup: effectiveAgeGroup ?? undefined,
             crossPoolCheck,
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
@@ -539,9 +577,6 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       setLoadingSuggest(false);
     }
   };
-  // Keep ref in sync with the latest closure on every render
-  handleSuggestRef.current = handleSuggest;
-
   const handlePickSuggestion = (num: number) => {
     setSelectedNumber(num);
     setPreferredNumber(String(num));
@@ -655,6 +690,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               setExistingPlayerJersey(null);
               setExistingPlayerInventoryId(null);
               setKeepExistingJersey(null);
+              setPlayingUp(null);
               setMatchedPlayerId(null);
               setMatchedPlayerDisplayName(null);
               setIdentityConfirmed(null);
@@ -678,6 +714,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               setExistingPlayerJersey(null);
               setExistingPlayerInventoryId(null);
               setKeepExistingJersey(null);
+              setPlayingUp(null);
               setMatchedPlayerId(null);
               setMatchedPlayerDisplayName(null);
               setIdentityConfirmed(null);
@@ -753,7 +790,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             </label>
             <YesNoButtons
               value={keepExistingJersey}
-              onChange={(v) => setKeepExistingJersey(v)}
+              onChange={(v) => {
+                setKeepExistingJersey(v);
+                if (v === false) setPlayingUp(null);
+              }}
               yesLabel={`Yes, keep #${existingPlayerJersey}`}
               noLabel="No, replacing it"
             />
@@ -762,6 +802,24 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 Your old number will be released back to available stock once your purchase is complete.
               </div>
             )}
+          </div>
+        )}
+
+        {/* Playing up? — only shown after keeping existing jersey is confirmed */}
+        {needsPlayingUpPrompt && (
+          <div className="bg-violet-50 border border-violet-200 rounded p-3">
+            <div className="text-sm font-semibold text-violet-900 mb-1">
+              Are you also playing up an age group?
+            </div>
+            <div className="text-xs text-violet-700 mb-2">
+              e.g. a U14 player also playing in U16 games and needing a separate jersey for those games.
+            </div>
+            <YesNoButtons
+              value={playingUp}
+              onChange={(v) => setPlayingUp(v)}
+              yesLabel="Yes, playing up"
+              noLabel="No, just need a spare"
+            />
           </div>
         )}
 
@@ -804,11 +862,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* Check & Suggest */}
         <button
           type="button"
-          onClick={handleSuggest}
-          disabled={!canSuggest}
+          onClick={() => void handleFindNumbers()}
+          disabled={loadingSuggest || lookingUpPlayer}
           className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors"
         >
-          {loadingSuggest ? "Checking…" : suggestions.length > 0 ? "Refresh Numbers" : "Find Available Numbers"}
+          {loadingSuggest || lookingUpPlayer ? "Checking…" : suggestions.length > 0 ? "Refresh Numbers" : "Find Available Numbers"}
         </button>
 
         {/* Suggestions */}
@@ -853,7 +911,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               onChange={(e) => setDisclaimerChecked(e.target.checked)}
             />
             <span>
-              I understand this number is reserved for 15 minutes. My reservation
+              I understand this number is reserved for 30 minutes. My reservation
               will be confirmed once payment is complete.
             </span>
           </label>
