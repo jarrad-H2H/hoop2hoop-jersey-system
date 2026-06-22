@@ -239,4 +239,17 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 | Playing-up-an-age-group widget checkbox | Designed; not yet coded |
 | Dual Shopify product per club (mens + womens) | ProductClubMapping + shopify-sync.ts support one product only |
 | Cross-pool check wired into allocation.ts | competition_age_groups populated but allocation.ts does not yet read it; teams.gender is the correct source |
-| Reservation hold time | Currently 15 min; consider extending to ~30 min (checkout took 13 of 15 in test) |
+| Reservation hold time | ✅ 30 min, verified end-to-end 2026-06-22 (Task #35) — see Section 16 |
+| Cross-pool clash tests (Task #32) | ✅ Verified end-to-end 2026-06-22 against a synthetic test club — see Section 16 |
+
+---
+
+## 16. Task #32 / #35 Test Results (2026-06-22)
+
+Verified using a synthetic "H2H Test Club" fixture and `scripts/test-task32-35.ts`, which calls the real exported functions (`isAgeGroupCrossPool`, `smartCheckNumber`, `reserveNumberForPurchase`) under the anon key, the same way the live widget does. All scenarios passed after fixing three real bugs uncovered along the way:
+
+1. **`reserve_jersey` uuid/text mismatch** — `pl.club_id = p_club_id::text` compared a `uuid` column against a `text`-cast parameter, throwing `operator does not exist: uuid = text` for every returning-player reservation (i.e. whenever `playerFirstName`/`playerLastName` were supplied). Fixed in migration `20260622_fix_reserve_jersey_uuid_text_mismatch.sql`.
+2. **Missing anon RLS policies on `players` and `competition_age_groups`** — both tables had no SELECT policy for the `anon` role at all, only `admin_full_access` for `authenticated`. Since the public widget runs unauthenticated, this meant `smartCheckNumber`, `suggestNumbersForClubRanked`, `lookupPlayerByName` (Plan B), and the manual cross-pool override path were silently seeing zero rows for every real customer — same-team clash detection was non-functional. Fixed in migration `20260622_add_anon_read_policies_players_cag.sql`, scoped the same way as the existing `widget_read_teams_for_mapped_clubs` policy. **Low blast radius so far**: `shopify_product_club_map` had zero rows before this testing, so no club has gone fully live for checkout yet — but this had to be fixed before any club does.
+3. **15-minute fallback defaults left over from the 30-minute change** — the `pending_allocations.expires_at` column default and `reserve_jersey`'s `p_expires_minutes` parameter default were both still 15. The live widget always passes `expiresMinutes: 30` explicitly, so this was a latent fallback-only inconsistency. Fixed in migration `20260622_reserve_jersey_30min_default.sql`.
+
+Also confirmed: `expire_pending_allocations()`, run every minute by a `pg_cron` job, correctly reverts `inventory.status` to `Available` when a hold lapses — this is the actual stock-release mechanism, not anything in application code.
