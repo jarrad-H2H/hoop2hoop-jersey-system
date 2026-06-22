@@ -39,6 +39,15 @@ const BulkStockUpload: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string>("");
 
+  // Shopify sync
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{
+    success: boolean;
+    location: string;
+    results: { variantTitle: string; available: number; matched: boolean; ok: boolean }[];
+    warnings?: { unmatchedVariants?: string[]; unmatchedSizes?: string[] };
+  } | null>(null);
+
   // Add-size UI
   const [newSizeLabel, setNewSizeLabel] = useState<string>("");
 
@@ -630,6 +639,48 @@ const BulkStockUpload: React.FC = () => {
     }
   };
 
+  // ----------------------------
+  // Shopify inventory sync
+  // ----------------------------
+  const handleShopifySync = async () => {
+    if (!selectedClubId) {
+      setError("Please select a club first.");
+      return;
+    }
+
+    setSyncing(true);
+    setSyncResult(null);
+    setError(null);
+    setSuccessMessage("");
+
+    try {
+      const res = await fetch("/api/shopify-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clubId: selectedClubId }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "Shopify sync failed.");
+        return;
+      }
+
+      setSyncResult(data);
+      setSuccessMessage(
+        data.success
+          ? `Synced inventory to Shopify (${data.location}).`
+          : "Sync completed with some errors — see details below."
+      );
+    } catch (err: any) {
+      console.error("handleShopifySync error", err);
+      setError(err.message ?? "Unexpected error during Shopify sync.");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">Bulk Stock Upload</h1>
@@ -906,16 +957,76 @@ const BulkStockUpload: React.FC = () => {
             </table>
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={handleShopifySync}
+              disabled={syncing || submitting}
+              className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-semibold disabled:bg-gray-400 flex items-center gap-2"
+            >
+              {syncing ? (
+                <>
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                  </svg>
+                  Syncing…
+                </>
+              ) : "Sync to Shopify"}
+            </button>
+
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 bg-emerald-600 text-white rounded text-sm disabled:bg-gray-400"
+              className="px-4 py-2 bg-emerald-600 text-white rounded text-sm font-semibold disabled:bg-gray-400"
             >
               {submitting ? "Uploading…" : "Upload Stock to Inventory"}
             </button>
           </div>
         </form>
+      )}
+
+      {/* Shopify sync result panel */}
+      {syncResult && (
+        <div className="mt-6 border border-indigo-200 rounded-lg bg-indigo-50 p-4">
+          <h3 className="text-sm font-semibold text-indigo-800 mb-2">
+            Shopify Sync — {syncResult.location}
+          </h3>
+
+          <table className="min-w-full text-xs">
+            <thead>
+              <tr className="text-left">
+                <th className="pr-4 py-1 text-gray-600">Variant</th>
+                <th className="pr-4 py-1 text-gray-600">Qty Set</th>
+                <th className="pr-4 py-1 text-gray-600">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {syncResult.results.map((r) => (
+                <tr key={r.variantTitle} className="border-t border-indigo-100">
+                  <td className="pr-4 py-1 font-medium">{r.variantTitle}</td>
+                  <td className="pr-4 py-1">{r.available}</td>
+                  <td className="pr-4 py-1">
+                    {!r.ok ? (
+                      <span className="text-red-600 font-semibold">Error</span>
+                    ) : !r.matched ? (
+                      <span className="text-amber-600">No size match</span>
+                    ) : (
+                      <span className="text-emerald-600">✓ OK</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {(syncResult.warnings?.unmatchedSizes?.length ?? 0) > 0 && (
+            <p className="mt-2 text-xs text-amber-700">
+              ⚠ Sizes in admin with no Shopify variant:{" "}
+              {syncResult.warnings!.unmatchedSizes!.join(", ")}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

@@ -10,6 +10,9 @@ type SaleRow = {
   order_date: string | null;
   purchased_at: string | null;
   player_name: string | null;
+  player_first_name: string | null;
+  player_last_name: string | null;
+  shopify_buyer_name: string | null;
   club_id: string | null;
   product_name: string | null; // used to store club name
   team_name: string | null;
@@ -83,7 +86,10 @@ const SalesHistory: React.FC = () => {
     if (filterSeason && String(s.season_year) !== filterSeason) return false;
     if (filterSearch) {
       const q = filterSearch.toLowerCase();
-      const haystack = [s.player_name, s.order_number, s.number, s.size]
+      const haystack = [
+        s.player_name, s.player_first_name, s.player_last_name,
+        s.order_number, s.number, s.size, s.shopify_buyer_name,
+      ]
         .join(" ")
         .toLowerCase();
       if (!haystack.includes(q)) return false;
@@ -96,15 +102,17 @@ const SalesHistory: React.FC = () => {
 
   // CSV export
   const handleExport = () => {
-    const headers = ["Order #", "Date (AEST)", "Club", "Player", "Jersey #", "Size", "Season", "Shopify Order ID"];
+    const headers = ["Order #", "Date (AEST)", "Club", "Player First", "Player Last", "Jersey #", "Size", "Season", "Shopify Buyer", "Shopify Order ID"];
     const rows = filtered.map((s) => [
       s.order_number ?? "",
       formatDate(s.purchased_at ?? s.order_date),
       clubMap[s.club_id ?? ""] ?? s.product_name ?? s.club_id ?? "",
-      s.player_name ?? "",
+      s.player_first_name ?? s.player_name ?? "",
+      s.player_last_name ?? "",
       s.jersey_number ?? s.number ?? "",
       s.size ?? "",
       s.season_year ?? "",
+      s.shopify_buyer_name ?? "",
       s.shopify_order_id ?? "",
     ]);
     const csv = [headers, ...rows]
@@ -230,6 +238,7 @@ const SalesHistory: React.FC = () => {
                   <th className="px-4 py-3 font-medium text-gray-600 text-center">Jersey #</th>
                   <th className="px-4 py-3 font-medium text-gray-600">Size</th>
                   <th className="px-4 py-3 font-medium text-gray-600 text-center">Season</th>
+                  <th className="px-4 py-3 font-medium text-gray-600">Shopify Buyer</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -247,7 +256,9 @@ const SalesHistory: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 text-gray-800">{clubName}</td>
                       <td className="px-4 py-3 text-gray-800">
-                        {s.player_name || <span className="text-gray-400">—</span>}
+                        {s.player_first_name || s.player_last_name
+                          ? `${s.player_first_name ?? ""} ${s.player_last_name ?? ""}`.trim()
+                          : s.player_name || <span className="text-gray-400">—</span>}
                       </td>
                       <td className="px-4 py-3 text-center">
                         {jerseyNum != null ? (
@@ -261,6 +272,9 @@ const SalesHistory: React.FC = () => {
                       <td className="px-4 py-3 text-gray-600">{s.size ?? "—"}</td>
                       <td className="px-4 py-3 text-center text-gray-600">
                         {s.season_year ?? "—"}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">
+                        {s.shopify_buyer_name || <span className="text-gray-300">—</span>}
                       </td>
                     </tr>
                   );
