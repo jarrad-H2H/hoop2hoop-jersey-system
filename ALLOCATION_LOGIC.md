@@ -223,10 +223,10 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 
 ## 14. Shopify / Product Mapping
 
-- Each Shopify product is mapped to a club via `shopify_product_club_map`
-- Currently: **one product per club** only — dual product support (mens + womens) is pending
+- Each Shopify product is mapped to a club via `shopify_product_club_map` (`product_type`/`gender` columns support mens+womens dual products per club)
 - Widget activates only for Shopify products tagged `h2h-jersey-allocation`
 - Shopify buy-buttons.liquid theme snippet (not in repo) sends "Jersey Number" and "Reservation ID" line-item properties at checkout
+- **Dual product support (2026-06-22)**: `shopify_product_club_map.product_type` was already in the DB/RPC layer but never threaded through the TS code. Now wired: `JerseyWidget.tsx` resolves `product_type` from the mapping row for the detected `productId` (or from the demo `gender` prop in `WidgetDemo`/demoMode) and passes it through `smartCheckNumber`/`suggestNumbersForClubRanked`/`reserveNumberForPurchase`/`lookupPlayerByName`, so stock and reservations are correctly scoped to the mens or womens inventory pool. No liquid snippet change is needed — the existing `productId` postMessage already disambiguates which product (and therefore which pool) is in play via the mapping table lookup. `reserve_jersey`'s cross-product Mixed-pool block (for clubs with a genuinely Mixed-gender age group) was also fixed to check `teams.gender` directly using the real age-group windows, not just the manual `competition_age_groups` override with a naive `'U' || age` label. Verified end-to-end against a persistent "Hoop2Hoop Test Club" (`scripts/test-dual-product.ts`). Still blocked on real Shopify products/theme config for an actual second club.
 
 ---
 
@@ -237,8 +237,8 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 | Seahawks BC CSV import | Data available; not yet imported |
 | Plan B (different-team override) | ✅ Implemented — returning player lookup returns `divisionCode`/`teamName`; widget passes to allocation functions |
 | Playing-up-an-age-group widget checkbox | Designed; not yet coded |
-| Dual Shopify product per club (mens + womens) | ProductClubMapping + shopify-sync.ts support one product only |
-| Cross-pool check wired into allocation.ts | competition_age_groups populated but allocation.ts does not yet read it; teams.gender is the correct source |
+| Dual Shopify product per club (mens + womens) | ✅ Code wired 2026-06-22 — see Section 14. Still needs a real second club's Shopify products + theme config |
+| Cross-pool check wired into allocation.ts | ✅ Implemented — `isAgeGroupCrossPool` checks `teams.gender = 'Mixed'` (authoritative) and `competition_age_groups` (manual override) |
 | Reservation hold time | ✅ 30 min, verified end-to-end 2026-06-22 (Task #35) — see Section 16 |
 | Cross-pool clash tests (Task #32) | ✅ Verified end-to-end 2026-06-22 against a synthetic test club — see Section 16 |
 

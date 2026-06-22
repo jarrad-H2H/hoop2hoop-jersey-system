@@ -12,6 +12,14 @@ import {
 interface MappingRow {
   shopify_product_id: string;
   club_id: string;
+  product_type: string | null;
+}
+
+/** Maps the demo-mode "gender" prop to the DB's product_type values. */
+function genderToProductType(g: string): string {
+  if (g === "mens") return "mens";
+  if (g === "womens") return "womens";
+  return "default";
 }
 
 interface NumberSuggestion {
@@ -139,6 +147,13 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // Club detection
   const [selectedClubId, setSelectedClubId] = useState<string>(propClubId ?? "");
   const [clubDetectError, setClubDetectError] = useState<string | null>(null);
+
+  // Product type (mens/womens/default) — resolved from shopify_product_club_map in
+  // production, or from the demoMode `gender` prop. Drives which inventory pool is
+  // checked and which product the reservation is created against (dual-product clubs).
+  const [selectedProductType, setSelectedProductType] = useState<string>(
+    demoMode ? genderToProductType(gender) : "default"
+  );
 
   // ── Player identity (new) ──────────────────────────────────────────────────
   const [firstName, setFirstName] = useState<string>("");
@@ -320,7 +335,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!pid) return;
       const { data, error } = await supabase
         .from("shopify_product_club_map")
-        .select("shopify_product_id, club_id")
+        .select("shopify_product_id, club_id, product_type")
         .eq("shopify_product_id", pid)
         .limit(1);
       if (error) { setClubDetectError(error.message); return; }
@@ -330,6 +345,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         return;
       }
       setSelectedClubId(row.club_id);
+      setSelectedProductType(row.product_type ?? "default");
     };
     void run();
   }, [demoMode, shopifyProductId]);
@@ -481,6 +497,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           lastName: lastName.trim(),
           yearOfBirth: yobNum,
           ageGroup,
+          productType: selectedProductType,
         });
         if (result.found) {
           setMatchedPlayerId(result.playerId ?? null);
@@ -559,6 +576,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         divisionCode: planBDivisionCode,
         teamName: planBTeamName,
         crossPoolCheck,
+        productType: selectedProductType,
         limit: 12,
       });
 
@@ -572,6 +590,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             divisionCode: planBDivisionCode,
             teamName: planBTeamName,
             crossPoolCheck,
+            productType: selectedProductType,
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
             (s) => String(s.size).toLowerCase() === String(selectedSize).toLowerCase() && s.count > 0
@@ -639,6 +658,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         keepExistingJersey: keepExistingJersey,
         previousJerseyNumber: existingPlayerJersey ?? null,
         previousInventoryId: existingPlayerInventoryId ?? null,
+        productType: selectedProductType,
       });
 
       if (!result.success) {

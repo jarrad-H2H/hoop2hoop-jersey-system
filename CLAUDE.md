@@ -233,7 +233,7 @@ Key pages: Club Manager, Club Overview, Players, Importer, Stock Planner, Alloca
 
 | # | Task | Notes |
 |---|---|---|
-| — | Shopify theme snippet update | Add `jerseyGender` metafield to `buy-buttons.liquid` for dual product support (when ready to configure Shopify products for a second club) |
+| — | Configure a real second club's Shopify products | Dual mens/womens code is wired (2026-06-22, see ALLOCATION_LOGIC.md §14) and verified against a synthetic "Hoop2Hoop Test Club". No liquid snippet change needed — `productId` already disambiguates via `shopify_product_club_map`. Just needs real Shopify product IDs + `shopify_product_club_map` rows once a second club is ready to go live. |
 
 ---
 

@@ -204,6 +204,12 @@ export interface SmartCheckOptions {
    * (Mixed gender detected or admin manual override via competition_age_groups).
    */
   crossPoolCheck?: boolean;
+  /**
+   * Shopify product type for clubs with dual mens/womens products mapped via
+   * shopify_product_club_map. Defaults to "default" (single-product clubs).
+   * Filters which inventory pool stock is checked against.
+   */
+  productType?: string;
 }
 
 export interface SmartCheckResult {
@@ -313,6 +319,7 @@ export async function smartCheckNumber(
     teamName,
     ageGroup,
     crossPoolCheck = false,
+    productType = "default",
   } = options;
 
   const seasonYear =
@@ -401,7 +408,8 @@ export async function smartCheckNumber(
     .from("inventory")
     .select("size, status")
     .eq("club_id", clubId)
-    .eq("jersey_number", jerseyNumber);
+    .eq("jersey_number", jerseyNumber)
+    .eq("product_type", productType);
 
   if (invError) {
     console.error("smartCheckNumber: inventory query error", invError);
@@ -561,6 +569,8 @@ export async function suggestNumbersForClubRanked(input: {
   ageGroup?: string | null;
   /** When true, block same-age-group numbers across all teams (cross-pool). */
   crossPoolCheck?: boolean;
+  /** Shopify product type for dual mens/womens clubs. Defaults to "default". */
+  productType?: string;
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
   // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
@@ -578,7 +588,8 @@ export async function suggestNumbersForClubRanked(input: {
     .select("jersey_number")
     .eq("club_id", input.clubId)
     .eq("status", STATUS_AVAILABLE)
-    .eq("size", input.size);
+    .eq("size", input.size)
+    .eq("product_type", input.productType ?? "default");
 
   if (invErr) {
     console.error("suggestNumbersForClubRanked inventory error", invErr);
@@ -909,6 +920,8 @@ export async function lookupPlayerByName(params: {
   lastName: string;
   yearOfBirth: number;
   ageGroup?: string | null;
+  /** Shopify product type for dual mens/womens clubs. Defaults to "default". */
+  productType?: string;
 }): Promise<{
   found: boolean;
   playerId?: string;
@@ -920,7 +933,7 @@ export async function lookupPlayerByName(params: {
   divisionCode?: string | null;
   teamName?: string | null;
 }> {
-  const { clubId, firstName, lastName, yearOfBirth, ageGroup } = params;
+  const { clubId, firstName, lastName, yearOfBirth, ageGroup, productType = "default" } = params;
   const firstTrimmed = firstName.trim();
   const lastTrimmed = lastName.trim();
 
@@ -970,6 +983,7 @@ export async function lookupPlayerByName(params: {
       .eq("club_id", clubId)
       .eq("jersey_number", player.final_shirt)
       .eq("status", "Allocated")
+      .eq("product_type", productType)
       .limit(1);
     previousInventoryId = ((invData ?? [])[0] as any)?.id ?? null;
   }
@@ -1000,6 +1014,8 @@ export async function reserveNumberForPurchase(input: {
   keepExistingJersey?: boolean | null;
   previousJerseyNumber?: number | null;
   previousInventoryId?: string | null;
+  /** Shopify product type for dual mens/womens clubs. Defaults to "default". */
+  productType?: string;
 }): Promise<{
   success: boolean;
   message: string;
@@ -1020,6 +1036,7 @@ export async function reserveNumberForPurchase(input: {
     p_keep_existing_jersey: input.keepExistingJersey ?? null,
     p_previous_jersey_number: input.previousJerseyNumber ?? null,
     p_previous_inventory_id: input.previousInventoryId ?? null,
+    p_product_type: input.productType ?? "default",
   });
 
   if (error) {
