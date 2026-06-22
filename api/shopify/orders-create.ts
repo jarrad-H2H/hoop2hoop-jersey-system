@@ -322,6 +322,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (playerFirstName && playerLastName && p.year_of_birth && clubId) {
             const yob = Number(p.year_of_birth);
 
+            // Resolve the team this specific purchase was for (from the widget's team
+            // dropdown, stored as pending_allocations.team_id -> teams.id). A player can
+            // have multiple players rows -- one per team membership (this already happens
+            // organically via BC import for real multi-team players) -- so matching by
+            // name+YOB+club ALONE is not enough to find the right row once a player plays
+            // for more than one team (e.g. "playing up" a second jersey for a higher team).
+            let pendingTeamName: string | null = null;
+            let pendingTeamAgeGroup: string | null = null;
+            const pendingTeamId = (p.team_id ?? "").toString().trim();
+            if (pendingTeamId) {
+              const { data: teamRow } = await supabase
+                .from("teams")
+                .select("name, age_group")
+                .eq("id", pendingTeamId)
+                .maybeSingle();
+              pendingTeamName = (teamRow as any)?.name ?? null;
+              pendingTeamAgeGroup = (teamRow as any)?.age_group ?? null;
+            }
+
             if (isNewPlayerFlag === true) {
               // New player — insert a fresh player record
               await supabase.from("players").insert({
@@ -330,34 +349,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 year_of_birth: yob,
                 club_id: clubId,
                 final_shirt: newJerseyNum,
+                team_name: pendingTeamName,
+                age_group: pendingTeamAgeGroup,
               });
             } else if (isNewPlayerFlag === false) {
-              // Existing player — find them and update final_shirt.
-              // If not found in DB (e.g. pre-existing player not yet recorded),
-              // insert them anyway so we always have a player record.
+              // Existing player — find the row for THIS specific team (when known) and
+              // update its final_shirt. If no row exists for this team — either a brand
+              // new team-membership (playing up) or a player not yet recorded — INSERT a
+              // new row rather than overwriting an unrelated team's record.
               const { data: existingPlayers } = await supabase
                 .from("players")
-                .select("id")
+                .select("id, team_name")
                 .eq("club_id", clubId)
                 .ilike("first_name", playerFirstName)
                 .ilike("last_name", playerLastName)
-                .eq("year_of_birth", yob)
-                .limit(1);
+                .eq("year_of_birth", yob);
 
-              const existingPlayer = (existingPlayers ?? [])[0] as any;
+              const rows = (existingPlayers ?? []) as any[];
+              const existingPlayer = pendingTeamName
+                ? rows.find((r) => r.team_name === pendingTeamName)
+                : rows[0];
+
               if (existingPlayer?.id) {
                 await supabase
                   .from("players")
                   .update({ final_shirt: newJerseyNum })
                   .eq("id", existingPlayer.id);
               } else {
-                // Not found — insert a new record so we always have one
+                // No row for this team — insert a new one (covers both "not found at all"
+                // and "found, but only for a different team membership").
                 await supabase.from("players").insert({
                   first_name: playerFirstName,
                   last_name: playerLastName,
                   year_of_birth: yob,
                   club_id: clubId,
                   final_shirt: newJerseyNum,
+                  team_name: pendingTeamName,
+                  age_group: pendingTeamAgeGroup,
                 });
               }
 
