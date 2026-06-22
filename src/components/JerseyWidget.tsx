@@ -7,6 +7,7 @@ import {
   reserveNumberForPurchase,
   lookupPlayerByName,
   isAgeGroupCrossPool,
+  ageGroupBucketSiblings,
 } from "../services/allocation";
 
 interface MappingRow {
@@ -155,6 +156,18 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     demoMode ? genderToProductType(gender) : "default"
   );
 
+  // Player gender — needed to find Gold Coast's girls-only Junior/Open Girls teams,
+  // which the standard YOB-derived age ladder (U10/U12/.../U18) can never match on its
+  // own. For dual-product (mens/womens) clubs this is known automatically from the
+  // Shopify product the customer is buying — no need to ask. For single/unisex-product
+  // clubs there's no such signal, so the widget asks directly.
+  const [playerGenderAnswer, setPlayerGenderAnswer] = useState<"Male" | "Female" | null>(null);
+  const effectivePlayerGender: "Male" | "Female" | null =
+    selectedProductType === "mens" ? "Male"
+    : selectedProductType === "womens" ? "Female"
+    : playerGenderAnswer;
+  const needsGenderPrompt = selectedProductType === "default" && playerGenderAnswer === null;
+
   // ── Player identity (new) ──────────────────────────────────────────────────
   const [firstName, setFirstName] = useState<string>("");
   const [lastName, setLastName] = useState<string>("");
@@ -247,6 +260,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     sizeSelected &&
     namesFilled &&
     yobValid &&
+    !needsGenderPrompt &&
     isNewPlayer !== null &&
     (matchedPlayerDisplayName === null || identityConfirmed !== null) &&
     (!needsKeepPrompt || keepExistingJersey !== null) &&
@@ -438,15 +452,34 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   // Filter by effectiveAgeGroup, not derivedAgeGroup -- when playing up, the team being
   // selected for THIS purchase is in the higher age group, not the player's own raw-YOB band.
+  //
+  // Gold Coast's girls-only Junior (=U14+U16 merged) and Open Girls (=U18+Open merged)
+  // divisions can never match the standard ladder tag (normalizeAgeGroup/
+  // inferTeamAgeGroupFromName can't parse "Junior"/"Open Girls" at all), so those teams
+  // would otherwise never appear here for ANY buyer. Widen the match to also include
+  // raw-label merge-bucket siblings of effectiveAgeGroup, gated on the player's gender
+  // being known and Female (these divisions are girls-only). Also narrow by team gender
+  // so a Male buyer never sees Female-only teams and vice versa (Mixed/unset always shown).
   const filteredTeams = useMemo(() => {
     if (!effectiveAgeGroup) return [];
+    const bucketSiblingsLower = ageGroupBucketSiblings(effectiveAgeGroup).map((s) => s.toLowerCase());
     return (allTeams ?? []).filter((t) => {
       const fromAgeGroupCol = normalizeAgeGroup(t.age_group);
       const fromName = inferTeamAgeGroupFromName(t.name);
       const tag = fromAgeGroupCol ?? fromName;
-      return tag === effectiveAgeGroup;
+      const standardMatch = tag === effectiveAgeGroup;
+      const bucketMatch =
+        effectivePlayerGender === "Female" &&
+        !!t.age_group &&
+        bucketSiblingsLower.includes(t.age_group.trim().toLowerCase());
+      if (!standardMatch && !bucketMatch) return false;
+
+      if (!effectivePlayerGender) return true;
+      const teamGender = (t.gender || "").trim();
+      if (!teamGender || teamGender === "Mixed") return true;
+      return effectivePlayerGender === "Female" ? teamGender === "Female" : teamGender === "Male";
     });
-  }, [allTeams, effectiveAgeGroup]);
+  }, [allTeams, effectiveAgeGroup, effectivePlayerGender]);
 
   useEffect(() => {
     if (!effectiveAgeGroup || teamChoice === "not_sure") return;
@@ -539,6 +572,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!sizeSelected) { setError("Please select a size above to continue."); return; }
     if (!namesFilled) { setError("Please enter first name and surname."); return; }
     if (!yobValid) { setError("Please enter a valid year of birth."); return; }
+    if (needsGenderPrompt) { setError("Please confirm the player's gender before continuing."); return; }
     if (isNewPlayer === null) { setError("Please answer whether you're new to this club."); return; }
     if (needsKeepPrompt && keepExistingJersey === null) {
       setError("Please answer whether you're keeping your current jersey number."); return;
@@ -809,6 +843,36 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             </div>
           )}
         </div>
+
+        {/* Player gender — only asked for single/unisex-product clubs. Dual-product
+            (mens/womens) clubs already know this from which Shopify product was bought. */}
+        {needsGenderPrompt && (
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
+              Player's Gender
+            </label>
+            <div className="flex gap-2">
+              {(["Female", "Male"] as const).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setPlayerGenderAnswer(g)}
+                  className={[
+                    "px-5 py-2 rounded border text-sm font-semibold transition-colors",
+                    playerGenderAnswer === g
+                      ? "bg-indigo-600 border-indigo-700 text-white"
+                      : "bg-white border-gray-300 text-gray-800 hover:bg-gray-50",
+                  ].join(" ")}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Needed to find the right team — some divisions (e.g. Junior, Open Girls) are girls-only and named differently from the standard age groups.
+            </div>
+          </div>
+        )}
 
         {/* New to club? */}
         <div>

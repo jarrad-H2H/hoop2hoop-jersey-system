@@ -27,7 +27,7 @@ const AGE_GROUP_MERGE_BUCKETS: string[][] = [
 ];
 
 /** Returns the merge-bucket siblings (canonical casing, for DB .in() queries) including the group itself. */
-function ageGroupBucketSiblings(ag: string | null | undefined): string[] {
+export function ageGroupBucketSiblings(ag: string | null | undefined): string[] {
   if (!ag) return [];
   const upper = ag.trim().toUpperCase();
   const bucket = AGE_GROUP_MERGE_BUCKETS.find((b) => b.some((g) => g.toUpperCase() === upper));
