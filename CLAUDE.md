@@ -245,9 +245,9 @@ Key pages: Club Manager, Club Overview, Players, Importer, Stock Planner, Alloca
 
 3. **YOB is null for BC players**: BC CSV has no YOB. The `year_of_birth` column on `players` is only populated when a player completes a widget purchase. Clash checking uses `estimated_yob_min`/`estimated_yob_max` for BC-imported players.
 
-4. **Inventory statuses are title-case**: "Available", "Allocated", "Pending", "Written Off". Do not use uppercase or lowercase.
+4. **Inventory statuses are title-case**: "Available", "Allocated", "Pending", "Written Off". Do not use uppercase or lowercase. **Critical bug fixed 2026-06-22**: the DB's `status_check` constraint never actually allowed `'Written Off'` or `'Pending'` as values — only `Available`/`Reserved`/`Allocated` (+ lowercase). Every order-confirmation write-off (releasing an old number for a new one) would have failed with a constraint violation in production. Fixed by widening the constraint.
 
-5. **Written-off jerseys don't return to stock**: The physical jersey is gone. Only "Available" inventory can be allocated.
+5. **Written-off jerseys don't return to stock**: The physical jersey is gone. Only "Available" inventory can be allocated. **Related bug fixed 2026-06-22**: the anon RLS policy on `inventory` only exposed `status = 'Available'` rows, so `lookupPlayerByName`'s `previousInventoryId` (the returning player's currently-Allocated jersey, needed to write it off) always resolved to `null` in production — silently breaking this entire flow upstream of the constraint bug above. Fixed by widening the policy to also expose `Allocated` rows (still scoped to mapped clubs; `Written Off`/`Pending` remain hidden from anon).
 
 6. **No 69**: Valid jersey numbers are 0–99 excluding 69 (99 usable numbers).
 
