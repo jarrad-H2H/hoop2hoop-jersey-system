@@ -105,10 +105,10 @@ function estimateYobRange(
     case "U16":  return { min: competitionYear - 15, max: competitionYear - 14 }; // ages 14–15
     case "U18":  return { min: competitionYear - 17, max: competitionYear - 16 }; // ages 16–17
     case "Open":
-    case "Open Girls":
     case "Seniors":
     case "SLG":  return { min: competitionYear - 99, max: competitionYear - 18 }; // 18+
-    case "Junior": return { min: null, max: null }; // TBD — awaiting GCB confirmation
+    case "Open Girls": return { min: competitionYear - 99, max: competitionYear - 16 }; // girls only: U18 + Open/Seniors merged, ages 16+
+    case "Junior": return { min: competitionYear - 15, max: competitionYear - 12 }; // girls only: U14 + U16 merged, ages 12-15
     default:     return { min: null, max: null };
   }
 }

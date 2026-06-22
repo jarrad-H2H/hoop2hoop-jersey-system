@@ -47,7 +47,8 @@ Update this file whenever new rules are agreed, then update the code to match.
 | 14–15 | U16 | ±1 year |
 | 16–17 | U18 | ±1 year |
 | ≥ 18 | Open/Seniors | Anyone aged ≥ 18 at this club |
-| TBD | Junior | Pending confirmation from Gold Coast Basketball |
+| 12–15 | Junior (girls only) | Anyone aged 12–15 at this club — Gold Coast girls-only division merging U14 + U16 |
+| ≥ 16 | Open Girls (girls only) | Anyone aged ≥ 16 at this club — Gold Coast girls division merging U18 + Open/Seniors |
 
 **U8 detection is per-club** — not per-competition:
 ```sql
@@ -57,7 +58,7 @@ SELECT EXISTS (
 )
 ```
 
-**Junior age group** — used in Gold Coast competition for a girls-only division that is roughly equivalent to U8 or possibly U6 when a separate U8 division already exists. YOB range is TBD pending GCB confirmation. Do not hardcode it — leave as TBD and treat conservatively.
+**Junior age group** — confirmed with Gold Coast Basketball (2026-06-22): a girls-only division merging U14 + U16, i.e. ages 12–15. **Open Girls** — confirmed same date: a girls-only division merging U18 + Open/Seniors, i.e. ages 16 and up.
 
 **SLG (Super League Girls)** — a separate age group in the Gold Coast competition, female-only, for elite girls. Treat as a single-gender pool; no cross-pool check.
 
@@ -227,7 +228,6 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 
 | Item | Status |
 |---|---|
-| Junior age group YOB range | Awaiting confirmation from Gold Coast Basketball |
 | Seahawks BC CSV import | Data available; not yet imported |
 | Plan B (different-team override) | ✅ Implemented — returning player lookup returns `divisionCode`/`teamName`; widget passes to allocation functions |
 | Playing-up-an-age-group widget checkbox | Designed; not yet coded |

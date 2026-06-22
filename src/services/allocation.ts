@@ -86,8 +86,9 @@ function estimateYobFromAgeGroup(
   if (ag === "U14")  return { min: seasonYear - 13, max: seasonYear - 12 };
   if (ag === "U16")  return { min: seasonYear - 15, max: seasonYear - 14 };
   if (ag === "U18")  return { min: seasonYear - 17, max: seasonYear - 16 };
-  if (ag === "JUNIOR") return { min: seasonYear - 17, max: seasonYear - 14 };
-  if (ag === "SLG" || ag === "OPEN" || ag === "OPEN GIRLS" || ag === "SENIORS")
+  if (ag === "JUNIOR") return { min: seasonYear - 15, max: seasonYear - 12 }; // girls only: U14 + U16 merged, ages 12-15
+  if (ag === "OPEN GIRLS") return { min: seasonYear - 99, max: seasonYear - 16 }; // girls only: U18 + Open/Seniors merged, ages 16+
+  if (ag === "SLG" || ag === "OPEN" || ag === "SENIORS")
     return { min: seasonYear - 99, max: seasonYear - 18 };
   return null;
 }
