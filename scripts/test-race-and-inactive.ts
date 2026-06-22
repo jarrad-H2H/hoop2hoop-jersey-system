@@ -6,7 +6,6 @@
 //      fallback path checked this).
 // Run with: npx tsx scripts/test-race-and-inactive.ts
 import { reserveNumberForPurchase, smartCheckNumber } from "../src/services/allocation";
-import { supabase } from "../src/services/supabase";
 
 const CLUB_ID = "00000000-0000-0000-0000-0000000000aa";
 let failures = 0;
@@ -30,23 +29,24 @@ async function testRaceCondition() {
   const successCount = [a, b].filter((r) => r.success).length;
   check(`Exactly one concurrent reservation succeeded (got ${successCount})`, successCount === 1);
 
-  // Reset #7 back to clean Available state for re-runs.
-  await supabase.from("pending_allocations").delete().eq("club_id", CLUB_ID).eq("jersey_number", 7);
-  await supabase.from("allocations").delete().eq("club_id", CLUB_ID).eq("jersey_number", 7);
-  await supabase
-    .from("inventory")
-    .update({ status: "Available", allocated_player_id: null, allocation_date: null })
-    .eq("club_id", CLUB_ID)
-    .eq("jersey_number", 7);
+  // NOTE: cannot reset #7 here -- this script runs as the anon key (same as the real
+  // widget), which correctly has no UPDATE/DELETE policy on inventory/pending_allocations.
+  // Reset #7 back to Available via the Supabase SQL tool (service role) between runs:
+  //   delete from pending_allocations where club_id = '<CLUB_ID>' and jersey_number = 7;
+  //   delete from allocations where club_id = '<CLUB_ID>' and jersey_number = 7;
+  //   update inventory set status='Available', allocated_player_id=null, allocation_date=null
+  //     where club_id = '<CLUB_ID>' and jersey_number = 7;
 }
 
+// Requires this fixture to exist first (run via the privileged Supabase SQL tool --
+// anon, same as the real widget, has no INSERT permission on players):
+//   insert into players (first_name, last_name, club_id, team_id, team_name, age_group,
+//     final_shirt, year_of_birth, bc_last_seen_season) values
+//     ('OldPlayer', 'Departed', '<CLUB_ID>', 'H2H-TEST-U10-MIXED',
+//      'H2H Test U10 Mixed Team A', 'U10', 9, 2017, 2022);
+// Clean up afterwards with:
+//   delete from players where club_id = '<CLUB_ID>' and first_name = 'OldPlayer';
 async function testInactivePlayer() {
-  await supabase.from("players").insert({
-    first_name: "OldPlayer", last_name: "Departed", club_id: CLUB_ID,
-    team_id: "H2H-TEST-U10-MIXED", team_name: "H2H Test U10 Mixed Team A",
-    age_group: "U10", final_shirt: 9, year_of_birth: 2017, bc_last_seen_season: 2022,
-  });
-
   const result = await smartCheckNumber(CLUB_ID, 9, {
     teamName: "H2H Test U10 Mixed Team A",
     divisionCode: null,
@@ -56,8 +56,6 @@ async function testInactivePlayer() {
     productType: "default",
   });
   check("#9 NOT blocked for new same-team player (holder inactive since 2022)", result.clashes.length === 0);
-
-  await supabase.from("players").delete().eq("club_id", CLUB_ID).eq("first_name", "OldPlayer").eq("last_name", "Departed");
 }
 
 async function main() {
