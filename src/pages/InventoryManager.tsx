@@ -15,10 +15,12 @@ interface InventoryRow {
   jersey_number: number;
   status: string;
   allocated_player_id: string | null;
+  product_type: string | null;
 }
 
 interface InventoryBySizeRow {
   size: string;
+  productType: string;
   availableNumbers: number[];
   allocatedNumbers: number[];
   availableQty: number;
@@ -73,21 +75,24 @@ const InventoryManager: React.FC = () => {
     loadInventory();
   }, [selectedClubId]);
 
-  // Group into one row per size, split by status
+  // Group into one row per (size, product_type), split by status -- a dual-product
+  // club's mens/womens pools must never be combined under the same size.
   const groupedBySize: InventoryBySizeRow[] = useMemo(() => {
-    const map = new Map<string, { available: number[]; allocated: number[] }>();
+    const map = new Map<string, { size: string; productType: string; available: number[]; allocated: number[] }>();
 
     for (const row of inventory) {
       const size = String(row.size ?? "").trim();
       if (!size) continue;
+      const productType = row.product_type || "default";
 
       const n = Number(row.jersey_number);
       if (!Number.isFinite(n)) continue;
 
-      if (!map.has(size)) {
-        map.set(size, { available: [], allocated: [] });
+      const key = `${size}::${productType}`;
+      if (!map.has(key)) {
+        map.set(key, { size, productType, available: [], allocated: [] });
       }
-      const entry = map.get(size)!;
+      const entry = map.get(key)!;
       if (row.status === "Available") {
         entry.available.push(n);
       } else {
@@ -96,11 +101,12 @@ const InventoryManager: React.FC = () => {
     }
 
     const rows: InventoryBySizeRow[] = [];
-    for (const [size, { available, allocated }] of map.entries()) {
+    for (const { size, productType, available, allocated } of map.values()) {
       available.sort((a, b) => a - b);
       allocated.sort((a, b) => a - b);
       rows.push({
         size,
+        productType,
         availableNumbers: available,
         allocatedNumbers: allocated,
         availableQty: available.length,
@@ -109,8 +115,10 @@ const InventoryManager: React.FC = () => {
       });
     }
 
-    rows.sort((a, b) =>
-      a.size.localeCompare(b.size, undefined, { numeric: true })
+    rows.sort(
+      (a, b) =>
+        a.size.localeCompare(b.size, undefined, { numeric: true }) ||
+        a.productType.localeCompare(b.productType)
     );
 
     return rows;
@@ -182,6 +190,7 @@ const InventoryManager: React.FC = () => {
             <thead className="bg-gray-100">
               <tr>
                 <th className="px-3 py-2 text-left w-24">Size</th>
+                <th className="px-3 py-2 text-left w-24">Product Type</th>
                 <th className="px-3 py-2 text-left w-20 text-emerald-700">Available</th>
                 <th className="px-3 py-2 text-left">Available numbers</th>
                 <th className="px-3 py-2 text-left w-24 text-amber-700">Allocated</th>
@@ -191,10 +200,11 @@ const InventoryManager: React.FC = () => {
             <tbody>
               {groupedBySize.map((row) => (
                 <tr
-                  key={row.size}
+                  key={`${row.size}::${row.productType}`}
                   className="border-t odd:bg-white even:bg-gray-50 align-top"
                 >
                   <td className="px-3 py-2 font-semibold">{row.size}</td>
+                  <td className="px-3 py-2 text-gray-600">{row.productType}</td>
                   <td className="px-3 py-2">
                     <span
                       className={`font-semibold ${
