@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-const SEASON_YEAR = 2026;
+const SEASON_YEAR = new Date().getFullYear();
 const USAGE_WINDOW_WEEKS = 12;
 const TREND_WINDOW_WEEKS = 4;
 const EXCLUDED_NUMBERS = new Set([69]);
@@ -128,6 +128,12 @@ const StockPlanner: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
 
+  // Product type (default/mens/womens) -- a dual-product club has a completely
+  // separate stock pool per type. Every data source below must be scoped to the
+  // same product type, or planning numbers silently combine mens+womens.
+  const [productTypeOptions, setProductTypeOptions] = useState<string[]>(["default"]);
+  const [selectedProductType, setSelectedProductType] = useState<string>("default");
+
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [writtenOffRows, setWrittenOffRows] = useState<InventoryRow[]>([]);
   const [allocationRows, setAllocationRows] = useState<AllocationRow[]>([]);
@@ -156,6 +162,27 @@ const StockPlanner: React.FC = () => {
         if (list.length > 0) setSelectedClubId(list[0].id);
       });
   }, []);
+
+  // ── Load which product types this club actually has Shopify products for ──
+  useEffect(() => {
+    if (!selectedClubId) {
+      setProductTypeOptions(["default"]);
+      setSelectedProductType("default");
+      return;
+    }
+    supabase
+      .from("shopify_product_club_map")
+      .select("product_type")
+      .eq("club_id", selectedClubId)
+      .then(({ data }) => {
+        const mapped = Array.from(
+          new Set((data ?? []).map((r: any) => (r.product_type || "default").trim()))
+        );
+        const options = Array.from(new Set(["default", ...mapped]));
+        setProductTypeOptions(options);
+        setSelectedProductType((prev) => (options.includes(prev) ? prev : "default"));
+      });
+  }, [selectedClubId]);
 
   // ── Load settings ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -203,26 +230,32 @@ const StockPlanner: React.FC = () => {
         .from("inventory")
         .select("size, status, jersey_number")
         .eq("club_id", selectedClubId)
+        .eq("product_type", selectedProductType)
         .neq("status", "Written Off"),
       // Written off separately for count
       supabase
         .from("inventory")
         .select("size, status, jersey_number")
         .eq("club_id", selectedClubId)
+        .eq("product_type", selectedProductType)
         .eq("status", "Written Off"),
       // Allocations for usage rate (12-week window)
       supabase
         .from("allocations")
         .select("size, created_at")
         .eq("club_id", selectedClubId)
+        .eq("product_type", selectedProductType)
         .in("allocation_type", ["new", "swap"])
         .gte("created_at", windowStart.toISOString()),
       // Orders (all-time) for age group × size analysis + demand trend
       supabase
         .from("orders")
         .select("size, year_of_birth, purchased_at")
-        .eq("club_id", selectedClubId),
-      // Players with final jersey assignment (for number exclusion)
+        .eq("club_id", selectedClubId)
+        .eq("product_type", selectedProductType),
+      // Players with final jersey assignment (for number exclusion) -- NOT filtered by
+      // product_type: players aren't gendered-by-product, and a number already worn by
+      // ANY player must still be excluded from print suggestions regardless of pool.
       supabase
         .from("players")
         .select("age_group, year_of_birth, final_shirt")
@@ -232,7 +265,8 @@ const StockPlanner: React.FC = () => {
       supabase
         .from("pending_allocations")
         .select("size, jersey_number, status, expires_at")
-        .eq("club_id", selectedClubId),
+        .eq("club_id", selectedClubId)
+        .eq("product_type", selectedProductType),
     ]).then(([inv, writtenOff, alloc, orders, players, pending]) => {
       setInventoryRows((inv.data ?? []) as InventoryRow[]);
       setWrittenOffRows((writtenOff.data ?? []) as InventoryRow[]);
@@ -245,7 +279,7 @@ const StockPlanner: React.FC = () => {
       setError("Failed to load data. Please refresh.");
       setLoading(false);
     });
-  }, [selectedClubId]);
+  }, [selectedClubId, selectedProductType]);
 
   // ── Save settings ───────────────────────────────────────────────────────
   const handleSaveSettings = async () => {
@@ -627,7 +661,7 @@ const StockPlanner: React.FC = () => {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Stock Planner</h1>
 
-      {/* Club selector */}
+      {/* Club + Product Type selectors */}
       <div className="flex items-center gap-3">
         <label className="text-sm font-semibold">Club</label>
         <select
@@ -638,6 +672,19 @@ const StockPlanner: React.FC = () => {
           {clubs.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
+            </option>
+          ))}
+        </select>
+
+        <label className="text-sm font-semibold">Product Type</label>
+        <select
+          value={selectedProductType}
+          onChange={(e) => setSelectedProductType(e.target.value)}
+          className="border rounded px-3 py-1.5 text-sm"
+        >
+          {productTypeOptions.map((pt) => (
+            <option key={pt} value={pt}>
+              {pt === "default" ? "Default / Unisex" : pt === "mens" ? "Mens" : pt === "womens" ? "Womens" : pt}
             </option>
           ))}
         </select>

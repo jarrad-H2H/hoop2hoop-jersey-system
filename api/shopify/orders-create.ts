@@ -193,7 +193,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const { data: pending, error: pendingErr } = await supabase
         .from("pending_allocations")
-        .select("id, status, expires_at, inventory_id, jersey_number, size, season_year, year_of_birth, club_id, team_id, player_first_name, player_last_name, is_new_player, keep_existing_jersey, previous_jersey_number, previous_inventory_id")
+        .select("id, status, expires_at, inventory_id, jersey_number, size, season_year, year_of_birth, club_id, team_id, player_first_name, player_last_name, is_new_player, keep_existing_jersey, previous_jersey_number, previous_inventory_id, product_type")
         .eq("id", reservationId)
         .maybeSingle();
 
@@ -425,6 +425,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             year_of_birth: Number(p.year_of_birth) || null,
             season_year: Number(p.season_year) || null,
             purchased_at: nowIso,
+            product_type: p.product_type ?? "default",
           });
           if (insertErr) {
             await logEvent(supabase, {
