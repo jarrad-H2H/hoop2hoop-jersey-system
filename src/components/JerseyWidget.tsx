@@ -787,7 +787,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </label>
           <input
             type="text"
-            className="border rounded px-3 py-2 w-full text-sm"
+            className="border rounded px-3 py-2 w-full text-base"
             placeholder="e.g. Michael"
             value={firstName}
             onChange={(e) => {
@@ -814,7 +814,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </label>
           <input
             type="text"
-            className="border rounded px-3 py-2 w-full text-sm"
+            className="border rounded px-3 py-2 w-full text-base"
             placeholder="e.g. Smith"
             value={lastName}
             onChange={(e) => {
@@ -840,7 +840,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </label>
           <input
             type="number"
-            className="border rounded px-3 py-2 w-full text-sm"
+            className="border rounded px-3 py-2 w-full text-base"
             placeholder="e.g. 2013"
             value={yearOfBirth}
             onChange={(e) => setYearOfBirth(e.target.value)}
@@ -972,7 +972,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             Team
           </label>
           <select
-            className="border rounded px-3 py-2 w-full text-sm"
+            className="border rounded px-3 py-2 w-full text-base"
             value={teamChoice}
             onChange={(e) => setTeamChoice(e.target.value)}
             disabled={loadingTeams}
@@ -995,7 +995,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </label>
           <input
             type="number"
-            className="border rounded px-3 py-2 w-full text-sm"
+            className="border rounded px-3 py-2 w-full text-base"
             placeholder="e.g. 23"
             value={preferredNumber}
             onChange={(e) => setPreferredNumber(e.target.value)}
