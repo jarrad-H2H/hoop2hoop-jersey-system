@@ -1,7 +1,7 @@
 // FILE: src/pages/ClubManager.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
-import { Club } from "../types";
+import { Club } from "../../types";
 import { Plus, Check, X, Building2, Search, Pencil } from "lucide-react";
 
 const ClubManager: React.FC = () => {
