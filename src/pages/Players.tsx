@@ -20,6 +20,7 @@ interface PlayerRow {
   club_id: string;
   final_shirt: number | null;
   year_of_birth: number | null;
+  deleted_at: string | null;
 }
 
 type StatusFilter = "all" | "with-number" | "missing-number" | "missing-yob";
@@ -56,6 +57,7 @@ const Players: React.FC = () => {
 
   // Delete state
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
 
   // Load clubs
   useEffect(() => {
@@ -100,12 +102,18 @@ const Players: React.FC = () => {
       setError(null);
 
       try {
-        const { data, error } = await supabase
+        let query = supabase
           .from("players")
           .select(
-            "id, first_name, last_name, division_code, team_name, club_id, final_shirt, year_of_birth"
+            "id, first_name, last_name, division_code, team_name, club_id, final_shirt, year_of_birth, deleted_at"
           )
-          .eq("club_id", selectedClubId)
+          .eq("club_id", selectedClubId);
+
+        if (!showDeleted) {
+          query = query.is("deleted_at", null);
+        }
+
+        const { data, error } = await query
           .order("last_name", { ascending: true })
           .order("first_name", { ascending: true });
 
@@ -122,7 +130,7 @@ const Players: React.FC = () => {
     };
 
     loadPlayers();
-  }, [selectedClubId]);
+  }, [selectedClubId, showDeleted]);
 
   // Derive a display label for a player's team: prefer team_name, fall back to division_code
   const teamLabel = (p: PlayerRow): string | null =>
@@ -320,16 +328,16 @@ const Players: React.FC = () => {
     }
   };
 
-  // --- Delete handler ---
+  // --- Delete / restore handlers ---
   const deletePlayer = async (p: PlayerRow) => {
     const name = `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || "this player";
-    if (!window.confirm(`Delete ${name}? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete ${name}? You can restore them later from "Show deleted".`)) return;
 
     setDeletingId(p.id);
     try {
       const { error } = await supabase
         .from("players")
-        .delete()
+        .update({ deleted_at: new Date().toISOString() })
         .eq("id", p.id);
 
       if (error) {
@@ -337,7 +345,34 @@ const Players: React.FC = () => {
         return;
       }
 
-      setPlayers((prev) => prev.filter((pl) => pl.id !== p.id));
+      if (showDeleted) {
+        setPlayers((prev) =>
+          prev.map((pl) => (pl.id === p.id ? { ...pl, deleted_at: new Date().toISOString() } : pl))
+        );
+      } else {
+        setPlayers((prev) => prev.filter((pl) => pl.id !== p.id));
+      }
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const restorePlayer = async (p: PlayerRow) => {
+    setDeletingId(p.id);
+    try {
+      const { error } = await supabase
+        .from("players")
+        .update({ deleted_at: null })
+        .eq("id", p.id);
+
+      if (error) {
+        alert("Failed to restore player: " + error.message);
+        return;
+      }
+
+      setPlayers((prev) =>
+        prev.map((pl) => (pl.id === p.id ? { ...pl, deleted_at: null } : pl))
+      );
     } finally {
       setDeletingId(null);
     }
@@ -462,6 +497,16 @@ const Players: React.FC = () => {
             })}
           </div>
         </div>
+
+        <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showDeleted}
+            onChange={(e) => setShowDeleted(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          Show deleted players
+        </label>
       </div>
 
       {/* Error */}
@@ -514,12 +559,15 @@ const Players: React.FC = () => {
                 const isEditingNumber = editingNumberId === p.id;
                 const isSavingNumber = savingNumberId === p.id;
                 const isDeleting = deletingId === p.id;
+                const isDeleted = p.deleted_at != null;
                 const team = teamLabel(p);
 
                 return (
                   <tr
                     key={p.id}
-                    className="border-t border-gray-100 odd:bg-white even:bg-gray-50"
+                    className={`border-t border-gray-100 ${
+                      isDeleted ? "bg-red-50/60 text-gray-400" : "odd:bg-white even:bg-gray-50"
+                    }`}
                   >
                     {/* Last Name */}
                     <td className="px-3 py-2 align-middle">
@@ -676,7 +724,17 @@ const Players: React.FC = () => {
 
                     {/* Actions */}
                     <td className="px-3 py-2 align-middle">
-                      {!isEditingName && !isEditingNumber && !isEditingYob && (
+                      {isDeleted ? (
+                        <button
+                          type="button"
+                          onClick={() => void restorePlayer(p)}
+                          disabled={isDeleting}
+                          className="text-emerald-600 hover:text-emerald-800 text-xs disabled:opacity-50"
+                          title="Restore player"
+                        >
+                          {isDeleting ? "…" : "Restore"}
+                        </button>
+                      ) : !isEditingName && !isEditingNumber && !isEditingYob && (
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
