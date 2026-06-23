@@ -242,13 +242,14 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 
 | Item | Status |
 |---|---|
-| Seahawks BC CSV import | Data available; not yet imported |
+| Seahawks BC CSV import | ✅ Imported — 232 teams under "North Gold Coast Seahawks Domestic Competition" |
 | Plan B (different-team override) | ✅ Implemented — returning player lookup returns `divisionCode`/`teamName`; widget passes to allocation functions |
-| Playing-up-an-age-group widget checkbox | Designed; not yet coded |
-| Dual Shopify product per club (mens + womens) | ✅ Code wired 2026-06-22 — see Section 14. Still needs a real second club's Shopify products + theme config |
+| Playing-up-an-age-group widget checkbox | ✅ Implemented — "Are you also playing up an age group?" prompt in `JerseyWidget.tsx`, verified live end-to-end 2026-06-23 |
+| Dual Shopify product per club (mens + womens) | ✅ Code wired 2026-06-22, verified live end-to-end 2026-06-23 against Hoop2Hoop Test Club's real unisex + womens Shopify products (full reserve → checkout → webhook → player/inventory/orders chain confirmed) |
 | Cross-pool check wired into allocation.ts | ✅ Implemented — `isAgeGroupCrossPool` checks `teams.gender = 'Mixed'` (authoritative) and `competition_age_groups` (manual override) |
 | Reservation hold time | ✅ 30 min, verified end-to-end 2026-06-22 (Task #35) — see Section 16 |
 | Cross-pool clash tests (Task #32) | ✅ Verified end-to-end 2026-06-22 against a synthetic test club — see Section 16 |
+| **Map real Shopify products for every live client club** | ⏳ Not started — all 11 real `is_client=true` clubs currently have **zero** `shopify_product_club_map` rows. Use the admin **Product Mapping** page (now fixed 2026-06-23 to set `product_type` alongside `gender`). Confirm per club/product whether unisex-only or unisex+female dual-product, and the real size labels — never assume (see Key Decision #12 in CLAUDE.md). |
 
 ---
 

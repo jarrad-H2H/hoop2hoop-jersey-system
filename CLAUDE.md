@@ -233,7 +233,7 @@ Key pages: Club Manager, Club Overview, Players, Importer, Stock Planner, Alloca
 
 | # | Task | Notes |
 |---|---|---|
-| — | Configure a real second club's Shopify products | Dual mens/womens code is wired (2026-06-22, see ALLOCATION_LOGIC.md §14) and verified against a synthetic "Hoop2Hoop Test Club". No liquid snippet change needed — `productId` already disambiguates via `shopify_product_club_map`. Just needs real Shopify product IDs + `shopify_product_club_map` rows once a second club is ready to go live. |
+| — | Map real Shopify products for every live client club | Dual mens/womens flow is fully built and verified live end-to-end 2026-06-23 (real checkout → webhook → player/inventory/orders). All 11 real `is_client=true` clubs currently have **zero** Shopify product mappings — use the admin Product Mapping page (fixed 2026-06-23 to set `product_type` correctly). Confirm per club/product whether unisex-only or dual, and the real size labels — never assume from another club/product. |
 
 ---
 

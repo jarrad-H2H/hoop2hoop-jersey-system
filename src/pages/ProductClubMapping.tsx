@@ -25,6 +25,13 @@ interface MappingRow {
   clubs?: { name: string } | null;
 }
 
+// product_type drives which inventory pool the widget actually checks (see
+// JerseyWidget.tsx / allocation.ts) -- gender is just the display label. They must
+// always be set together: gender "unisex" -> product_type "default".
+function genderToProductType(g: Gender): string {
+  return g === "unisex" ? "default" : g;
+}
+
 function extractShopifyProductId(input: string): string | null {
   const raw = (input || "").trim();
   if (!raw) return null;
@@ -122,7 +129,12 @@ const ProductClubMapping: React.FC = () => {
       const { error: upsertError } = await supabase
         .from("shopify_product_club_map")
         .upsert(
-          [{ shopify_product_id: parsedProductId, club_id: selectedClubId, gender: selectedGender }],
+          [{
+            shopify_product_id: parsedProductId,
+            club_id: selectedClubId,
+            gender: selectedGender,
+            product_type: genderToProductType(selectedGender),
+          }],
           { onConflict: "shopify_product_id" }
         );
 
