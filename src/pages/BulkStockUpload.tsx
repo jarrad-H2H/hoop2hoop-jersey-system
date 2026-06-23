@@ -21,10 +21,6 @@ interface ClubSizeRow {
   // UI-only fields for editing size labels:
   isEditing?: boolean;
   draftLabel?: string;
-
-  // Current stock counts (loaded from inventory)
-  currentAvailable: number;
-  currentAllocated: number;
 }
 
 const BulkStockUpload: React.FC = () => {
@@ -672,9 +668,10 @@ const BulkStockUpload: React.FC = () => {
         addedBySize.set(r.size, (addedBySize.get(r.size) ?? 0) + 1);
       }
       setStockMap((prev) => {
-        const next = new Map(prev);
+        const next = new Map<string, { available: number; allocated: number }>(prev);
         for (const [size, qty] of addedBySize.entries()) {
-          const existing = next.get(size) ?? { available: 0, allocated: 0 };
+          const existing: { available: number; allocated: number } =
+            next.get(size) ?? { available: 0, allocated: 0 };
           next.set(size, { ...existing, available: existing.available + qty });
         }
         return next;
