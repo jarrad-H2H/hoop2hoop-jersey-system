@@ -158,15 +158,20 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   // Player gender — needed to find Gold Coast's girls-only Junior/Open Girls teams,
   // which the standard YOB-derived age ladder (U10/U12/.../U18) can never match on its
-  // own. For dual-product (mens/womens) clubs this is known automatically from the
-  // Shopify product the customer is buying — no need to ask. For single/unisex-product
-  // clubs there's no such signal, so the widget asks directly.
+  // own. For mens/womens-labeled products this is known automatically from the Shopify
+  // product the customer is buying — no need to ask. For any other product_type (the
+  // single-product/unisex case, INCLUDING clubs with multiple unisex stock pools from
+  // different suppliers, e.g. Warriors' old-supplier vs new-supplier products -- those
+  // are still both unisex, just separate stock pools) there's no gender signal from the
+  // product alone, so the widget asks directly. Checking "not mens/womens" rather than
+  // "=== 'default'" means this stays correct no matter what label a unisex pool uses.
   const [playerGenderAnswer, setPlayerGenderAnswer] = useState<"Male" | "Female" | null>(null);
+  const isGenderedProductType = selectedProductType === "mens" || selectedProductType === "womens";
   const effectivePlayerGender: "Male" | "Female" | null =
     selectedProductType === "mens" ? "Male"
     : selectedProductType === "womens" ? "Female"
     : playerGenderAnswer;
-  const needsGenderPrompt = selectedProductType === "default" && playerGenderAnswer === null;
+  const needsGenderPrompt = !isGenderedProductType && playerGenderAnswer === null;
 
   // ── Player identity (new) ──────────────────────────────────────────────────
   const [firstName, setFirstName] = useState<string>("");
