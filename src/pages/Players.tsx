@@ -22,6 +22,7 @@ interface PlayerRow {
 type StatusFilter = "all" | "with-number" | "missing-number" | "missing-yob";
 
 const Players: React.FC = () => {
+  const currentYear = new Date().getFullYear();
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
 
@@ -198,8 +199,8 @@ const Players: React.FC = () => {
     const trimmed = editingYobValue.trim();
     // Allow blank to clear the YOB
     const parsed = trimmed === "" ? null : Number(trimmed);
-    if (trimmed !== "" && (!Number.isFinite(parsed) || (parsed as number) < 1950 || (parsed as number) > 2025)) {
-      alert("Please enter a valid year between 1950 and 2025, or leave blank to clear.");
+    if (trimmed !== "" && (!Number.isFinite(parsed) || (parsed as number) < 1950 || (parsed as number) > currentYear)) {
+      alert(`Please enter a valid year between 1950 and ${currentYear}, or leave blank to clear.`);
       return;
     }
 
@@ -641,7 +642,7 @@ const Players: React.FC = () => {
                             className="w-20 border rounded px-1 py-0.5 text-xs"
                             placeholder="e.g. 2012"
                             min={1950}
-                            max={2025}
+                            max={currentYear}
                             autoFocus
                           />
                           <button
