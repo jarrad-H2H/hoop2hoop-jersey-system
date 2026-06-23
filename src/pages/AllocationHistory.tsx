@@ -19,13 +19,22 @@ interface AllocationRow {
   previous_size: string | null;
   note: string | null;
   created_at: string;
-  club?: {
-    name: string | null;
-  } | null;
-  player?: {
-    first_name: string | null;
-    last_name: string | null;
-  } | null;
+  product_type: string | null;
+  // Supabase's PostgREST join returns these as arrays (one row per match), even for a
+  // many-to-one FK relationship -- NOT a single object. Always access via the helpers
+  // below rather than `row.club?.name` / `row.player?.first_name` directly.
+  club?: { name: string | null }[] | null;
+  player?: { first_name: string | null; last_name: string | null }[] | null;
+}
+
+function joinedClubName(row: AllocationRow): string {
+  return row.club?.[0]?.name ?? "";
+}
+
+function joinedPlayerName(row: AllocationRow): string {
+  const p = row.player?.[0];
+  if (!p) return "";
+  return `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim();
 }
 
 const typeLabels: Record<AllocationType, string> = {
@@ -107,6 +116,7 @@ const AllocationHistory: React.FC = () => {
             previous_size,
             note,
             created_at,
+            product_type,
             club:clubs(name),
             player:players(first_name,last_name)
           `
@@ -153,27 +163,23 @@ const AllocationHistory: React.FC = () => {
 
   // Client-side player name filter
   const filteredRows = playerSearch.trim()
-    ? rows.filter((r) => {
-        const name = `${r.player?.first_name ?? ""} ${r.player?.last_name ?? ""}`.toLowerCase();
-        return name.includes(playerSearch.trim().toLowerCase());
-      })
+    ? rows.filter((r) => joinedPlayerName(r).toLowerCase().includes(playerSearch.trim().toLowerCase()))
     : rows;
 
   const handleExportCsv = () => {
     if (!filteredRows.length) return;
     const clubName = clubs.find((c) => c.id === selectedClubId)?.name ?? "";
-    const header = ["Time", "Type", "Player", "Club", "New #", "New Size", "Prev #", "Prev Size", "Note"];
+    const header = ["Time", "Type", "Player", "Club", "Product Type", "New #", "New Size", "Prev #", "Prev Size", "Note"];
     const lines = [
       header.join(","),
       ...filteredRows.map((r) => {
-        const playerName = r.player
-          ? `${r.player.first_name ?? ""} ${r.player.last_name ?? ""}`.trim()
-          : "";
+        const playerName = joinedPlayerName(r);
         return [
           `"${new Date(r.created_at).toLocaleString()}"`,
           typeLabels[r.allocation_type],
           `"${playerName.replace(/"/g, '""')}"`,
-          `"${(r.club?.name ?? clubName).replace(/"/g, '""')}"`,
+          `"${(joinedClubName(r) || clubName).replace(/"/g, '""')}"`,
+          r.product_type ?? "default",
           r.jersey_number ?? "",
           r.size ?? "",
           r.previous_jersey_number ?? "",
@@ -342,6 +348,7 @@ const AllocationHistory: React.FC = () => {
                 <th className="px-3 py-2 text-left">Type</th>
                 <th className="px-3 py-2 text-left">Player</th>
                 <th className="px-3 py-2 text-left">Club</th>
+                <th className="px-3 py-2 text-left">Product Type</th>
                 <th className="px-3 py-2 text-left">New # / Size</th>
                 <th className="px-3 py-2 text-left">Prev # / Size</th>
                 <th className="px-3 py-2 text-left">Note</th>
@@ -349,12 +356,8 @@ const AllocationHistory: React.FC = () => {
             </thead>
             <tbody>
               {filteredRows.map((row) => {
-                const playerName = row.player
-                  ? `${row.player.first_name ?? ""} ${
-                      row.player.last_name ?? ""
-                    }`.trim()
-                  : "";
-                const clubName = row.club?.name ?? "";
+                const playerName = joinedPlayerName(row);
+                const clubName = joinedClubName(row);
                 const created = new Date(row.created_at);
                 const timeString = created.toLocaleString();
 
@@ -378,6 +381,9 @@ const AllocationHistory: React.FC = () => {
                     </td>
                     <td className="px-3 py-2 align-top">
                       {clubName || <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="px-3 py-2 align-top text-gray-600">
+                      {row.product_type ?? "default"}
                     </td>
                     <td className="px-3 py-2 align-top">
                       {row.jersey_number != null ? (
