@@ -1,7 +1,7 @@
 // FILE: src/pages/SystemHealth.tsx
 import React, { useCallback, useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
-import { Activity, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, RefreshCw, Mail } from "lucide-react";
 import { SkeletonCards } from "../components/ui/Skeleton";
 
 type Severity = "error" | "warning";
@@ -74,6 +74,35 @@ const SystemHealth: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<CheckResult[]>([]);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+
+  const [lowStockChecking, setLowStockChecking] = useState(false);
+  const [lowStockResult, setLowStockResult] = useState<string | null>(null);
+
+  const runLowStockCheckNow = async () => {
+    setLowStockChecking(true);
+    setLowStockResult(null);
+    try {
+      const res = await fetch("/api/low-stock-check");
+      const data = await res.json();
+      if (!res.ok) {
+        setLowStockResult(`Failed: ${data.error ?? "unknown error"}`);
+        return;
+      }
+      if (data.lowStockCount === 0) {
+        setLowStockResult("Checked now — no low stock found, no email sent.");
+      } else if (data.emailSent) {
+        setLowStockResult(`Checked now — ${data.lowStockCount} low-stock item(s) found, alert email sent.`);
+      } else {
+        setLowStockResult(
+          `Checked now — ${data.lowStockCount} low-stock item(s) found, but the email failed to send: ${data.emailError ?? "unknown error"}`
+        );
+      }
+    } catch (err: any) {
+      setLowStockResult(`Failed: ${err.message ?? "unexpected error"}`);
+    } finally {
+      setLowStockChecking(false);
+    }
+  };
 
   const runChecks = useCallback(async () => {
     setLoading(true);
@@ -233,6 +262,37 @@ const SystemHealth: React.FC = () => {
           Last checked: {lastChecked.toLocaleString()}
         </p>
       )}
+
+      <div className="mb-6 border border-gray-200 rounded-lg bg-white p-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+              <Mail size={16} className="text-brand-600" />
+              Low stock email alerts
+            </h2>
+            <p className="text-xs text-gray-500 max-w-xl">
+              Runs automatically every morning (8am AEST) and emails {" "}
+              <span className="font-medium">jarrad@cimcgroup.com.au</span> if any live
+              club's available stock for a size drops to or below its reorder buffer
+              (the same buffer used on Stock Planner).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void runLowStockCheckNow()}
+            disabled={lowStockChecking}
+            className="flex items-center gap-2 text-sm px-3 py-2 border rounded hover:bg-gray-50 disabled:opacity-50 flex-shrink-0"
+          >
+            <RefreshCw size={14} className={lowStockChecking ? "animate-spin" : ""} />
+            Check now
+          </button>
+        </div>
+        {lowStockResult && (
+          <p className="text-xs text-gray-700 mt-3 bg-gray-50 border border-gray-200 rounded p-2">
+            {lowStockResult}
+          </p>
+        )}
+      </div>
 
       {error && (
         <div className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
