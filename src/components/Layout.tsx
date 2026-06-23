@@ -15,6 +15,7 @@ import {
   ShoppingBag,
   KeyRound,
   SplitSquareVertical,
+  Search,
 } from "lucide-react";
 
 type NavItem = {
@@ -63,6 +64,12 @@ const Layout: React.FC = () => {
       label: "Players",
       icon: <Users size={20} />,
       match: (p) => p.startsWith("/admin/players"),
+    },
+    {
+      path: "/admin/cross-club-search",
+      label: "Cross-Club Search",
+      icon: <Search size={20} />,
+      match: (p) => p.startsWith("/admin/cross-club-search"),
     },
     {
       path: "/admin/allocation",
