@@ -16,6 +16,7 @@ import {
   KeyRound,
   SplitSquareVertical,
   Search,
+  Activity,
 } from "lucide-react";
 
 type NavItem = {
@@ -40,6 +41,12 @@ const Layout: React.FC = () => {
       label: "Dashboard",
       icon: <LayoutDashboard size={20} />,
       match: (p) => p === "/admin" || p === "/admin/club-overview",
+    },
+    {
+      path: "/admin/system-health",
+      label: "System Health",
+      icon: <Activity size={20} />,
+      match: (p) => p.startsWith("/admin/system-health"),
     },
     {
       path: "/admin/clubs",
