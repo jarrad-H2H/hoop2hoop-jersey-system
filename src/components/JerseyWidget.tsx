@@ -584,10 +584,13 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     }
     if (!teamSelected) { setError("Please select a team (or choose Not sure/Not assigned yet)."); return; }
 
-    // When playing up, bypass the player's own YOB so clash detection uses
-    // the higher age group's YOB window rather than the player's actual year.
-    const yobForSearch =
-      keepExistingJersey === true && playingUp === true ? undefined : yobNum;
+    // The buyer's actual YOB is always safe to pass through: when a real team is
+    // selected, clash-checking is purely team-vs-team and ignores YOB entirely; when
+    // no team is known (e.g. "playing up" but "not sure" which higher team), this
+    // correctly falls back to the standard ±1-year YOB window for the buyer's real
+    // age, rather than leaving YOB undefined (which previously fell through to an
+    // incorrect "treat as 18+/Open" default).
+    const yobForSearch = yobNum;
 
     // Plan B: returning player with confirmed identity and a known team.
     // Passing divisionCode + teamName switches the allocation functions from the
