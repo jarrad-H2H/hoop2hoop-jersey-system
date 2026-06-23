@@ -25,6 +25,7 @@ interface InventoryRow {
   jersey_number: number;
   size: string;
   status: "Available" | "Allocated" | string;
+  product_type: string | null;
 }
 
 interface ClubSummary {
@@ -38,6 +39,7 @@ interface ClubSummary {
   inventoryAllocated: number;
   stockBySize: {
     size: string;
+    productType: string;
     available: number;
     allocated: number;
     total: number;
@@ -116,7 +118,7 @@ const ClubOverview: React.FC = () => {
       // Load inventory via the view so we see club_name as well
       const { data: invData, error: invError } = await supabase
         .from("inventory_with_club")
-        .select("id, club_id, club_name, jersey_number, size, status")
+        .select("id, club_id, club_name, jersey_number, size, status, product_type")
         .eq("club_id", clubId);
 
       if (invError) {
@@ -155,13 +157,16 @@ const ClubOverview: React.FC = () => {
         (row) => row.status === "Allocated"
       ).length;
 
-      // Group stock by size
-      const stockMap = new Map<string, { available: number; allocated: number }>();
+      // Group stock by (size, product_type) -- a dual-product club's mens/womens pools
+      // must never be combined, or the breakdown silently misrepresents real stock.
+      const stockMap = new Map<string, { size: string; productType: string; available: number; allocated: number }>();
 
       inventory.forEach((row) => {
-        const key = row.size || "Unknown";
+        const size = row.size || "Unknown";
+        const productType = row.product_type || "default";
+        const key = `${size}::${productType}`;
         if (!stockMap.has(key)) {
-          stockMap.set(key, { available: 0, allocated: 0 });
+          stockMap.set(key, { size, productType, available: 0, allocated: 0 });
         }
         const bucket = stockMap.get(key)!;
         if (row.status === "Available") {
@@ -171,14 +176,15 @@ const ClubOverview: React.FC = () => {
         }
       });
 
-      const stockBySize = Array.from(stockMap.entries())
-        .map(([size, bucket]) => ({
-          size,
+      const stockBySize = Array.from(stockMap.values())
+        .map((bucket) => ({
+          size: bucket.size,
+          productType: bucket.productType,
           available: bucket.available,
           allocated: bucket.allocated,
           total: bucket.available + bucket.allocated,
         }))
-        .sort((a, b) => a.size.localeCompare(b.size));
+        .sort((a, b) => a.size.localeCompare(b.size) || a.productType.localeCompare(b.productType));
 
       const nextSummary: ClubSummary = {
         totalPlayers,
@@ -332,6 +338,7 @@ const ClubOverview: React.FC = () => {
                   <thead className="bg-gray-100">
                     <tr>
                       <th className="px-2 py-1 text-left">Size</th>
+                      <th className="px-2 py-1 text-left">Product Type</th>
                       <th className="px-2 py-1 text-left">Available</th>
                       <th className="px-2 py-1 text-left">Allocated</th>
                       <th className="px-2 py-1 text-left">Total</th>
@@ -340,10 +347,11 @@ const ClubOverview: React.FC = () => {
                   <tbody>
                     {summary.stockBySize.map((row) => (
                       <tr
-                        key={row.size}
+                        key={`${row.size}::${row.productType}`}
                         className="odd:bg-white even:bg-gray-50"
                       >
                         <td className="px-2 py-1">{row.size}</td>
+                        <td className="px-2 py-1">{row.productType}</td>
                         <td className="px-2 py-1">{row.available}</td>
                         <td className="px-2 py-1">{row.allocated}</td>
                         <td className="px-2 py-1">{row.total}</td>
