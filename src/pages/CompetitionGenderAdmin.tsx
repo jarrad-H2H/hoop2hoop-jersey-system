@@ -308,9 +308,12 @@ const CompetitionGenderAdmin: React.FC = () => {
           <div className="mt-6 pt-4 border-t text-xs text-gray-500 space-y-1.5">
             <p>
               <strong>Cross-pool check -- Yes</strong> means jersey numbers must
-              be unique across both the mens and womens pools for players in that
-              age group. Only applies to clubs with both a mens and womens product
-              configured.
+              be unique across ALL teams in that age group at a club, not just
+              within one team — this fires purely from Mixed-gender teams or the
+              manual override below, regardless of Shopify product setup. A
+              separate, additional check at reservation time also blocks the same
+              number across a club's mens/womens Shopify stock pools, but only for
+              clubs with both products configured.
             </p>
             <p>
               <strong>Mixed detected</strong> -- the BC import found teams running

@@ -251,7 +251,7 @@ Key pages: Club Manager, Club Overview, Players, Importer, Stock Planner, Alloca
 
 6. **No 69**: Valid jersey numbers are 0–99 excluding 69 (99 usable numbers).
 
-7. **Cross-pool check**: Only applies when (a) the age group has Mixed gender teams at the club AND (b) the club has both mens and womens products configured. Both conditions required.
+7. **Cross-pool check is actually two separate mechanisms (clarified 2026-06-23)**: (a) **same-team-pool uniqueness** (`isAgeGroupCrossPool` / `smartCheckNumber` / `suggestNumbersForClubRanked`) — fires purely from `teams.gender = 'Mixed'` or the `competition_age_groups` manual override, requiring jersey numbers to be unique across ALL teams in that age group at a club. This applies regardless of Shopify product setup. (b) **cross-product stock uniqueness** (`reserve_jersey`'s `v_is_mixed AND p_product_type IN ('mens','womens')` check) — additionally blocks the same number across a club's mens/womens Shopify stock pools at reservation time, but only fires for clubs with both products configured.
 
 8. **`teams.gender` is authoritative** for cross-pool detection, not `competition_age_groups`. The latter table is manual override only.
 
