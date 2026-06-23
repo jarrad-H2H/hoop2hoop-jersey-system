@@ -60,10 +60,10 @@ const CARD_COPY: Record<
       "Open Allocation History and Sales History for the affected order number and confirm the player actually got their number. Check Vercel function logs for the full error if needed.",
   },
   player_number_drift: {
-    title: "Players with a number but no matching Allocated inventory row",
+    title: "Numbers the system allocated, but inventory doesn't show as Allocated",
     severity: "warning",
     explanation:
-      "These players have a final_shirt number recorded, but there's no inventory row for that exact club + number marked Allocated. This usually happens after a manual edit (e.g. editing a player's number directly on the Players page) without also updating inventory — it won't break the widget's clash checking, but it means Inventory and Stock Planner counts won't reflect this player.",
+      "The allocations log's most recent event for this club + number says it was allocated or swapped to someone, but there's no inventory row for that exact club + number currently marked Allocated. This means the system itself lost track of a real allocation — most likely the inventory row was changed (or never created) outside the normal allocate/return flow. This check intentionally ignores players whose number came from BC import history or a direct Players-page edit, since those were never expected to have a corresponding inventory row in the first place.",
     howToFix:
       "Go to Inventory for this club and check whether that number exists and is marked Allocated. If not, use the Allocation page to properly allocate it, or write off the discrepancy.",
   },
@@ -116,7 +116,7 @@ const SystemHealth: React.FC = () => {
         inventoryRes,
         pendingRes,
         webhookRes,
-        playersRes,
+        allocationsLogRes,
       ] = await Promise.all([
         supabase.from("clubs").select("id, name, is_client").eq("is_client", true),
         supabase.from("shopify_product_club_map").select("club_id"),
@@ -133,7 +133,11 @@ const SystemHealth: React.FC = () => {
           .eq("level", "error")
           .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
           .order("created_at", { ascending: false }),
-        supabase.from("players").select("club_id, final_shirt").not("final_shirt", "is", null).is("deleted_at", null),
+        supabase
+          .from("allocations")
+          .select("club_id, jersey_number, allocation_type, player_first_name, player_last_name, created_at")
+          .in("allocation_type", ["new", "swap", "end", "return"])
+          .order("created_at", { ascending: true }),
       ]);
 
       const liveClubs = clubsRes.data ?? [];
@@ -173,13 +177,27 @@ const SystemHealth: React.FC = () => {
           ).toLocaleString()})`
       );
 
-      const driftedPlayers = (playersRes.data ?? []).filter(
-        (p: any) => p.final_shirt != null && !allocatedSet.has(`${p.club_id}::${p.final_shirt}`)
+      // Only flag a number when the allocations log's MOST RECENT event for that exact
+      // club + number says it's currently held ("new"/"swap") -- if the latest event is
+      // "end"/"return", the number is expected to be released and absence of an
+      // Allocated row is correct, not drift. Rows are fetched oldest-first, so the last
+      // write per key naturally ends up as the latest.
+      const latestAllocationByKey = new Map<
+        string,
+        { allocation_type: string; player_first_name: string | null; player_last_name: string | null; club_id: string }
+      >();
+      for (const r of allocationsLogRes.data ?? []) {
+        const key = `${r.club_id}::${r.jersey_number}`;
+        latestAllocationByKey.set(key, r as any);
+      }
+
+      const driftEntries = Array.from(latestAllocationByKey.entries()).filter(
+        ([key, r]) => (r.allocation_type === "new" || r.allocation_type === "swap") && !allocatedSet.has(key)
       );
-      // Group drift count per club for a readable summary instead of one line per player
+      // Group drift count per club for a readable summary instead of one line per number
       const driftByClub = new Map<string, number>();
-      for (const p of driftedPlayers) {
-        driftByClub.set(p.club_id, (driftByClub.get(p.club_id) ?? 0) + 1);
+      for (const [, r] of driftEntries) {
+        driftByClub.set(r.club_id, (driftByClub.get(r.club_id) ?? 0) + 1);
       }
 
       const newResults: CheckResult[] = [
