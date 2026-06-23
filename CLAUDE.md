@@ -260,3 +260,7 @@ Key pages: Club Manager, Club Overview, Players, Importer, Stock Planner, Alloca
 10. **Race conditions**: Jersey reservation uses a Postgres RPC `reserve_jersey` (atomic). Never bypass this with a direct INSERT to `pending_allocations`.
 
 11. **Admin auth**: The `admin_users` table controls access. To add an admin: insert their Supabase auth UUID and email. Public signup is permanently disabled.
+
+12. **Never assume product config or size labels across clubs/products**: confirmed 2026-06-23 — garment patterns (and therefore size labels) vary per club and even per product within the same club (e.g. a unisex singlet and its dual-product female counterpart can use completely different size ranges — Hoop2Hoop's unisex uses YXS/YS/YM/YL/XS/S/M/L/XL/2XL/3XL, NOT the youth-numbered G6...22 set used by its female product). Always confirm directly with the user whether a club is unisex-only or unisex+female dual-product, and what the actual size labels are for each product, before setting up `club_sizes`/inventory. Never copy/duplicate another product's or club's size set as a shortcut.
+
+13. **`club_sizes` is scoped by `(club_id, size_label, product_type)`**: a size label can be reused across product types (mens/womens almost always share the same size names with separate stock pools). **Bug fixed 2026-06-23**: the original unique constraint was `(club_id, size_label)` only, which made the multi-product design impossible the moment two product types shared a size label. Fixed by widening the constraint to include `product_type`.
