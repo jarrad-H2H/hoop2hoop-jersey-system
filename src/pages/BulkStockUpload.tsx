@@ -1,8 +1,9 @@
 // FILE: src/pages/BulkStockUpload.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../services/supabase";
-import { Shirt } from "lucide-react";
+import * as XLSX from "xlsx";
+import { Shirt, Upload } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
 
@@ -64,6 +65,11 @@ const BulkStockUpload: React.FC = () => {
 
   // Add-size UI
   const [newSizeLabel, setNewSizeLabel] = useState<string>("");
+
+  // File upload (CSV/Excel) UI
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [fileParseError, setFileParseError] = useState<string | null>(null);
+  const [fileParseSummary, setFileParseSummary] = useState<string | null>(null);
 
   // Current stock per size (keyed by size_label)
   const [stockMap, setStockMap] = useState<
@@ -272,6 +278,126 @@ const BulkStockUpload: React.FC = () => {
     );
     setError(null);
     setSuccessMessage("");
+  };
+
+  // ----------------------------
+  // CSV / Excel file upload -- parses a "size, jersey_number" file (one row
+  // per physical jersey) and fills the existing per-size inputs below for
+  // review, rather than inserting directly. This re-uses the same validated
+  // submit path as manual entry.
+  // ----------------------------
+  const handleFileUpload = async (file: File) => {
+    setFileParseError(null);
+    setFileParseSummary(null);
+    setError(null);
+    setSuccessMessage("");
+
+    try {
+      const buf = await file.arrayBuffer();
+      const workbook = XLSX.read(buf, { type: "array" });
+      const firstSheetName = workbook.SheetNames[0];
+      if (!firstSheetName) {
+        setFileParseError("Could not find a sheet in this file.");
+        return;
+      }
+      const sheet = workbook.Sheets[firstSheetName];
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+        defval: "",
+      });
+
+      if (rows.length === 0) {
+        setFileParseError("This file has no data rows.");
+        return;
+      }
+
+      // Tolerate header variations: "size"/"Size", "jersey_number"/"Jersey Number"/"number".
+      const findKey = (row: Record<string, unknown>, candidates: string[]) => {
+        const keys = Object.keys(row);
+        return keys.find((k) =>
+          candidates.includes(k.trim().toLowerCase().replace(/\s+/g, "_"))
+        );
+      };
+
+      const numbersBySize = new Map<string, string[]>();
+      let skippedRows = 0;
+
+      for (const row of rows) {
+        const sizeKey = findKey(row, ["size", "size_label"]);
+        const numberKey = findKey(row, ["jersey_number", "number", "jersey_no", "jersey"]);
+
+        const sizeVal = sizeKey ? String(row[sizeKey] ?? "").trim() : "";
+        const numberVal = numberKey ? String(row[numberKey] ?? "").trim() : "";
+
+        if (!sizeVal || numberVal === "" || isNaN(Number(numberVal))) {
+          skippedRows += 1;
+          continue;
+        }
+
+        const list = numbersBySize.get(sizeVal) ?? [];
+        list.push(numberVal);
+        numbersBySize.set(sizeVal, list);
+      }
+
+      if (numbersBySize.size === 0) {
+        setFileParseError(
+          'No usable rows found. Expected columns "size" and "jersey_number" (one row per jersey).'
+        );
+        return;
+      }
+
+      const matchedSizes: string[] = [];
+      const unmatchedSizes: string[] = [];
+
+      setSizeRows((prev) =>
+        prev.map((r) => {
+          const fileMatch = Array.from(numbersBySize.keys()).find(
+            (s) => s.toLowerCase() === r.size_label.toLowerCase()
+          );
+          if (!fileMatch) return r;
+
+          matchedSizes.push(r.size_label);
+          const incoming = numbersBySize.get(fileMatch)!;
+          const existing = r.numbersInput
+            .split(",")
+            .map((n) => n.trim())
+            .filter((n) => n !== "");
+          const combined = [...existing, ...incoming];
+
+          return {
+            ...r,
+            numbersInput: combined.join(", "),
+            quantityInput: String(combined.length),
+          };
+        })
+      );
+
+      for (const sizeVal of numbersBySize.keys()) {
+        if (!matchedSizes.some((m) => m.toLowerCase() === sizeVal.toLowerCase())) {
+          unmatchedSizes.push(sizeVal);
+        }
+      }
+
+      const parts: string[] = [];
+      if (matchedSizes.length > 0) {
+        parts.push(`Loaded numbers into ${matchedSizes.length} size row(s): ${matchedSizes.join(", ")}.`);
+      }
+      if (unmatchedSizes.length > 0) {
+        parts.push(
+          `Skipped sizes not configured for this club: ${unmatchedSizes.join(", ")} — add them above first, then re-upload.`
+        );
+      }
+      if (skippedRows > 0) {
+        parts.push(`Ignored ${skippedRows} row(s) with missing/invalid size or number.`);
+      }
+      parts.push('Review the numbers below, then click "Upload Stock to Inventory" to save.');
+
+      setFileParseSummary(parts.join(" "));
+    } catch (err: any) {
+      console.error("handleFileUpload error", err);
+      setFileParseError(err.message ?? "Failed to read this file. Please check the format and try again.");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   // ----------------------------
@@ -796,6 +922,51 @@ const BulkStockUpload: React.FC = () => {
       {successMessage && (
         <div className="mb-4 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-3">
           {successMessage}
+        </div>
+      )}
+      {fileParseError && (
+        <div className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
+          {fileParseError}
+        </div>
+      )}
+      {fileParseSummary && (
+        <div className="mb-4 text-sm text-brand-800 bg-brand-50 border border-brand-200 rounded p-3">
+          {fileParseSummary}
+        </div>
+      )}
+
+      {/* CSV / Excel upload */}
+      {!loadingSizes && selectedClubId && sizeRows.length > 0 && (
+        <div className="mb-6 border border-gray-200 rounded-lg bg-white p-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                <Upload size={16} className="text-brand-600" />
+                Upload from CSV / Excel
+              </h2>
+              <p className="text-xs text-gray-500 max-w-xl">
+                File needs a <span className="font-mono">size</span> column and a{" "}
+                <span className="font-mono">jersey_number</span> column, with one row per
+                physical jersey. Size values must match a size already configured below
+                (e.g. "S", "M", "Y12") — add any missing sizes first. This only fills in
+                the numbers for review; nothing is saved until you click "Upload Stock to
+                Inventory".
+              </p>
+            </div>
+            <div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleFileUpload(file);
+                }}
+                disabled={submitting}
+                className="text-xs"
+              />
+            </div>
+          </div>
         </div>
       )}
 
