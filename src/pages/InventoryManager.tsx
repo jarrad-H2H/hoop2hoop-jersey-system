@@ -2,6 +2,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 import { Link } from "react-router-dom";
+import { Shirt } from "lucide-react";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 interface Club {
   id: string;
@@ -178,10 +181,14 @@ const InventoryManager: React.FC = () => {
       )}
 
       {/* Inventory Table */}
-      {loading && <p>Loading inventory…</p>}
+      {loading && <SkeletonTable rows={6} cols={5} />}
 
       {!loading && inventory.length === 0 && (
-        <p className="text-gray-600">No inventory found for this club.</p>
+        <EmptyState
+          icon={Shirt}
+          title="No inventory found for this club"
+          description="Use Bulk Upload Stock above to add jersey numbers and sizes."
+        />
       )}
 
       {!loading && inventory.length > 0 && (

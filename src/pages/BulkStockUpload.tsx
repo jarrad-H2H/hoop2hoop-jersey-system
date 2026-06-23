@@ -2,6 +2,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../services/supabase";
+import { Shirt } from "lucide-react";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 interface Club {
   id: string;
@@ -833,14 +836,14 @@ const BulkStockUpload: React.FC = () => {
       )}
 
       {/* Loading or empty state */}
-      {loadingSizes && (
-        <div className="text-sm text-gray-600">Loading sizes…</div>
-      )}
+      {loadingSizes && <SkeletonTable rows={4} cols={4} />}
 
       {!loadingSizes && sizeRows.length === 0 && !error && (
-        <div className="text-sm text-gray-500">
-          No size configuration found for this club.
-        </div>
+        <EmptyState
+          icon={Shirt}
+          title="No size configuration found for this club"
+          description="Add a size below to start uploading stock."
+        />
       )}
 
       {/* Size grid + form */}

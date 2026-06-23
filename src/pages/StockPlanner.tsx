@@ -1,6 +1,9 @@
 // FILE: src/pages/StockPlanner.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
+import { BarChart3 } from "lucide-react";
+import { SkeletonCards, SkeletonTable } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const SEASON_YEAR = new Date().getFullYear();
@@ -790,7 +793,12 @@ const StockPlanner: React.FC = () => {
         )}
       </div>
 
-      {loading && <p className="text-sm text-gray-500">Loading…</p>}
+      {loading && (
+        <div className="space-y-4">
+          <SkeletonCards count={4} />
+          <SkeletonTable rows={6} cols={8} />
+        </div>
+      )}
 
       {!loading && planRows.length > 0 && (
         <>
@@ -1177,9 +1185,11 @@ const StockPlanner: React.FC = () => {
       )}
 
       {!loading && planRows.length === 0 && selectedClubId && (
-        <p className="text-sm text-gray-500">
-          No inventory or sales data found for this club.
-        </p>
+        <EmptyState
+          icon={BarChart3}
+          title="No inventory or sales data found for this club"
+          description="Add stock via Bulk Stock Upload to start seeing planning recommendations here."
+        />
       )}
     </div>
   );

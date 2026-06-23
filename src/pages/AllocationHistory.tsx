@@ -1,6 +1,9 @@
 // FILE: src/pages/AllocationHistory.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
+import { History } from "lucide-react";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 type AllocationType = "new" | "swap" | "end" | "return";
 
@@ -324,15 +327,15 @@ const AllocationHistory: React.FC = () => {
       )}
 
       {/* Loading */}
-      {loading && (
-        <div className="mb-4 text-sm text-gray-600">Loading events…</div>
-      )}
+      {loading && <SkeletonTable rows={8} cols={6} />}
 
       {/* Table */}
       {!loading && filteredRows.length === 0 && (
-        <div className="text-sm text-gray-500">
-          No allocation events found with the current filters.
-        </div>
+        <EmptyState
+          icon={History}
+          title="No allocation events found"
+          description="Try widening or clearing the current filters."
+        />
       )}
 
       {!loading && filteredRows.length > 0 && (

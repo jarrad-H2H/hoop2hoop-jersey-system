@@ -1,6 +1,9 @@
 // FILE: src/pages/CompetitionGenderAdmin.tsx
 import React, { useState, useEffect } from "react";
 import { supabase } from "../services/supabase";
+import { Users2 } from "lucide-react";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 interface Competition {
   id: string;
@@ -197,11 +200,13 @@ const CompetitionGenderAdmin: React.FC = () => {
           </div>
 
           {loading ? (
-            <p className="text-sm text-gray-400 py-4">Loading age groups...</p>
+            <SkeletonTable rows={5} cols={4} />
           ) : rows.length === 0 ? (
-            <p className="text-sm text-gray-400 py-4">
-              No teams found for this competition. Import a BC CSV first.
-            </p>
+            <EmptyState
+              icon={Users2}
+              title="No teams found for this competition"
+              description="Import a BC CSV first to populate teams and age groups."
+            />
           ) : (
             <table className="w-full text-sm">
               <thead>

@@ -1,6 +1,7 @@
 // FILE: src/pages/ClubOverview.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
+import { SkeletonCards } from "../components/ui/Skeleton";
 
 interface Club {
   id: string;
@@ -264,11 +265,7 @@ const ClubOverview: React.FC = () => {
       )}
 
       {/* Loading */}
-      {loadingSummary && (
-        <div className="mb-4 text-sm text-gray-600">
-          Loading club overview…
-        </div>
-      )}
+      {loadingSummary && <SkeletonCards count={4} />}
 
       {/* Summary cards */}
       {summary && !loadingSummary && (

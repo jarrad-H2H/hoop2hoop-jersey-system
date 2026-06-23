@@ -1,6 +1,9 @@
 // FILE: src/pages/Players.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
+import { Users } from "lucide-react";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 interface Club {
   id: string;
@@ -479,14 +482,14 @@ const Players: React.FC = () => {
         .
       </div>
 
-      {loadingPlayers && (
-        <div className="text-sm text-gray-500 mb-4">Loading players…</div>
-      )}
+      {loadingPlayers && <SkeletonTable rows={7} cols={6} />}
 
       {!loadingPlayers && filteredPlayers.length === 0 && (
-        <div className="text-sm text-gray-500">
-          No players match the current filters.
-        </div>
+        <EmptyState
+          icon={Users}
+          title="No players match the current filters"
+          description="Try clearing the search, team, or status filters above."
+        />
       )}
 
       {!loadingPlayers && filteredPlayers.length > 0 && (

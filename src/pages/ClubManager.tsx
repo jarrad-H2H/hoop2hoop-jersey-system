@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
 import { Club } from "../../types";
 import { Plus, Check, X, Building2, Search, Pencil } from "lucide-react";
+import { SkeletonBar } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 const ClubManager: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
@@ -163,15 +165,17 @@ const ClubManager: React.FC = () => {
 
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr>
-                    <td colSpan={3} className="p-8 text-center text-gray-500">
-                      Loading clubs...
-                    </td>
-                  </tr>
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <tr key={i}>
+                      <td className="p-4"><SkeletonBar className="h-4 w-40" /></td>
+                      <td className="p-4"><SkeletonBar className="h-4 w-16 mx-auto" /></td>
+                      <td className="p-4"><SkeletonBar className="h-4 w-20 ml-auto" /></td>
+                    </tr>
+                  ))
                 ) : filteredClubs.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="p-8 text-center text-gray-500">
-                      No clubs found.
+                    <td colSpan={3} className="p-0">
+                      <EmptyState icon={Building2} title="No clubs found" description="Try clearing the search above, or add a new club." />
                     </td>
                   </tr>
                 ) : (

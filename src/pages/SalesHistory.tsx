@@ -3,6 +3,8 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { supabase } from "../services/supabase";
 import { ShoppingBag, RefreshCw, Filter, Download } from "lucide-react";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import EmptyState from "../components/ui/EmptyState";
 
 type SaleRow = {
   id: string;
@@ -235,17 +237,22 @@ const SalesHistory: React.FC = () => {
       </div>
 
       {/* Table */}
+      {loading ? (
+        <SkeletonTable rows={8} cols={7} />
+      ) : (
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {loading ? (
-          <div className="p-12 text-center text-gray-400">Loading sales…</div>
-        ) : error ? (
+        {error ? (
           <div className="p-12 text-center text-red-500">{error}</div>
         ) : filtered.length === 0 ? (
-          <div className="p-12 text-center text-gray-400">
-            {sales.length === 0
-              ? "No sales recorded yet. Sales will appear here after the first Shopify order comes through."
-              : "No sales match the current filters."}
-          </div>
+          <EmptyState
+            icon={ShoppingBag}
+            title={sales.length === 0 ? "No sales recorded yet" : "No sales match the current filters"}
+            description={
+              sales.length === 0
+                ? "Sales will appear here after the first Shopify order comes through."
+                : "Try clearing the search, club, season, or product type filters above."
+            }
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -306,6 +313,7 @@ const SalesHistory: React.FC = () => {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 };
