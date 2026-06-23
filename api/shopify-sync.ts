@@ -153,7 +153,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // 1. Look up ALL Shopify products mapped to this club (may be multiple — e.g. mens + womens)
   const { data: mappings, error: mapErr } = await supabase
     .from("shopify_product_club_map")
-    .select("shopify_product_id, gender")
+    .select("shopify_product_id, gender, product_type")
     .eq("club_id", clubId);
 
   if (mapErr) {
@@ -164,10 +164,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(404).json({ error: "No Shopify products mapped for this club" });
   }
 
-  // 2. Count available jerseys per size
+  // 2. Count available jerseys per size, PER product_type. A club can have multiple
+  // Shopify products (mens + womens) each with their own separate stock pool -- these
+  // must never be combined, or syncing would push the combined mens+womens count to
+  // BOTH products' Shopify variants.
   const { data: inventory, error: invErr } = await supabase
     .from("inventory")
-    .select("size")
+    .select("size, product_type")
     .eq("club_id", clubId)
     .eq("status", "Available");
 
@@ -176,10 +179,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Failed to read inventory" });
   }
 
-  const countsBySize: Record<string, number> = {};
+  const countsByProductTypeAndSize: Record<string, Record<string, number>> = {};
   for (const row of inventory ?? []) {
-    const size = String(row.size ?? "").trim();
-    if (size) countsBySize[size] = (countsBySize[size] ?? 0) + 1;
+    const size = String((row as any).size ?? "").trim();
+    const productType = String((row as any).product_type ?? "default").trim() || "default";
+    if (!size) continue;
+    countsByProductTypeAndSize[productType] ??= {};
+    countsByProductTypeAndSize[productType][size] =
+      (countsByProductTypeAndSize[productType][size] ?? 0) + 1;
   }
 
   // 3. Fetch Shopify locations (use first active location)
@@ -198,10 +205,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(502).json({ error: "No Shopify location found" });
   }
 
-  // 4. Sync each product
+  // 4. Sync each product against its OWN product_type's counts only
   const productResults = await Promise.all(
-    (mappings as { shopify_product_id: string; gender: string }[]).map((m) =>
-      syncProduct(m.shopify_product_id, m.gender, countsBySize, activeLocation.id)
+    (mappings as { shopify_product_id: string; gender: string; product_type: string }[]).map(
+      (m) =>
+        syncProduct(
+          m.shopify_product_id,
+          m.gender,
+          countsByProductTypeAndSize[m.product_type || "default"] ?? {},
+          activeLocation.id
+        )
     )
   );
 

@@ -30,6 +30,12 @@ const BulkStockUpload: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
 
+  // Product type (default/mens/womens) -- clubs with dual Shopify products (mens +
+  // womens) have a SEPARATE stock pool per product_type. "default" always available
+  // as an option (single/unisex-product clubs, or generic sizing not tied to a product).
+  const [productTypeOptions, setProductTypeOptions] = useState<string[]>(["default"]);
+  const [selectedProductType, setSelectedProductType] = useState<string>("default");
+
   const [sizeRows, setSizeRows] = useState<ClubSizeRow[]>([]);
 
   const [loadingClubs, setLoadingClubs] = useState(false);
@@ -93,7 +99,30 @@ const BulkStockUpload: React.FC = () => {
     void loadClubs();
   }, []);
 
-  // Load club_sizes for selected club
+  // Load which product types this club actually has Shopify products for
+  useEffect(() => {
+    const loadProductTypes = async () => {
+      if (!selectedClubId) {
+        setProductTypeOptions(["default"]);
+        setSelectedProductType("default");
+        return;
+      }
+      const { data } = await supabase
+        .from("shopify_product_club_map")
+        .select("product_type")
+        .eq("club_id", selectedClubId);
+
+      const mapped = Array.from(
+        new Set((data ?? []).map((r: any) => (r.product_type || "default").trim()))
+      );
+      const options = Array.from(new Set(["default", ...mapped]));
+      setProductTypeOptions(options);
+      setSelectedProductType((prev) => (options.includes(prev) ? prev : "default"));
+    };
+    void loadProductTypes();
+  }, [selectedClubId]);
+
+  // Load club_sizes for selected club + product type
   useEffect(() => {
     const loadSizes = async () => {
       if (!selectedClubId) {
@@ -110,6 +139,7 @@ const BulkStockUpload: React.FC = () => {
           .from("club_sizes")
           .select("id, size_label, sort_order")
           .eq("club_id", selectedClubId)
+          .eq("product_type", selectedProductType)
           .order("sort_order", { ascending: true })
           .order("size_label", { ascending: true });
 
@@ -153,7 +183,7 @@ const BulkStockUpload: React.FC = () => {
     };
 
     void loadSizes();
-  }, [selectedClubId]);
+  }, [selectedClubId, selectedProductType]);
 
   // Load current inventory stock counts for the selected club
   useEffect(() => {
@@ -167,6 +197,7 @@ const BulkStockUpload: React.FC = () => {
         .from("inventory")
         .select("size, status")
         .eq("club_id", selectedClubId)
+        .eq("product_type", selectedProductType)
         .neq("status", "Written Off");
 
       const map = new Map<string, { available: number; allocated: number }>();
@@ -185,7 +216,7 @@ const BulkStockUpload: React.FC = () => {
     };
 
     void loadStock();
-  }, [selectedClubId]);
+  }, [selectedClubId, selectedProductType]);
 
   const handleClubChange = (clubId: string) => {
     setSelectedClubId(clubId);
@@ -325,7 +356,8 @@ const BulkStockUpload: React.FC = () => {
         .from("inventory")
         .update({ size: newLabel })
         .eq("club_id", selectedClubId)
-        .eq("size", oldLabel);
+        .eq("size", oldLabel)
+        .eq("product_type", selectedProductType);
 
       if (invErr) {
         console.error("saveSizeLabel inventory error", invErr);
@@ -339,7 +371,8 @@ const BulkStockUpload: React.FC = () => {
         .from("allocations")
         .update({ size: newLabel })
         .eq("club_id", selectedClubId)
-        .eq("size", oldLabel);
+        .eq("size", oldLabel)
+        .eq("product_type", selectedProductType);
 
       if (allocErr) {
         console.error("saveSizeLabel allocations error", allocErr);
@@ -353,7 +386,8 @@ const BulkStockUpload: React.FC = () => {
         .from("pending_allocations")
         .update({ size: newLabel })
         .eq("club_id", selectedClubId)
-        .eq("size", oldLabel);
+        .eq("size", oldLabel)
+        .eq("product_type", selectedProductType);
 
       // pending_allocations may not exist in some environments - but yours does.
       if (pendErr) {
@@ -421,6 +455,7 @@ const BulkStockUpload: React.FC = () => {
         club_id: selectedClubId,
         size_label: label,
         sort_order: nextSort,
+        product_type: selectedProductType,
       };
 
       const { data, error } = await supabase
@@ -540,6 +575,7 @@ const BulkStockUpload: React.FC = () => {
       status: string;
       condition: string;
       club_id: string;
+      product_type: string;
     }[] = [];
 
     for (const row of sizeRows) {
@@ -579,6 +615,7 @@ const BulkStockUpload: React.FC = () => {
           status: "Available",
           condition: "New",
           club_id: selectedClubId,
+          product_type: selectedProductType,
         });
       }
     }
@@ -713,6 +750,31 @@ const BulkStockUpload: React.FC = () => {
             ))}
         </select>
       </div>
+
+      {/* Product type selector -- only meaningful once a club is selected; shows "default"
+          always, plus mens/womens if this club has dual Shopify products mapped. */}
+      {selectedClubId && (
+        <div className="mb-4">
+          <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+            Product Type
+          </label>
+          <select
+            value={selectedProductType}
+            onChange={(e) => setSelectedProductType(e.target.value)}
+            className="border rounded px-3 py-2 min-w-[220px]"
+            disabled={submitting}
+          >
+            {productTypeOptions.map((pt) => (
+              <option key={pt} value={pt}>
+                {pt === "default" ? "Default / Unisex" : pt === "mens" ? "Mens" : pt === "womens" ? "Womens" : pt}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-gray-500">
+            Each product type has its own separate stock pool — sizes and inventory entered here only apply to the selected one.
+          </p>
+        </div>
+      )}
 
       {/* Errors / status */}
       {error && (
