@@ -1,5 +1,6 @@
 // FILE: src/pages/BulkStockUpload.tsx
 import React, { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 import { supabase } from "../services/supabase";
 
 interface Club {
@@ -27,6 +28,9 @@ interface ClubSizeRow {
 }
 
 const BulkStockUpload: React.FC = () => {
+  // Inventory Manager links here as /admin/inventory/bulk-upload/:clubId -- honour that
+  // when present, instead of always defaulting to whichever client club loads first.
+  const { clubId: routeClubId } = useParams<{ clubId: string }>();
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
 
@@ -50,8 +54,13 @@ const BulkStockUpload: React.FC = () => {
   const [syncResult, setSyncResult] = useState<{
     success: boolean;
     location: string;
-    results: { variantTitle: string; available: number; matched: boolean; ok: boolean }[];
-    warnings?: { unmatchedVariants?: string[]; unmatchedSizes?: string[] };
+    products: {
+      productId: string;
+      gender: string;
+      success: boolean;
+      results: { variantTitle: string; available: number; matched: boolean; ok: boolean }[];
+      warnings?: { unmatchedVariants?: string[]; unmatchedSizes?: string[] };
+    }[];
   } | null>(null);
 
   // Add-size UI
@@ -88,7 +97,9 @@ const BulkStockUpload: React.FC = () => {
 
         const list = (data ?? []) as Club[];
         setClubs(list);
-        if (list.length > 0) {
+        if (routeClubId && list.some((c) => c.id === routeClubId)) {
+          setSelectedClubId(routeClubId);
+        } else if (list.length > 0) {
           setSelectedClubId(list[0].id);
         }
       } finally {
@@ -97,7 +108,7 @@ const BulkStockUpload: React.FC = () => {
     };
 
     void loadClubs();
-  }, []);
+  }, [routeClubId]);
 
   // Load which product types this club actually has Shopify products for
   useEffect(() => {
@@ -1048,46 +1059,64 @@ const BulkStockUpload: React.FC = () => {
         </form>
       )}
 
-      {/* Shopify sync result panel */}
+      {/* Shopify sync result panel -- one block per mapped Shopify product (a club may
+          have multiple, e.g. mens + womens, each synced against its own stock pool). */}
       {syncResult && (
-        <div className="mt-6 border border-indigo-200 rounded-lg bg-indigo-50 p-4">
-          <h3 className="text-sm font-semibold text-indigo-800 mb-2">
-            Shopify Sync — {syncResult.location}
-          </h3>
+        <div className="mt-6 space-y-4">
+          {(syncResult.products ?? []).map((product) => (
+            <div
+              key={product.productId}
+              className="border border-indigo-200 rounded-lg bg-indigo-50 p-4"
+            >
+              <h3 className="text-sm font-semibold text-indigo-800 mb-2">
+                Shopify Sync — {syncResult.location} — product {product.productId}
+                {product.gender ? ` (${product.gender})` : ""}
+                {!product.success && (
+                  <span className="ml-2 text-red-600 font-semibold">Failed</span>
+                )}
+              </h3>
 
-          <table className="min-w-full text-xs">
-            <thead>
-              <tr className="text-left">
-                <th className="pr-4 py-1 text-gray-600">Variant</th>
-                <th className="pr-4 py-1 text-gray-600">Qty Set</th>
-                <th className="pr-4 py-1 text-gray-600">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {syncResult.results.map((r) => (
-                <tr key={r.variantTitle} className="border-t border-indigo-100">
-                  <td className="pr-4 py-1 font-medium">{r.variantTitle}</td>
-                  <td className="pr-4 py-1">{r.available}</td>
-                  <td className="pr-4 py-1">
-                    {!r.ok ? (
-                      <span className="text-red-600 font-semibold">Error</span>
-                    ) : !r.matched ? (
-                      <span className="text-amber-600">No size match</span>
-                    ) : (
-                      <span className="text-emerald-600">✓ OK</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              <table className="min-w-full text-xs">
+                <thead>
+                  <tr className="text-left">
+                    <th className="pr-4 py-1 text-gray-600">Variant</th>
+                    <th className="pr-4 py-1 text-gray-600">Qty Set</th>
+                    <th className="pr-4 py-1 text-gray-600">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(product.results ?? []).map((r) => (
+                    <tr key={r.variantTitle} className="border-t border-indigo-100">
+                      <td className="pr-4 py-1 font-medium">{r.variantTitle}</td>
+                      <td className="pr-4 py-1">{r.available}</td>
+                      <td className="pr-4 py-1">
+                        {!r.ok ? (
+                          <span className="text-red-600 font-semibold">Error</span>
+                        ) : !r.matched ? (
+                          <span className="text-amber-600">No size match</span>
+                        ) : (
+                          <span className="text-emerald-600">✓ OK</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
 
-          {(syncResult.warnings?.unmatchedSizes?.length ?? 0) > 0 && (
-            <p className="mt-2 text-xs text-amber-700">
-              ⚠ Sizes in admin with no Shopify variant:{" "}
-              {syncResult.warnings!.unmatchedSizes!.join(", ")}
-            </p>
-          )}
+              {(product.warnings?.unmatchedSizes?.length ?? 0) > 0 && (
+                <p className="mt-2 text-xs text-amber-700">
+                  ⚠ Sizes in admin with no Shopify variant:{" "}
+                  {product.warnings!.unmatchedSizes!.join(", ")}
+                </p>
+              )}
+              {(product.warnings?.unmatchedVariants?.length ?? 0) > 0 && (
+                <p className="mt-2 text-xs text-amber-700">
+                  ⚠ Shopify variants with no matching admin size:{" "}
+                  {product.warnings!.unmatchedVariants!.join(", ")}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
