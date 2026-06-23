@@ -41,6 +41,12 @@ const Allocation: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
 
+  // Product type (default/mens/womens) -- a dual-product club has a separate stock
+  // pool per type. Everything below (sizes, suggestions, checks, allocation,
+  // exchange, returns) must operate against the SAME product type consistently.
+  const [productTypeOptions, setProductTypeOptions] = useState<string[]>(["default"]);
+  const [selectedProductType, setSelectedProductType] = useState<string>("default");
+
   const [sizes, setSizes] = useState<string[]>([]);
   const [selectedSize, setSelectedSize] = useState<string>("");
 
@@ -164,7 +170,30 @@ const Allocation: React.FC = () => {
     loadClubs();
   }, []);
 
-  // Load available sizes for selected club
+  // Load which product types this club actually has Shopify products for
+  useEffect(() => {
+    const loadProductTypes = async () => {
+      if (!selectedClubId) {
+        setProductTypeOptions(["default"]);
+        setSelectedProductType("default");
+        return;
+      }
+      const { data } = await supabase
+        .from("shopify_product_club_map")
+        .select("product_type")
+        .eq("club_id", selectedClubId);
+
+      const mapped = Array.from(
+        new Set((data ?? []).map((r: any) => (r.product_type || "default").trim()))
+      );
+      const options = Array.from(new Set(["default", ...mapped]));
+      setProductTypeOptions(options);
+      setSelectedProductType((prev) => (options.includes(prev) ? prev : "default"));
+    };
+    void loadProductTypes();
+  }, [selectedClubId]);
+
+  // Load available sizes for selected club + product type
   useEffect(() => {
     const loadSizes = async () => {
       if (!selectedClubId) {
@@ -182,6 +211,7 @@ const Allocation: React.FC = () => {
           .from("inventory")
           .select("size")
           .eq("club_id", selectedClubId)
+          .eq("product_type", selectedProductType)
           .eq("status", "Available");
 
         if (error) {
@@ -205,7 +235,7 @@ const Allocation: React.FC = () => {
     };
 
     loadSizes();
-  }, [selectedClubId]);
+  }, [selectedClubId, selectedProductType]);
 
   // Load players for selected club
   useEffect(() => {
@@ -261,6 +291,7 @@ const Allocation: React.FC = () => {
         .from("club_sizes")
         .select("size_label, sort_order")
         .eq("club_id", selectedClubId)
+        .eq("product_type", selectedProductType)
         .order("sort_order", { ascending: true })
         .order("size_label", { ascending: true });
 
@@ -270,7 +301,7 @@ const Allocation: React.FC = () => {
     };
 
     void loadClubSizes();
-  }, [selectedClubId]);
+  }, [selectedClubId, selectedProductType]);
 
   // Clear swap suggestions when size changes
   useEffect(() => {
@@ -359,7 +390,7 @@ const Allocation: React.FC = () => {
       const { clashes, softWarnings, stockBySize, statusMessage } = await smartCheckNumber(
         selectedClubId,
         num,
-        { yearOfBirth: yobNum, ...teamCtx }
+        { yearOfBirth: yobNum, ...teamCtx, productType: selectedProductType }
       );
       setClashes(clashes);
       setSoftWarnings(softWarnings);
@@ -383,7 +414,7 @@ const Allocation: React.FC = () => {
     setAllocationMessage("");
 
     try {
-      const results = await suggestNumbersForClub(selectedClubId, selectedSize, 10, deriveTeamContext());
+      const results = await suggestNumbersForClub(selectedClubId, selectedSize, 10, deriveTeamContext(), selectedProductType);
       setSuggestions(results);
 
       if (results.length === 0) {
@@ -430,7 +461,7 @@ const Allocation: React.FC = () => {
     setAllocating(true);
 
     try {
-      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, num, { yearOfBirth: yobNum, ...teamCtx });
+      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, num, { yearOfBirth: yobNum, ...teamCtx, productType: selectedProductType });
       const stockForSize = findStockForSelectedSize(stockBySize);
 
       if (clashes.length > 0) {
@@ -445,7 +476,7 @@ const Allocation: React.FC = () => {
         return;
       }
 
-      const invResult = await allocateNumberForClub(selectedClubId, num, selectedSize);
+      const invResult = await allocateNumberForClub(selectedClubId, num, selectedSize, selectedProductType);
 
       if (!invResult.success || !invResult.inventoryId) {
         setAllocationMessage(invResult.message || "Failed to reserve stock.");
@@ -492,6 +523,7 @@ const Allocation: React.FC = () => {
         previous_jersey_number: null,
         previous_size: null,
         note: `New allocation: #${num} (${selectedSize})`,
+        productType: selectedProductType,
       });
 
       setClubPlayers((prev) =>
@@ -572,6 +604,7 @@ const Allocation: React.FC = () => {
         previous_jersey_number: currentNumber,
         previous_size: null,
         note: `End allocation: freed #${currentNumber}`,
+        productType: selectedProductType,
       });
 
       setClubPlayers((prev) =>
@@ -599,7 +632,7 @@ const Allocation: React.FC = () => {
     setSwapSuggestions([]);
 
     try {
-      const results = await suggestNumbersForClub(selectedClubId, swapSize, 10, deriveTeamContext());
+      const results = await suggestNumbersForClub(selectedClubId, swapSize, 10, deriveTeamContext(), selectedProductType);
       setSwapSuggestions(results);
       if (results.length === 0) {
         setAllocationMessage(`No clash-free numbers with stock in size ${swapSize} for this club.`);
@@ -632,7 +665,7 @@ const Allocation: React.FC = () => {
     setSwapBusy(true);
 
     try {
-      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, newNumber, { yearOfBirth: yobNum, ...teamCtx });
+      const { clashes, stockBySize } = await smartCheckNumber(selectedClubId, newNumber, { yearOfBirth: yobNum, ...teamCtx, productType: selectedProductType });
       const stockForNewSize = findStockForSize(stockBySize, swapSize);
 
       if (clashes.length > 0) {
@@ -664,7 +697,7 @@ const Allocation: React.FC = () => {
         return;
       }
 
-      const invResult = await allocateNumberForClub(selectedClubId, newNumber, swapSize);
+      const invResult = await allocateNumberForClub(selectedClubId, newNumber, swapSize, selectedProductType);
 
       if (!invResult.success || !invResult.inventoryId) {
         setAllocationMessage(
@@ -716,6 +749,7 @@ const Allocation: React.FC = () => {
         previous_jersey_number: previousNumber,
         previous_size: null,
         note: noteText,
+        productType: selectedProductType,
       });
 
       setClubPlayers((prev) =>
@@ -760,7 +794,7 @@ const Allocation: React.FC = () => {
 
     setReturnBusy(true);
     try {
-      const result = await returnJerseyToStock(selectedClubId, num, returnSize);
+      const result = await returnJerseyToStock(selectedClubId, num, returnSize, selectedProductType);
       setReturnMessage(result.message);
     } catch (err: any) {
       console.error("handleReturnToStock error", err);
@@ -784,7 +818,7 @@ const Allocation: React.FC = () => {
       </p>
 
       {/* Top form */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
         {/* Club */}
         <div>
           <label className="block text-sm font-semibold mb-1">Club</label>
@@ -804,6 +838,22 @@ const Allocation: React.FC = () => {
                   {club.name}
                 </option>
               ))}
+          </select>
+        </div>
+
+        {/* Product Type */}
+        <div>
+          <label className="block text-sm font-semibold mb-1">Product Type</label>
+          <select
+            value={selectedProductType}
+            onChange={(e) => setSelectedProductType(e.target.value)}
+            className="w-full border p-2 rounded"
+          >
+            {productTypeOptions.map((pt) => (
+              <option key={pt} value={pt}>
+                {pt === "default" ? "Default / Unisex" : pt === "mens" ? "Mens" : pt === "womens" ? "Womens" : pt}
+              </option>
+            ))}
           </select>
         </div>
 

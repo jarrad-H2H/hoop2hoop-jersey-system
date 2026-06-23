@@ -526,14 +526,16 @@ export async function suggestNumbersForClub(
   clubId: string,
   size: string,
   limit: number = 10,
-  teamContext?: Pick<SmartCheckOptions, "divisionCode" | "teamName" | "ageGroup">
+  teamContext?: Pick<SmartCheckOptions, "divisionCode" | "teamName" | "ageGroup" | "crossPoolCheck">,
+  productType: string = "default"
 ): Promise<NumberSuggestion[]> {
   const { data, error } = await supabase
     .from("inventory")
     .select("jersey_number")
     .eq("club_id", clubId)
     .eq("status", STATUS_AVAILABLE)
-    .eq("size", size);
+    .eq("size", size)
+    .eq("product_type", productType);
 
   if (error) {
     console.error("suggestNumbersForClub inventory error", error);
@@ -557,7 +559,7 @@ export async function suggestNumbersForClub(
     const { clashes } = await smartCheckNumber(
       clubId,
       candidate.jersey_number,
-      teamContext ?? {}
+      { ...(teamContext ?? {}), productType }
     );
     if (clashes.length === 0) results.push(candidate);
     if (results.length >= limit) break;
@@ -834,7 +836,8 @@ export async function suggestNumbersForClubRanked(input: {
 export async function allocateNumberForClub(
   clubId: string,
   jerseyNumber: number,
-  size: string
+  size: string,
+  productType: string = "default"
 ): Promise<{ success: boolean; inventoryId?: string; message?: string }> {
   const { data, error } = await supabase
     .from("inventory")
@@ -843,6 +846,7 @@ export async function allocateNumberForClub(
     .eq("status", STATUS_AVAILABLE)
     .eq("jersey_number", jerseyNumber)
     .eq("size", size)
+    .eq("product_type", productType)
     .limit(1);
 
   if (error) {
@@ -883,6 +887,7 @@ export async function logAllocationEvent(payload: {
   previous_jersey_number?: number | null;
   previous_size?: string | null;
   note?: string | null;
+  productType?: string;
 }): Promise<{ success: boolean }> {
   const insertPayload = {
     allocation_type: payload.allocation_type,
@@ -896,6 +901,7 @@ export async function logAllocationEvent(payload: {
         : null,
     previous_size: payload.previous_size ?? null,
     note: payload.note ?? null,
+    product_type: payload.productType ?? "default",
   };
 
   const { error } = await supabase.from("allocations").insert(insertPayload);
@@ -1106,7 +1112,8 @@ export async function reserveNumberForPurchase(input: {
 export async function returnJerseyToStock(
   clubId: string,
   jerseyNumber: number,
-  size: string
+  size: string,
+  productType: string = "default"
 ): Promise<{ success: boolean; message: string }> {
   const { data, error } = await supabase
     .from("inventory")
@@ -1114,6 +1121,7 @@ export async function returnJerseyToStock(
     .eq("club_id", clubId)
     .eq("jersey_number", jerseyNumber)
     .eq("size", size)
+    .eq("product_type", productType)
     .in("status", [STATUS_ALLOCATED, STATUS_AVAILABLE])
     .limit(1);
 
@@ -1156,6 +1164,7 @@ export async function returnJerseyToStock(
     player_id: null,
     jersey_number: jerseyNumber,
     size,
+    productType,
     note: "Warehouse return to stock",
   });
 
