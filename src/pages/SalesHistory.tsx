@@ -21,6 +21,7 @@ type SaleRow = {
   size: string | null;
   season_year: number | null;
   shopify_order_id: string | null;
+  product_type: string | null;
 };
 
 type Club = { id: string; name: string };
@@ -49,6 +50,7 @@ const SalesHistory: React.FC = () => {
   const [filterClub, setFilterClub] = useState<string>("");
   const [filterSeason, setFilterSeason] = useState<string>("");
   const [filterSearch, setFilterSearch] = useState<string>("");
+  const [filterProductType, setFilterProductType] = useState<string>("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -76,14 +78,21 @@ const SalesHistory: React.FC = () => {
   useEffect(() => { loadData(); }, [loadData]);
 
   // Derive available seasons from data
-  const seasons = Array.from(
-    new Set(sales.map((s) => s.season_year).filter(Boolean))
-  ).sort((a, b) => (b ?? 0) - (a ?? 0));
+  const seasonYears: number[] = sales
+    .map((s) => s.season_year)
+    .filter((y): y is number => y != null);
+  const seasons = Array.from(new Set(seasonYears)).sort((a, b) => b - a);
+
+  // Derive available product types from data
+  const productTypes = Array.from(
+    new Set(sales.map((s) => s.product_type || "default"))
+  ).sort();
 
   // Apply filters
   const filtered = sales.filter((s) => {
     if (filterClub && s.club_id !== filterClub) return false;
     if (filterSeason && String(s.season_year) !== filterSeason) return false;
+    if (filterProductType && (s.product_type || "default") !== filterProductType) return false;
     if (filterSearch) {
       const q = filterSearch.toLowerCase();
       const haystack = [
@@ -102,7 +111,7 @@ const SalesHistory: React.FC = () => {
 
   // CSV export
   const handleExport = () => {
-    const headers = ["Order #", "Date (AEST)", "Club", "Player First", "Player Last", "Jersey #", "Size", "Season", "Shopify Buyer", "Shopify Order ID"];
+    const headers = ["Order #", "Date (AEST)", "Club", "Player First", "Player Last", "Jersey #", "Size", "Product Type", "Season", "Shopify Buyer", "Shopify Order ID"];
     const rows = filtered.map((s) => [
       s.order_number ?? "",
       formatDate(s.purchased_at ?? s.order_date),
@@ -111,6 +120,7 @@ const SalesHistory: React.FC = () => {
       s.player_last_name ?? "",
       s.jersey_number ?? s.number ?? "",
       s.size ?? "",
+      s.product_type ?? "default",
       s.season_year ?? "",
       s.shopify_buyer_name ?? "",
       s.shopify_order_id ?? "",
@@ -193,9 +203,19 @@ const SalesHistory: React.FC = () => {
               <option key={y} value={String(y)}>{y}</option>
             ))}
           </select>
-          {(filterClub || filterSeason || filterSearch) && (
+          <select
+            value={filterProductType}
+            onChange={(e) => setFilterProductType(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          >
+            <option value="">All Product Types</option>
+            {productTypes.map((pt) => (
+              <option key={pt} value={pt}>{pt}</option>
+            ))}
+          </select>
+          {(filterClub || filterSeason || filterSearch || filterProductType) && (
             <button
-              onClick={() => { setFilterClub(""); setFilterSeason(""); setFilterSearch(""); }}
+              onClick={() => { setFilterClub(""); setFilterSeason(""); setFilterSearch(""); setFilterProductType(""); }}
               className="text-sm text-gray-500 hover:text-gray-700 px-2"
             >
               Clear filters
@@ -237,6 +257,7 @@ const SalesHistory: React.FC = () => {
                   <th className="px-4 py-3 font-medium text-gray-600">Player</th>
                   <th className="px-4 py-3 font-medium text-gray-600 text-center">Jersey #</th>
                   <th className="px-4 py-3 font-medium text-gray-600">Size</th>
+                  <th className="px-4 py-3 font-medium text-gray-600">Product Type</th>
                   <th className="px-4 py-3 font-medium text-gray-600 text-center">Season</th>
                   <th className="px-4 py-3 font-medium text-gray-600">Shopify Buyer</th>
                 </tr>
@@ -270,6 +291,7 @@ const SalesHistory: React.FC = () => {
                         )}
                       </td>
                       <td className="px-4 py-3 text-gray-600">{s.size ?? "—"}</td>
+                      <td className="px-4 py-3 text-gray-600">{s.product_type ?? "default"}</td>
                       <td className="px-4 py-3 text-center text-gray-600">
                         {s.season_year ?? "—"}
                       </td>
