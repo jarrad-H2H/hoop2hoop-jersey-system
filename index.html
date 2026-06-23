@@ -5,6 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hoop2Hoop Jersey System</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Hoop2Hoop brand colors, sampled from the official logo (royal blue + warm gray).
+      // "brand" replaces the old indigo accent used throughout the admin panel; "brandGray"
+      // is available for the logo's secondary gray where a plain Tailwind gray isn't a close match.
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                50: "#eef3fb",
+                100: "#dde7f7",
+                200: "#bbcfee",
+                300: "#8fb0e1",
+                400: "#5c8bd0",
+                500: "#3569ba",
+                600: "#1d4fa8",
+                700: "#163d82",
+                800: "#11305f",
+                900: "#0c2347",
+              },
+              brandGray: {
+                400: "#aaaaaa",
+                500: "#9a9a9a",
+                600: "#7d7d7d",
+              },
+            },
+          },
+        },
+      };
+    </script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
       body {

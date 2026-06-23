@@ -174,7 +174,7 @@ const CompetitionGenderAdmin: React.FC = () => {
         <select
           value={selectedId}
           onChange={(e) => setSelectedId(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
         >
           <option value="">-- Select competition --</option>
           {competitions.map((c) => (
@@ -276,7 +276,7 @@ const CompetitionGenderAdmin: React.FC = () => {
                               onChange={() =>
                                 void toggleOverride(row.ageGroup, row.hasOverride)
                               }
-                              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-50"
+                              className="rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50"
                             />
                             <span className="text-xs text-gray-600">
                               {saving === row.ageGroup

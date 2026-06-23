@@ -781,7 +781,7 @@ const StockPlanner: React.FC = () => {
               <button
                 onClick={handleSaveSettings}
                 disabled={settingsSaving}
-                className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50"
+                className="px-4 py-1.5 bg-brand-600 text-white text-sm rounded hover:bg-brand-700 disabled:opacity-50"
               >
                 {settingsSaving ? "Saving…" : "Save Settings"}
               </button>
@@ -870,7 +870,7 @@ const StockPlanner: React.FC = () => {
                     totalRecommendedUnits >= t &&
                     (i === PRICE_BREAK_TIERS.length - 1 ||
                       totalRecommendedUnits < PRICE_BREAK_TIERS[i + 1])
-                      ? "font-bold text-indigo-700 underline"
+                      ? "font-bold text-brand-700 underline"
                       : ""
                   }
                 >
@@ -1088,7 +1088,7 @@ const StockPlanner: React.FC = () => {
                 </div>
                 <button
                   onClick={handleExportCsv}
-                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-700 shrink-0"
+                  className="px-3 py-1.5 bg-brand-600 text-white text-xs rounded hover:bg-brand-700 shrink-0"
                 >
                   Export CSV
                 </button>

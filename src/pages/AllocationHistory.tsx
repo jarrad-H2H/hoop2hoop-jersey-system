@@ -304,7 +304,7 @@ const AllocationHistory: React.FC = () => {
                   onClick={() => toggleType(type)}
                   className={`text-xs px-3 py-1 rounded-full border transition ${
                     active
-                      ? "bg-indigo-600 text-white border-indigo-600"
+                      ? "bg-brand-600 text-white border-brand-600"
                       : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
                   }`}
                 >

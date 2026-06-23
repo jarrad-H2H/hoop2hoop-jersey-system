@@ -449,7 +449,7 @@ const Players: React.FC = () => {
                   onClick={() => setStatusFilter(value)}
                   className={`text-xs px-3 py-1 rounded-full border transition ${
                     active
-                      ? "bg-indigo-600 text-white border-indigo-600"
+                      ? "bg-brand-600 text-white border-brand-600"
                       : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
                   }`}
                 >
@@ -678,7 +678,7 @@ const Players: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => startEditName(p)}
-                            className="text-indigo-600 hover:text-indigo-800 text-xs"
+                            className="text-brand-600 hover:text-brand-800 text-xs"
                             title="Edit name"
                           >
                             Edit Name
@@ -687,7 +687,7 @@ const Players: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => startEditNumber(p)}
-                            className="text-indigo-600 hover:text-indigo-800 text-xs"
+                            className="text-brand-600 hover:text-brand-800 text-xs"
                             title="Edit jersey number"
                           >
                             {p.final_shirt != null ? "Edit #" : "Add #"}
@@ -696,7 +696,7 @@ const Players: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => startEditYob(p)}
-                            className="text-indigo-600 hover:text-indigo-800 text-xs"
+                            className="text-brand-600 hover:text-brand-800 text-xs"
                             title="Edit year of birth"
                           >
                             {p.year_of_birth != null ? "Edit YOB" : "Add YOB"}

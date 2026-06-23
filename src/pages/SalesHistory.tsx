@@ -142,7 +142,7 @@ const SalesHistory: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <ShoppingBag size={28} className="text-indigo-600" />
+          <ShoppingBag size={28} className="text-brand-600" />
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Sales History</h1>
             <p className="text-sm text-gray-500 mt-0.5">
@@ -161,7 +161,7 @@ const SalesHistory: React.FC = () => {
           <button
             onClick={handleExport}
             disabled={filtered.length === 0}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-40 transition-colors"
           >
             <Download size={15} />
             Export CSV
@@ -181,12 +181,12 @@ const SalesHistory: React.FC = () => {
             placeholder="Search player, order #, jersey…"
             value={filterSearch}
             onChange={(e) => setFilterSearch(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-48 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-48 focus:outline-none focus:ring-2 focus:ring-brand-400"
           />
           <select
             value={filterClub}
             onChange={(e) => setFilterClub(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
           >
             <option value="">All Clubs</option>
             {clubs.map((c) => (
@@ -196,7 +196,7 @@ const SalesHistory: React.FC = () => {
           <select
             value={filterSeason}
             onChange={(e) => setFilterSeason(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
           >
             <option value="">All Seasons</option>
             {seasons.map((y) => (
@@ -206,7 +206,7 @@ const SalesHistory: React.FC = () => {
           <select
             value={filterProductType}
             onChange={(e) => setFilterProductType(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400"
           >
             <option value="">All Product Types</option>
             {productTypes.map((pt) => (
@@ -227,7 +227,7 @@ const SalesHistory: React.FC = () => {
       {/* Summary bar */}
       <div className="flex gap-4 mb-4">
         <div className="bg-white rounded-lg border border-gray-200 px-4 py-3 text-center min-w-24">
-          <div className="text-2xl font-bold text-indigo-600">{filtered.length}</div>
+          <div className="text-2xl font-bold text-brand-600">{filtered.length}</div>
           <div className="text-xs text-gray-500 mt-0.5">
             {filtered.length === sales.length ? "Total sales" : "Matching sales"}
           </div>
@@ -269,7 +269,7 @@ const SalesHistory: React.FC = () => {
                   const jerseyNum = s.jersey_number ?? (s.number ? Number(s.number) : null);
                   return (
                     <tr key={s.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-mono text-indigo-700 font-medium">
+                      <td className="px-4 py-3 font-mono text-brand-700 font-medium">
                         {s.order_number ?? s.shopify_order_id ?? "—"}
                       </td>
                       <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
@@ -283,7 +283,7 @@ const SalesHistory: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 text-center">
                         {jerseyNum != null ? (
-                          <span className="inline-block bg-indigo-100 text-indigo-700 font-bold rounded-full px-3 py-1 text-sm">
+                          <span className="inline-block bg-brand-100 text-brand-700 font-bold rounded-full px-3 py-1 text-sm">
                             #{jerseyNum}
                           </span>
                         ) : (

@@ -247,7 +247,7 @@ const ProductClubMapping: React.FC = () => {
           <button
             type="submit"
             disabled={loading || !canSave}
-            className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400"
+            className="px-4 py-2 bg-brand-600 text-white rounded hover:bg-brand-700 disabled:bg-gray-400"
           >
             {loading ? "Saving…" : "Save Mapping"}
           </button>

@@ -912,7 +912,7 @@ const Allocation: React.FC = () => {
 
           {currentPlayer ? (
             /* Selected player chip */
-            <div className="flex items-center gap-2 border rounded p-2 bg-indigo-50 border-indigo-200">
+            <div className="flex items-center gap-2 border rounded p-2 bg-brand-50 border-brand-200">
               <div className="flex-1 text-sm">
                 <span className="font-semibold">
                   {currentPlayer.last_name}, {currentPlayer.first_name}
@@ -923,7 +923,7 @@ const Allocation: React.FC = () => {
                   </span>
                 )}
                 {currentPlayer.final_shirt != null && (
-                  <span className="ml-2 text-indigo-700 font-semibold">
+                  <span className="ml-2 text-brand-700 font-semibold">
                     #{currentPlayer.final_shirt}
                   </span>
                 )}
@@ -965,7 +965,7 @@ const Allocation: React.FC = () => {
                       key={p.id}
                       type="button"
                       onClick={() => selectPlayer(p.id)}
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-indigo-50 border-b border-gray-100 last:border-0"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-brand-50 border-b border-gray-100 last:border-0"
                     >
                       <span className="font-medium">
                         {p.last_name}, {p.first_name}
@@ -976,7 +976,7 @@ const Allocation: React.FC = () => {
                         </span>
                       )}
                       {p.final_shirt != null ? (
-                        <span className="ml-2 text-indigo-600 font-semibold">
+                        <span className="ml-2 text-brand-600 font-semibold">
                           #{p.final_shirt}
                         </span>
                       ) : (
@@ -1193,7 +1193,7 @@ const Allocation: React.FC = () => {
           <button
             onClick={handleCheckNumber}
             disabled={checking}
-            className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded disabled:bg-gray-400"
+            className="flex-1 px-4 py-2 bg-brand-600 text-white rounded disabled:bg-gray-400"
           >
             {checking ? "Checking..." : "Check Number"}
           </button>
@@ -1224,7 +1224,7 @@ const Allocation: React.FC = () => {
         </div>
       )}
       {statusMessage && (
-        <div className="mb-2 text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 rounded p-3">
+        <div className="mb-2 text-sm text-brand-700 bg-brand-50 border border-brand-200 rounded p-3">
           {statusMessage}
         </div>
       )}

@@ -823,7 +823,7 @@ const BulkStockUpload: React.FC = () => {
                 type="button"
                 onClick={addNewSize}
                 disabled={submitting}
-                className="px-3 py-2 rounded bg-indigo-600 text-white text-sm font-semibold disabled:bg-gray-400"
+                className="px-3 py-2 rounded bg-brand-600 text-white text-sm font-semibold disabled:bg-gray-400"
               >
                 Add size
               </button>
@@ -1032,7 +1032,7 @@ const BulkStockUpload: React.FC = () => {
               type="button"
               onClick={handleShopifySync}
               disabled={syncing || submitting}
-              className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-semibold disabled:bg-gray-400 flex items-center gap-2"
+              className="px-4 py-2 bg-brand-600 text-white rounded text-sm font-semibold disabled:bg-gray-400 flex items-center gap-2"
             >
               {syncing ? (
                 <>
@@ -1063,9 +1063,9 @@ const BulkStockUpload: React.FC = () => {
           {(syncResult.products ?? []).map((product) => (
             <div
               key={product.productId}
-              className="border border-indigo-200 rounded-lg bg-indigo-50 p-4"
+              className="border border-brand-200 rounded-lg bg-brand-50 p-4"
             >
-              <h3 className="text-sm font-semibold text-indigo-800 mb-2">
+              <h3 className="text-sm font-semibold text-brand-800 mb-2">
                 Shopify Sync — {syncResult.location} — product {product.productId}
                 {product.gender ? ` (${product.gender})` : ""}
                 {!product.success && (
@@ -1083,7 +1083,7 @@ const BulkStockUpload: React.FC = () => {
                 </thead>
                 <tbody>
                   {(product.results ?? []).map((r) => (
-                    <tr key={r.variantTitle} className="border-t border-indigo-100">
+                    <tr key={r.variantTitle} className="border-t border-brand-100">
                       <td className="pr-4 py-1 font-medium">{r.variantTitle}</td>
                       <td className="pr-4 py-1">{r.available}</td>
                       <td className="pr-4 py-1">

@@ -714,7 +714,7 @@ const Importer: React.FC = () => {
             onChange={handleFileChange}
             className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4
                        file:rounded-md file:border-0 file:text-sm file:font-semibold
-                       file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                       file:bg-brand-50 file:text-brand-700 hover:file:bg-brand-100"
           />
         </div>
 
@@ -733,7 +733,7 @@ const Importer: React.FC = () => {
                 setNewCompetitionName("");
               }}
               className="w-full px-3 py-2 border rounded-md text-sm border-gray-300
-                         focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                         focus:outline-none focus:ring-2 focus:ring-brand-500"
             >
               <option value="">— Select competition —</option>
               {competitions.map((c) => (
@@ -749,8 +749,8 @@ const Importer: React.FC = () => {
               value={newCompetitionName}
               onChange={(e) => setNewCompetitionName(e.target.value)}
               placeholder="e.g. Gold Coast Basketball 2026 Summer"
-              className="mt-2 w-full px-3 py-2 border rounded-md text-sm border-indigo-300
-                         focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="mt-2 w-full px-3 py-2 border rounded-md text-sm border-brand-300
+                         focus:outline-none focus:ring-2 focus:ring-brand-500"
             />
           )}
 
@@ -770,7 +770,7 @@ const Importer: React.FC = () => {
             value={parsingStrategy}
             onChange={(e) => setParsingStrategy(e.target.value as ParsingStrategy)}
             className="w-full px-3 py-2 border rounded-md text-sm border-gray-300
-                       focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                       focus:outline-none focus:ring-2 focus:ring-brand-500"
           >
             <option value="north_gc">North Gold Coast Seahawks — "Warriors 16B.2"</option>
             <option value="gold_coast">Gold Coast Association — "JGC1 HEAT BLAZES"</option>
@@ -814,7 +814,7 @@ const Importer: React.FC = () => {
             onClick={handlePreview}
             disabled={loading || !file}
             className={`px-4 py-2 rounded-md text-sm font-semibold text-white
-                        ${loading || !file ? "bg-indigo-300 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"}`}
+                        ${loading || !file ? "bg-brand-300 cursor-not-allowed" : "bg-brand-600 hover:bg-brand-700"}`}
           >
             {loading ? "Working…" : "Preview Import"}
           </button>

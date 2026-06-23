@@ -69,11 +69,11 @@ const ResetPassword: React.FC = () => {
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden">
         <div className="bg-slate-800 p-8 text-center">
-          <div className="mx-auto w-16 h-16 bg-indigo-500 rounded-full flex items-center justify-center mb-4 text-white">
+          <div className="mx-auto w-16 h-16 bg-brand-500 rounded-full flex items-center justify-center mb-4 text-white">
             <Lock size={28} />
           </div>
           <h2 className="text-3xl font-bold text-white">Hoop2Hoop</h2>
-          <p className="text-indigo-200 mt-2">Set New Password</p>
+          <p className="text-brand-200 mt-2">Set New Password</p>
         </div>
 
         <div className="p-8">
@@ -103,7 +103,7 @@ const ResetPassword: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="At least 8 characters"
-                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-colors"
                 />
               </div>
 
@@ -117,14 +117,14 @@ const ResetPassword: React.FC = () => {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter new password"
-                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-colors"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className={`w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md transition-all flex justify-center items-center ${
+                className={`w-full py-3 px-4 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-lg shadow-md transition-all flex justify-center items-center ${
                   loading ? "opacity-75 cursor-not-allowed" : ""
                 }`}
               >
@@ -138,7 +138,7 @@ const ResetPassword: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => navigate("/login")}
-                  className="text-indigo-600 hover:underline"
+                  className="text-brand-600 hover:underline"
                 >
                   Back to login
                 </button>

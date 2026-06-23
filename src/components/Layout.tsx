@@ -118,12 +118,10 @@ const Layout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col md:flex-row">
-      <aside className="w-full md:w-64 bg-slate-900 text-white flex-shrink-0 flex flex-col">
-        <div className="p-6 border-b border-slate-700">
-          <h1 className="text-2xl font-bold tracking-tight text-orange-500">
-            Hoop2Hoop
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">Jersey Management System</p>
+      <aside className="w-full md:w-64 bg-white text-slate-700 flex-shrink-0 flex flex-col border-r border-gray-200">
+        <div className="p-6 border-b border-gray-200">
+          <img src="/h2h-logo.png" alt="Hoop2Hoop" className="h-10 w-auto" />
+          <p className="text-xs text-brandGray-500 mt-2">Jersey Management System</p>
         </div>
 
         <nav className="p-4 space-y-2 flex-1">
@@ -135,8 +133,8 @@ const Layout: React.FC = () => {
                 to={item.path}
                 className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
                   isActive
-                    ? "bg-indigo-600 text-white"
-                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                    ? "bg-brand-600 text-white"
+                    : "text-slate-600 hover:bg-brand-50 hover:text-brand-700"
                 }`}
               >
                 {item.icon}
@@ -146,17 +144,17 @@ const Layout: React.FC = () => {
           })}
         </nav>
 
-        <div className="p-4 border-t border-slate-700 space-y-1">
+        <div className="p-4 border-t border-gray-200 space-y-1">
           <Link
             to="/reset-password"
-            className="flex items-center space-x-3 px-4 py-3 w-full text-slate-300 hover:bg-slate-800 hover:text-white rounded-lg transition-colors"
+            className="flex items-center space-x-3 px-4 py-3 w-full text-slate-600 hover:bg-brand-50 hover:text-brand-700 rounded-lg transition-colors"
           >
             <KeyRound size={20} />
             <span className="font-medium text-sm">Change Password</span>
           </Link>
           <button
             onClick={handleLogout}
-            className="flex items-center space-x-3 px-4 py-3 w-full text-left text-red-400 hover:bg-slate-800 rounded-lg transition-colors"
+            className="flex items-center space-x-3 px-4 py-3 w-full text-left text-red-600 hover:bg-red-50 rounded-lg transition-colors"
           >
             <LogOut size={20} />
             <span className="font-medium text-sm">Sign Out</span>

@@ -125,7 +125,7 @@ const ClubManager: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h1 className="text-3xl font-bold text-gray-900 flex items-center">
-          <Building2 className="mr-3 text-indigo-600" size={32} />
+          <Building2 className="mr-3 text-brand-600" size={32} />
           Club Manager
         </h1>
 
@@ -133,7 +133,7 @@ const ClubManager: React.FC = () => {
           <input
             type="text"
             placeholder="Search clubs..."
-            className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -146,7 +146,7 @@ const ClubManager: React.FC = () => {
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
             <h2 className="font-semibold text-gray-700">Registered Clubs</h2>
-            <span className="text-sm bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full">
+            <span className="text-sm bg-brand-100 text-brand-700 px-2 py-1 rounded-full">
               {clubs.length} Total
             </span>
           </div>
@@ -190,7 +190,7 @@ const ClubManager: React.FC = () => {
                             <input
                               value={editingName}
                               onChange={(e) => setEditingName(e.target.value)}
-                              className="w-full max-w-md border border-gray-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                              className="w-full max-w-md border border-gray-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
                               placeholder="Club name"
                               autoFocus
                             />
@@ -222,7 +222,7 @@ const ClubManager: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => startEdit(club)}
-                              className="inline-flex items-center gap-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                              className="inline-flex items-center gap-2 text-brand-600 hover:text-brand-800 text-sm font-medium"
                             >
                               <Pencil size={16} />
                               Edit
@@ -278,14 +278,14 @@ const ClubManager: React.FC = () => {
                   value={newClubName}
                   onChange={(e) => setNewClubName(e.target.value)}
                   placeholder="e.g. Gold Coast Rollers"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center space-x-2 transition-colors disabled:opacity-70"
+                className="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center space-x-2 transition-colors disabled:opacity-70"
               >
                 {isSubmitting ? (
                   <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></span>
