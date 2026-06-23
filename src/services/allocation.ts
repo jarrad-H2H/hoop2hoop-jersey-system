@@ -344,6 +344,7 @@ export async function smartCheckNumber(
     .select("id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, bc_last_seen_season")
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber)
+    .is("deleted_at", null)
     .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${seasonYear - 2}`);
   if (excludePlayerId) {
     clashQuery = clashQuery.neq("id", excludePlayerId);
@@ -640,6 +641,7 @@ export async function suggestNumbersForClubRanked(input: {
       .select("final_shirt")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
+      .is("deleted_at", null)
       .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
 
     // null-safe team filter
@@ -686,6 +688,7 @@ export async function suggestNumbersForClubRanked(input: {
       .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
+      .is("deleted_at", null)
       .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
     if (input.excludePlayerId) {
       allHoldersQuery = allHoldersQuery.neq("id", input.excludePlayerId);
@@ -753,6 +756,7 @@ export async function suggestNumbersForClubRanked(input: {
       .eq("club_id", input.clubId)
       .in("age_group", ageGroupBucketSiblings(input.ageGroup))
       .in("final_shirt", candidateNums)
+      .is("deleted_at", null)
       .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
     if (input.excludePlayerId) {
       cpQuery = cpQuery.neq("id", input.excludePlayerId);
@@ -787,6 +791,7 @@ export async function suggestNumbersForClubRanked(input: {
         .eq("club_id", input.clubId)
         .in("final_shirt", candidateNums)
         .in("age_group", adjacentGroups)
+        .is("deleted_at", null)
         .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
       if (input.excludePlayerId) {
         adjQuery = adjQuery.neq("id", input.excludePlayerId);
@@ -992,6 +997,7 @@ export async function lookupPlayerByName(params: {
     .eq("club_id", clubId)
     .ilike("first_name", firstTrimmed)
     .ilike("last_name", lastTrimmed)
+    .is("deleted_at", null)
     .or(cohortFilter)
     .limit(1);
 
@@ -1003,6 +1009,7 @@ export async function lookupPlayerByName(params: {
       .select("id, first_name, last_name, final_shirt, year_of_birth, division_code, team_name")
       .eq("club_id", clubId)
       .ilike("last_name", lastTrimmed)
+      .is("deleted_at", null)
       .or(cohortFilter)
       .limit(5);
 

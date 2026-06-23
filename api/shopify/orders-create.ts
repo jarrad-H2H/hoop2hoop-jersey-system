@@ -318,6 +318,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             clubName = (clubRow as any)?.name ?? "";
           }
 
+          // Resolved below (when player identity is known) and reused by the orders
+          // insert further down, so it must live in this outer scope.
+          let pendingTeamName: string | null = null;
+
           // ── Player record management ─────────────────────────────────────────
           if (playerFirstName && playerLastName && p.year_of_birth && clubId) {
             const yob = Number(p.year_of_birth);
@@ -328,7 +332,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // organically via BC import for real multi-team players) -- so matching by
             // name+YOB+club ALONE is not enough to find the right row once a player plays
             // for more than one team (e.g. "playing up" a second jersey for a higher team).
-            let pendingTeamName: string | null = null;
             let pendingTeamAgeGroup: string | null = null;
             const pendingTeamId = (p.team_id ?? "").toString().trim();
             if (pendingTeamId) {
@@ -417,7 +420,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             keep_existing_jersey: keepExistingFlag,
             shopify_buyer_name: shopifyBuyerName,
             club_id: clubId,
-            team_name: String(p.team_id ?? ""),
+            team_name: pendingTeamName ?? String(p.team_id ?? ""),
             product_name: clubName,
             size: String(p.size ?? ""),
             number: String(p.jersey_number ?? jerseyNumber),
