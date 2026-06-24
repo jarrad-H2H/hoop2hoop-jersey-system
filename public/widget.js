@@ -256,9 +256,13 @@
             })
           );
 
-          // Set hidden line item properties
+          // Set hidden line item properties. h2h_reserved_at lets the cart watchdog
+          // (see runCartWatchdog below) know when this hold's 30-minute window started,
+          // so it can clear the line item if it's still sitting unpurchased well after
+          // the reservation itself has lapsed.
           setHiddenInputValue("h2h_jersey_number", String(jerseyNum));
           setHiddenInputValue("h2h_pending_allocation_id", String(pendingId));
+          setHiddenInputValue("h2h_reserved_at", new Date().toISOString());
 
           // Force label once unlocked
           forceAtcLabel(scope, "Add to cart");
@@ -270,6 +274,7 @@
           // Clear hidden line item properties
           setHiddenInputValue("h2h_jersey_number", "");
           setHiddenInputValue("h2h_pending_allocation_id", "");
+          setHiddenInputValue("h2h_reserved_at", "");
 
           restoreAtcLabel(scope);
         }
@@ -293,9 +298,100 @@
     });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mount);
-  } else {
+  // ---------- CART WATCHDOG ----------
+  // Catches the case where a customer reserves a number, adds it to their cart, then
+  // comes back well after the 30-minute hold has lapsed and checks out anyway. Shopify
+  // has no idea our reservation expired -- it'll happily let them pay. This runs on
+  // EVERY page (not just the product page, since this script needs to load site-wide
+  // via theme.liquid for the check to matter) and clears any stale H2H line item from
+  // the cart before that can happen, same as the customer clicking "Remove" themselves.
+  var H2H_RESERVATION_MINUTES = 30;
+
+  function showExpiredCartBanner(count) {
+    try {
+      if (document.getElementById("h2h-expired-banner")) return;
+
+      var banner = document.createElement("div");
+      banner.id = "h2h-expired-banner";
+      banner.setAttribute("role", "alert");
+      banner.style.cssText =
+        "position:fixed;top:0;left:0;right:0;z-index:999999;" +
+        "background:#fff7ed;color:#9a3412;border-bottom:2px solid #f59e0b;" +
+        "padding:10px 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;" +
+        "text-align:center;";
+
+      var msg = document.createElement("span");
+      msg.textContent =
+        count === 1
+          ? "Your jersey number reservation expired, so we've removed it from your cart. Please go back to the product and choose your number again."
+          : "Some jersey number reservations in your cart expired, so we've removed them. Please go back to the product(s) and choose your number(s) again.";
+      banner.appendChild(msg);
+
+      var closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.textContent = "Dismiss";
+      closeBtn.style.cssText =
+        "margin-left:10px;background:none;border:1px solid #9a3412;color:#9a3412;" +
+        "padding:2px 10px;border-radius:4px;cursor:pointer;font-size:12px;";
+      closeBtn.onclick = function () {
+        banner.parentNode && banner.parentNode.removeChild(banner);
+      };
+      banner.appendChild(closeBtn);
+
+      document.body.insertBefore(banner, document.body.firstChild);
+    } catch (_) {}
+  }
+
+  function runCartWatchdog() {
+    if (window.__h2hCartWatchdogStarted) return;
+    window.__h2hCartWatchdogStarted = true;
+
+    var expiryMs = H2H_RESERVATION_MINUTES * 60 * 1000;
+
+    fetch("/cart.js", { credentials: "same-origin" })
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .then(function (cart) {
+        if (!cart || !Array.isArray(cart.items)) return;
+
+        var stale = cart.items.filter(function (item) {
+          var props = item.properties || {};
+          var reservedAtRaw = props.h2h_reserved_at || props._h2h_reserved_at;
+          var pendingId = props.h2h_pending_allocation_id;
+          if (!reservedAtRaw || !pendingId) return false;
+          var reservedAt = Date.parse(reservedAtRaw);
+          if (!isFinite(reservedAt)) return false;
+          return Date.now() - reservedAt > expiryMs;
+        });
+
+        if (stale.length === 0) return;
+
+        var removals = stale.map(function (item) {
+          return fetch("/cart/change.js", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: item.key, quantity: 0 }),
+          }).catch(function () {});
+        });
+
+        Promise.all(removals).then(function () {
+          showExpiredCartBanner(stale.length);
+        });
+      })
+      .catch(function () {});
+  }
+  // -----------------------------------
+
+  function init() {
     mount();
+    runCartWatchdog();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
   }
 })();

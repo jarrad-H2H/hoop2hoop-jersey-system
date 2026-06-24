@@ -59,6 +59,14 @@ const CARD_COPY: Record<
     howToFix:
       "Open Allocation History and Sales History for the affected order number and confirm the player actually got their number. Check Vercel function logs for the full error if needed.",
   },
+  reconciled_orders: {
+    title: "Orders that paid but lost their reservation",
+    severity: "error",
+    explanation:
+      "A customer completed checkout and was charged, but their 30-minute reservation had already lapsed by the time the order webhook arrived (e.g. they left the item sitting in their cart for a long time before paying) — usually because the original number was no longer guaranteed to still be theirs, so the system deliberately did NOT auto-finish the order. No jersey number was assigned, no order/player record was created — only the underlying inventory may have been quietly reclaimed if nobody else had taken it. The customer paid for nothing as far as this system is concerned, until someone fixes it.",
+    howToFix:
+      "Go to Number Allocation, find the player, and manually allocate them a number (their original choice if it's still free, otherwise pick another together with the family). Then check Sales History / contact the customer to confirm. If no number can be sensibly assigned, consider a refund instead.",
+  },
   player_number_drift: {
     title: "Numbers the system allocated, but inventory doesn't show as Allocated",
     severity: "warning",
@@ -117,6 +125,7 @@ const SystemHealth: React.FC = () => {
         pendingRes,
         webhookRes,
         allocationsLogRes,
+        reconciledRes,
       ] = await Promise.all([
         supabase.from("clubs").select("id, name, is_client").eq("is_client", true),
         supabase.from("shopify_product_club_map").select("club_id"),
@@ -138,6 +147,11 @@ const SystemHealth: React.FC = () => {
           .select("club_id, jersey_number, allocation_type, player_first_name, player_last_name, created_at")
           .in("allocation_type", ["new", "swap", "end", "return"])
           .order("created_at", { ascending: true }),
+        supabase
+          .from("pending_allocations")
+          .select("id, club_id, jersey_number, size, order_number, player_first_name, player_last_name, purchased_at")
+          .eq("status", "reconciled")
+          .order("purchased_at", { ascending: false }),
       ]);
 
       const liveClubs = clubsRes.data ?? [];
@@ -162,6 +176,14 @@ const SystemHealth: React.FC = () => {
       const clubsNoStock = liveClubs.filter(
         (c: any) => sizedClubIds.has(c.id) && (availableByClub.get(c.id) ?? 0) === 0
       );
+
+      const reconciledOrders = (reconciledRes.data ?? []).map((r: any) => {
+        const name = [r.player_first_name, r.player_last_name].filter(Boolean).join(" ");
+        const who = name || "unknown player";
+        const order = r.order_number ? `order ${r.order_number}` : "no order # on file";
+        const when = r.purchased_at ? new Date(r.purchased_at).toLocaleString() : "unknown time";
+        return `${clubNameById.get(r.club_id) ?? r.club_id} — ${who} — #${r.jersey_number} (${r.size}) — ${order} — ${when}`;
+      });
 
       const stuckPending = (pendingRes.data ?? []).map(
         (r: any) =>
@@ -220,6 +242,11 @@ const SystemHealth: React.FC = () => {
           id: "stuck_pending_allocations",
           ...CARD_COPY.stuck_pending_allocations,
           affected: stuckPending,
+        },
+        {
+          id: "reconciled_orders",
+          ...CARD_COPY.reconciled_orders,
+          affected: reconciledOrders,
         },
         {
           id: "recent_webhook_errors",
