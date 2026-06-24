@@ -305,7 +305,7 @@
   // EVERY page (not just the product page, since this script needs to load site-wide
   // via theme.liquid for the check to matter) and clears any stale H2H line item from
   // the cart before that can happen, same as the customer clicking "Remove" themselves.
-  var H2H_RESERVATION_MINUTES = 1; // TEMP: testing value, reverting to 30 right after Jarrad confirms
+  var H2H_RESERVATION_MINUTES = 30;
 
   function showExpiredCartBanner(count) {
     try {
