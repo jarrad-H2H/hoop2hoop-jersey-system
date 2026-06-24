@@ -356,10 +356,15 @@
         if (!cart || !Array.isArray(cart.items)) return;
 
         var stale = cart.items.filter(function (item) {
+          // NOTE: Shopify's /cart.js returns line item properties keyed by whatever
+          // the form input's "name" attribute was (e.g. "Jersey Number", "Reservation
+          // ID" -- the customer-visible labels), NOT by the input's "id" attribute.
+          // _h2h_reserved_at is the one property we control end-to-end with a fixed,
+          // code-friendly name, so it alone is enough to identify a stale H2H item --
+          // no other line item on the site will ever carry this property.
           var props = item.properties || {};
           var reservedAtRaw = props.h2h_reserved_at || props._h2h_reserved_at;
-          var pendingId = props.h2h_pending_allocation_id;
-          if (!reservedAtRaw || !pendingId) return false;
+          if (!reservedAtRaw) return false;
           var reservedAt = Date.parse(reservedAtRaw);
           if (!isFinite(reservedAt)) return false;
           return Date.now() - reservedAt > expiryMs;
