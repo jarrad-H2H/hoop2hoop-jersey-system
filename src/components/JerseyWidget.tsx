@@ -395,6 +395,19 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       } catch (_) {}
     };
     window.addEventListener("message", onMsg);
+
+    // Tell the parent page's widget.js we're ready to receive variant state now.
+    // Without this, a customer who taps a size before this listener attaches (the
+    // iframe's own load event firing is not the same moment as this effect running)
+    // has that selection silently dropped -- widget.js has no way of knowing nobody
+    // was listening yet, and never retries on its own. Asking explicitly the moment
+    // we're actually ready closes that race regardless of which side is slower.
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "h2h:requestState" }, "*");
+      }
+    } catch (_) {}
+
     return () => window.removeEventListener("message", onMsg);
   }, [demoMode]);
 

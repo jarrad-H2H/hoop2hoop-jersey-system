@@ -95,9 +95,9 @@
     return "";
   }
 
-  function scheduleSend(iframe, payload) {
+  function scheduleSend(iframe, payload, force) {
     var key = (payload.productId || "") + "|" + (payload.variantId || "") + "|" + (payload.size || "");
-    if (key === lastSentKey) return;
+    if (!force && key === lastSentKey) return;
     lastSentKey = key;
 
     try {
@@ -193,16 +193,20 @@
 
     host.appendChild(iframe);
 
-    function sendVariantState() {
+    function sendVariantState(force) {
       var size = findSelectedSizeValue(scope);
       var variantId = findSelectedVariantId(scope);
 
-      scheduleSend(iframe, {
-        type: "h2h:variantChanged",
-        productId: productId,
-        size: size,
-        variantId: variantId,
-      });
+      scheduleSend(
+        iframe,
+        {
+          type: "h2h:variantChanged",
+          productId: productId,
+          size: size,
+          variantId: variantId,
+        },
+        force
+      );
 
       snapshotOriginalAtcLabel(scope);
     }
@@ -268,6 +272,15 @@
           setHiddenInputValue("h2h_pending_allocation_id", "");
 
           restoreAtcLabel(scope);
+        }
+
+        // The widget asks for the current size/variant the moment it's actually ready
+        // to receive it -- closes the race where a customer taps a size before the
+        // iframe's React app has attached its own listener, which would otherwise
+        // drop that selection silently with no retry. "force" bypasses the dedupe
+        // below so the same size/variant gets resent even if nothing has changed.
+        if (data.type === "h2h:requestState") {
+          sendVariantState(true);
         }
 
         // Widget reports its real content height as questions/results appear, so the
