@@ -53,25 +53,47 @@ const NumberReport: React.FC = () => {
   // Load everything once -- the dataset (players + clubs) is small enough per club/
   // competition that filtering client-side keeps this simple and snappy, consistent
   // with how Players.tsx and Cross-Club Search already work.
+  //
+  // Supabase/PostgREST caps a single query at 1000 rows by default -- with 4000+
+  // active players across competitions, that silently truncated results (an entire
+  // competition could go missing from the dropdown depending on row order). Page
+  // through in batches of 1000 until everything's fetched.
   useEffect(() => {
+    const PAGE_SIZE = 1000;
+
+    const fetchAllPlayers = async (): Promise<PlayerRow[]> => {
+      const rows: PlayerRow[] = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("players")
+          .select(
+            "id, first_name, last_name, club_id, division_code, team_name, age_group, final_shirt, year_of_birth, competition_source, bc_last_seen_season"
+          )
+          .is("deleted_at", null)
+          .range(from, from + PAGE_SIZE - 1);
+
+        if (error) throw error;
+        const batch = (data ?? []) as PlayerRow[];
+        rows.push(...batch);
+        if (batch.length < PAGE_SIZE) break;
+        from += PAGE_SIZE;
+      }
+      return rows;
+    };
+
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const [playersRes, clubsRes] = await Promise.all([
-          supabase
-            .from("players")
-            .select(
-              "id, first_name, last_name, club_id, division_code, team_name, age_group, final_shirt, year_of_birth, competition_source, bc_last_seen_season"
-            )
-            .is("deleted_at", null),
+        const [players, clubsRes] = await Promise.all([
+          fetchAllPlayers(),
           supabase.from("clubs").select("id, name").order("name"),
         ]);
 
-        if (playersRes.error) throw playersRes.error;
         if (clubsRes.error) throw clubsRes.error;
 
-        setAllPlayers((playersRes.data ?? []) as PlayerRow[]);
+        setAllPlayers(players);
         setClubs((clubsRes.data ?? []) as Club[]);
       } catch (err: any) {
         console.error("NumberReport load error", err);
