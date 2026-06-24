@@ -17,6 +17,7 @@ import {
   SplitSquareVertical,
   Search,
   Activity,
+  FileSpreadsheet,
 } from "lucide-react";
 
 type NavItem = {
@@ -77,6 +78,12 @@ const Layout: React.FC = () => {
       label: "Cross-Club Search",
       icon: <Search size={20} />,
       match: (p) => p.startsWith("/admin/cross-club-search"),
+    },
+    {
+      path: "/admin/number-report",
+      label: "Number Report",
+      icon: <FileSpreadsheet size={20} />,
+      match: (p) => p.startsWith("/admin/number-report"),
     },
     {
       path: "/admin/allocation",
