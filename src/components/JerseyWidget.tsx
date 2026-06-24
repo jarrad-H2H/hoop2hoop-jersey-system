@@ -1,5 +1,5 @@
 // FILE: src/components/JerseyWidget.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabase";
 import {
   smartCheckNumber,
@@ -96,6 +96,26 @@ function inferTeamAgeGroupFromName(name: string): AgeGroupLabel | null {
 }
 
 const AGE_GROUP_LADDER: AgeGroupLabel[] = ["U10", "U12", "U14", "U16", "U18", "U20", "SLG"];
+
+/**
+ * Smoothly scrolls a section into view the moment it first appears (active flips
+ * false -> true). Customers were missing newly-revealed questions/results further
+ * down the form -- this nudges them to it automatically instead of relying on
+ * them to notice and scroll manually, which testing showed many didn't.
+ */
+function useScrollIntoViewOnReveal<T extends HTMLElement>(ref: React.RefObject<T>, active: boolean) {
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (active && !wasActive.current) {
+      // Defer one frame so the newly-rendered content has a real layout/height
+      // before we ask the browser to scroll to it.
+      requestAnimationFrame(() => {
+        ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+    wasActive.current = active;
+  }, [active, ref]);
+}
 
 function nextAgeGroup(ag: AgeGroupLabel | null): AgeGroupLabel | null {
   if (!ag) return null;
@@ -293,6 +313,32 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       window.dispatchEvent(new CustomEvent(type, { detail: payload || {} }));
     } catch (_) {}
   };
+
+  // Reports the widget's real content height to the parent Shopify page whenever it
+  // changes, so the theme can resize the iframe to fit instead of showing its own
+  // internal scrollbar -- customers were missing newly-revealed questions because they
+  // had to discover and scroll a separate scroll area inside a fixed-height iframe.
+  // Requires a small addition on the Shopify theme side to consume "h2h:resize" and
+  // actually set the iframe's height (see buy-buttons.liquid).
+  const widgetRootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = widgetRootRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const postHeight = () => {
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            { type: "h2h:resize", height: el.scrollHeight },
+            "*"
+          );
+        }
+      } catch (_) {}
+    };
+    const observer = new ResizeObserver(postHeight);
+    observer.observe(el);
+    postHeight();
+    return () => observer.disconnect();
+  }, []);
 
   // Demo mode: sync club + size from props when they change
   useEffect(() => {
@@ -746,8 +792,24 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     }
   };
 
+  // ── Auto-scroll: nudge the customer to each newly-revealed section instead of
+  // relying on them to notice and scroll manually (see useScrollIntoViewOnReveal). ──
+  const genderPromptRef = useRef<HTMLDivElement>(null);
+  const identityConfirmRef = useRef<HTMLDivElement>(null);
+  const keepPromptRef = useRef<HTMLDivElement>(null);
+  const playingUpPromptRef = useRef<HTMLDivElement>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const confirmAreaRef = useRef<HTMLButtonElement>(null);
+
+  useScrollIntoViewOnReveal(genderPromptRef, needsGenderPrompt);
+  useScrollIntoViewOnReveal(identityConfirmRef, needsIdentityConfirm);
+  useScrollIntoViewOnReveal(keepPromptRef, needsKeepPrompt && !lookingUpPlayer);
+  useScrollIntoViewOnReveal(playingUpPromptRef, needsPlayingUpPrompt);
+  useScrollIntoViewOnReveal(suggestionsRef, suggestions.length > 0);
+  useScrollIntoViewOnReveal(confirmAreaRef, selectedNumber !== null);
+
   return (
-    <div className="w-full max-w-[440px]">
+    <div ref={widgetRootRef} className="w-full max-w-[440px]">
       <div className="mb-3">
         <h3 className="text-base font-semibold">Choose your jersey number</h3>
         <p className="text-xs text-gray-600 mt-1">
@@ -855,7 +917,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* Player gender — only asked for single/unisex-product clubs. Dual-product
             (mens/womens) clubs already know this from which Shopify product was bought. */}
         {needsGenderPrompt && (
-          <div>
+          <div ref={genderPromptRef}>
             <label className="block text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
               Player's Gender
             </label>
@@ -897,7 +959,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
         {/* Identity confirmation — shown when a matching player record is found */}
         {needsIdentityConfirm && (
-          <div className="bg-amber-50 border border-amber-200 rounded p-3">
+          <div ref={identityConfirmRef} className="bg-amber-50 border border-amber-200 rounded p-3">
             <div className="text-sm font-semibold text-amber-900 mb-1">
               We found <span className="font-bold">{matchedPlayerDisplayName}</span> in our records.
             </div>
@@ -924,7 +986,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
         {/* Keeping jersey? — only shown if existing player has a jersey */}
         {needsKeepPrompt && !lookingUpPlayer && (
-          <div className="bg-blue-50 border border-blue-200 rounded p-3">
+          <div ref={keepPromptRef} className="bg-blue-50 border border-blue-200 rounded p-3">
             <div className="text-sm font-semibold text-blue-900 mb-2">
               Our records show you already have jersey #{existingPlayerJersey}.
             </div>
@@ -950,7 +1012,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
         {/* Playing up? — only shown after keeping existing jersey is confirmed */}
         {needsPlayingUpPrompt && (
-          <div className="bg-violet-50 border border-violet-200 rounded p-3">
+          <div ref={playingUpPromptRef} className="bg-violet-50 border border-violet-200 rounded p-3">
             <div className="text-sm font-semibold text-violet-900 mb-1">
               Are you also playing up an age group?
             </div>
@@ -1014,7 +1076,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
         {/* Suggestions */}
         {suggestions.length > 0 && (
-          <div className="pt-1">
+          <div ref={suggestionsRef} className="pt-1">
             <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">
               Suggested Numbers
             </div>
@@ -1062,6 +1124,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* Confirm & Reserve */}
         {selectedNumber !== null && (
           <button
+            ref={confirmAreaRef}
             type="button"
             onClick={handleReserve}
             disabled={!canConfirm}
