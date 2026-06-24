@@ -807,14 +807,17 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const keepPromptRef = useRef<HTMLDivElement>(null);
   const playingUpPromptRef = useRef<HTMLDivElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
-  const confirmAreaRef = useRef<HTMLButtonElement>(null);
 
   useScrollIntoViewOnReveal(genderPromptRef, needsGenderPrompt);
   useScrollIntoViewOnReveal(identityConfirmRef, needsIdentityConfirm);
   useScrollIntoViewOnReveal(keepPromptRef, needsKeepPrompt && !lookingUpPlayer);
   useScrollIntoViewOnReveal(playingUpPromptRef, needsPlayingUpPrompt);
   useScrollIntoViewOnReveal(suggestionsRef, suggestions.length > 0);
-  useScrollIntoViewOnReveal(confirmAreaRef, selectedNumber !== null);
+  // Deliberately no auto-scroll when a number is picked: the suggestions grid, the
+  // disclaimer checkbox, and the Confirm & Reserve button are already all visible
+  // together on screen at that point -- scrolling here risked carrying the disclaimer
+  // checkbox off-screen past the customer's eye line, right before the one step they
+  // must not skip.
 
   return (
     <div ref={widgetRootRef} className="w-full max-w-[440px]">
@@ -1132,7 +1135,6 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* Confirm & Reserve */}
         {selectedNumber !== null && (
           <button
-            ref={confirmAreaRef}
             type="button"
             onClick={handleReserve}
             disabled={!canConfirm}
