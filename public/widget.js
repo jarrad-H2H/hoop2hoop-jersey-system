@@ -269,6 +269,13 @@
 
           restoreAtcLabel(scope);
         }
+
+        // Widget reports its real content height as questions/results appear, so the
+        // iframe can grow to fit instead of showing its own internal scrollbar --
+        // customers were missing newly-revealed content further down the form.
+        if (data.type === "h2h:resize" && typeof data.height === "number" && data.height > 0) {
+          iframe.style.height = data.height + "px";
+        }
       } catch (_) {}
     });
   }
