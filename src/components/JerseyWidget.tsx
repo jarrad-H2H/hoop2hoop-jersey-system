@@ -98,14 +98,22 @@ function inferTeamAgeGroupFromName(name: string): AgeGroupLabel | null {
 const AGE_GROUP_LADDER: AgeGroupLabel[] = ["U10", "U12", "U14", "U16", "U18", "U20", "SLG"];
 
 /**
- * Smoothly scrolls a section into view the moment it first appears (active flips
- * false -> true). Customers were missing newly-revealed questions/results further
- * down the form -- this nudges them to it automatically instead of relying on
- * them to notice and scroll manually, which testing showed many didn't.
+ * Smoothly scrolls a section into view when it appears as a result of the customer
+ * answering a previous question -- never on the widget's initial mount, even if a
+ * section (e.g. the gender prompt, for unisex-product clubs) happens to already be
+ * visible from the very first render. Without this guard, that first-render-visible
+ * section was treated as "newly revealed" and the page auto-scrolled straight past
+ * the size/name fields on load, before the customer had touched anything.
  */
 function useScrollIntoViewOnReveal<T extends HTMLElement>(ref: React.RefObject<T>, active: boolean) {
-  const wasActive = useRef(false);
+  const wasActive = useRef(active);
+  const isFirstRun = useRef(true);
   useEffect(() => {
+    if (isFirstRun.current) {
+      isFirstRun.current = false;
+      wasActive.current = active;
+      return;
+    }
     if (active && !wasActive.current) {
       // Defer one frame so the newly-rendered content has a real layout/height
       // before we ask the browser to scroll to it.
