@@ -246,25 +246,61 @@
     // Avoid double-mounting (e.g. page cached in BFCache or SPA navigation)
     if (document.getElementById("h2h-widget-host")) return;
 
-    // Create and inject the widget container. Insert it before the ATC submit button
-    // so it appears naturally in the product form flow.
+    // Create the widget container.
     var host = document.createElement("div");
     host.id = "h2h-widget-host";
     host.setAttribute("data-h2h-widget", "true");
     host.setAttribute("data-product-id", String(productId));
     host.style.marginTop = "1rem";
 
-    var atcBtn =
-      $('button[name="add"][type="submit"]', form) ||
-      $('button[type="submit"]', form);
-    if (atcBtn) {
-      form.insertBefore(host, atcBtn);
-    } else {
-      form.appendChild(host);
+    // Inject hidden inputs into the form first (must stay inside the form for cart submission).
+    injectHiddenInputs(form);
+
+    // Find the best visual insertion point.
+    // Dawn structure: variant-radios/variant-selects → [widget goes here] → product-form (ATC btn)
+    // We walk up from the form to find variant pickers in the same product-info container,
+    // then insert after the last one. Falls back to before the ATC button inside the form.
+    var inserted = false;
+    var searchRoot =
+      form.closest("product-info") ||
+      (form.closest("product-form") ? form.closest("product-form").parentElement : null) ||
+      form.parentElement;
+
+    if (searchRoot) {
+      // Find the last variant picker sibling
+      var variantEls = $all("variant-radios, variant-selects", searchRoot);
+      var lastVariant = variantEls.length ? variantEls[variantEls.length - 1] : null;
+      if (lastVariant && lastVariant.parentNode) {
+        var afterVariant = lastVariant.nextSibling;
+        if (afterVariant) {
+          lastVariant.parentNode.insertBefore(host, afterVariant);
+        } else {
+          lastVariant.parentNode.appendChild(host);
+        }
+        inserted = true;
+      }
     }
 
-    // Inject all hidden line-item property inputs into the form
-    injectHiddenInputs(form);
+    if (!inserted) {
+      // Fallback: before product-form web component
+      var productFormEl = form.closest("product-form");
+      if (productFormEl && productFormEl.parentNode) {
+        productFormEl.parentNode.insertBefore(host, productFormEl);
+        inserted = true;
+      }
+    }
+
+    if (!inserted) {
+      // Last resort: inside the form, before the ATC button
+      var atcBtn =
+        $('button[name="add"][type="submit"]', form) ||
+        $('button[type="submit"]', form);
+      if (atcBtn) {
+        form.insertBefore(host, atcBtn);
+      } else {
+        form.appendChild(host);
+      }
+    }
 
     var scope = findProductScope(host);
     snapshotOriginalAtcLabel(scope);
