@@ -239,8 +239,15 @@
 
   // ── Main mount ───────────────────────────────────────────────────────────────
   function mount(productId) {
-    // Find the cart form — our injection anchor
-    var form = $('form[action^="/cart/add"]');
+    // Scope form lookup to the main product section to avoid matching "You may
+    // also like" / featured-product ATC forms elsewhere on the page.
+    var mainSection =
+      document.querySelector('section[id^="MainProduct-"]') ||
+      document.querySelector('[id^="MainProduct-"]') ||
+      document.querySelector("main");
+    var form = mainSection
+      ? $('form[action^="/cart/add"]', mainSection)
+      : $('form[action^="/cart/add"]');
     if (!form) return;
 
     // Avoid double-mounting (e.g. page cached in BFCache or SPA navigation)
