@@ -444,18 +444,22 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!pid) return;
       const { data, error } = await supabase
         .from("shopify_product_club_map")
-        .select("shopify_product_id, club_id, product_type, clubs(preorder_mode)")
+        .select("shopify_product_id, club_id, product_type, clubs(preorder_mode, is_client)")
         .eq("shopify_product_id", pid)
         .limit(1);
       if (error) { setClubDetectError(error.message); return; }
-      const row = (data?.[0] as (MappingRow & { clubs?: { preorder_mode?: string } | { preorder_mode?: string }[] | null }) | undefined) ?? undefined;
+      const row = (data?.[0] as (MappingRow & { clubs?: { preorder_mode?: string; is_client?: boolean } | { preorder_mode?: string; is_client?: boolean }[] | null }) | undefined) ?? undefined;
       if (!row?.club_id) {
         setClubDetectError("Club could not be detected for this product.");
         return;
       }
+      const clubJoin = Array.isArray(row.clubs) ? row.clubs[0] : row.clubs;
+      if (!clubJoin?.is_client) {
+        // Club exists but is not active — stay hidden, no error shown to customer
+        return;
+      }
       setSelectedClubId(row.club_id);
       setSelectedProductType(row.product_type ?? "default");
-      const clubJoin = Array.isArray(row.clubs) ? row.clubs[0] : row.clubs;
       setPreorderMode((clubJoin?.preorder_mode as "off" | "open" | "closed" | "locked") ?? "off");
     };
     void run();
