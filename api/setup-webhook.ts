@@ -6,7 +6,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
   const token = process.env.SHOPIFY_ADMIN_TOKEN;
   if (!token) return res.status(500).json({ error: "SHOPIFY_ADMIN_TOKEN not set" });
 
-  const shop = "hoop2hoop.myshopify.com";
+  const shop = "cimc-hoop2hoop.myshopify.com";
   const callbackUrl = "https://hoop2hoop-jersey-system.vercel.app/api/shopify/orders-create";
 
   const response = await fetch(
