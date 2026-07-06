@@ -251,7 +251,7 @@
     host.id = "h2h-widget-host";
     host.setAttribute("data-h2h-widget", "true");
     host.setAttribute("data-product-id", String(productId));
-    host.style.marginTop = "1rem";
+    // No margin until the widget confirms an H2H club mapping and reveals itself.
 
     // Inject hidden inputs into the form first (must stay inside the form for cart submission).
     injectHiddenInputs(form);
@@ -415,6 +415,7 @@
           iframe.style.height = data.height + "px";
           if (data.height > 80 && iframe.style.opacity === "0") {
             iframe.style.opacity = "1";
+            host.style.marginTop = "1rem";
           }
         }
       } catch (_) {}
