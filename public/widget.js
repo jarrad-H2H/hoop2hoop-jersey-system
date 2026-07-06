@@ -1,37 +1,88 @@
 // FILE: public/widget.js
+// Self-injecting widget — no Shopify theme file edits required.
+// Loaded via Shopify ScriptTag API (registered once, survives all theme updates).
+// On product pages: auto-detects the product ID, checks for an H2H club mapping,
+// injects the widget container + all hidden form inputs, and mounts the iframe.
+// On non-product pages or unmapped products: exits silently with no visible effect.
 (function () {
-  var lastSentKey = "";
+  // Capture base URL synchronously. document.currentScript works when Shopify
+  // renders the <script> tag server-side; fall back to a DOM search in case
+  // Shopify injects the tag dynamically (currentScript is null in that path).
+  var baseUrl = "https://hoop2hoop-jersey-system.vercel.app";
+  try {
+    if (document.currentScript && document.currentScript.src) {
+      baseUrl = new URL(document.currentScript.src).origin;
+    } else {
+      var scripts = document.querySelectorAll('script[src*="widget.js"]');
+      for (var _si = scripts.length - 1; _si >= 0; _si--) {
+        var _u = new URL(scripts[_si].src);
+        if (_u.pathname.indexOf("widget.js") !== -1) { baseUrl = _u.origin; break; }
+      }
+    }
+  } catch (_) {}
 
-  // Track original ATC label so we can restore it when reservation clears
+  var lastSentKey = "";
   var originalAtcLabel = null;
 
+  // ── Utilities ────────────────────────────────────────────────────────────────
   function $(sel, root) {
-    try {
-      return (root || document).querySelector(sel);
-    } catch (_) {
-      return null;
-    }
+    try { return (root || document).querySelector(sel); } catch (_) { return null; }
   }
   function $all(sel, root) {
+    try { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+    catch (_) { return []; }
+  }
+
+  // ── Product page detection ───────────────────────────────────────────────────
+  function isProductPage() {
+    return window.location.pathname.indexOf("/products/") !== -1;
+  }
+
+  // Try multiple Shopify-standard locations for the product ID.
+  // Shopify guarantees ShopifyAnalytics.meta.product.id on all product pages;
+  // the fallbacks cover edge cases (headless, older themes, page caching).
+  function getShopifyProductId() {
     try {
-      return Array.prototype.slice.call((root || document).querySelectorAll(sel));
-    } catch (_) {
-      return [];
-    }
+      var id = window.ShopifyAnalytics &&
+               window.ShopifyAnalytics.meta &&
+               window.ShopifyAnalytics.meta.product &&
+               window.ShopifyAnalytics.meta.product.id;
+      if (id) return String(id);
+    } catch (_) {}
+
+    try {
+      // Dawn product form carries data-product-id on the form element itself
+      var form = $('form[action^="/cart/add"]');
+      if (form) {
+        var attr = form.getAttribute("data-product-id") ||
+                   form.getAttribute("data-productid");
+        if (attr) return attr.trim();
+      }
+    } catch (_) {}
+
+    try {
+      // Shopify __st analytics script (Dawn 9+)
+      var stEl = document.getElementById("__st");
+      if (stEl) {
+        var stData = JSON.parse(stEl.textContent || "{}");
+        if (stData.pid) return String(stData.pid);
+      }
+    } catch (_) {}
+
+    return "";
   }
 
-  function findHost() {
-    return $('[data-h2h-widget]') || document.getElementById("h2h-jersey-widget");
-  }
-
+  // ── Variant / size reading ───────────────────────────────────────────────────
   function findProductScope(host) {
-    return host.closest('section[id^="MainProduct-"]') || host.closest("main") || document;
+    return host.closest('section[id^="MainProduct-"]') ||
+           host.closest("main") ||
+           document;
   }
 
   function findSelectedVariantId(scope) {
-    var input = $(".product-variant-id:not([disabled])", scope) || $(".product-variant-id", scope);
+    var input = $(".product-variant-id:not([disabled])", scope) ||
+                $(".product-variant-id", scope);
     if (input && input.value) return String(input.value).trim();
-
     var fallback = $('form[action^="/cart/add"] input[name="id"]', scope);
     return fallback && fallback.value ? String(fallback.value).trim() : "";
   }
@@ -66,19 +117,15 @@
       if (anyChecked && anyChecked.value) return (anyChecked.value || "").trim();
     }
 
-    // 3) Globo swatches (label.swatch-anchor ...)
+    // 3) Globo swatches
     var globoActive =
       $('.swatch-anchor[aria-pressed="true"]', scope) ||
-      $('.swatch-anchor.active', scope) ||
-      $('.swatch-anchor.selected', scope) ||
-      $('.swatch-anchor.is-selected', scope) ||
-      $('.swatch-anchor.globo-active', scope);
+      $(".swatch-anchor.active", scope) ||
+      $(".swatch-anchor.selected", scope) ||
+      $(".swatch-anchor.is-selected", scope) ||
+      $(".swatch-anchor.globo-active", scope);
+    if (globoActive && globoActive.textContent) return globoActive.textContent.trim();
 
-    if (globoActive && globoActive.textContent) {
-      return globoActive.textContent.trim();
-    }
-
-    // 3b) Globo input checked
     var checkedSwatch = $('input[id^="swatch-detail-"]:checked', scope);
     if (checkedSwatch) {
       var lbl = $('label[for="' + checkedSwatch.id + '"]', scope);
@@ -86,7 +133,7 @@
       if (checkedSwatch.value) return String(checkedSwatch.value).trim();
     }
 
-    // 4) Conservative fallback: "Size: YL"
+    // 4) Conservative fallback
     var info = $(".product__info-container", scope) || scope;
     var text = info && info.innerText ? info.innerText : "";
     var m = text.match(/Size:\s*([A-Za-z0-9]+)/);
@@ -95,17 +142,15 @@
     return "";
   }
 
+  // ── Variant change messaging ─────────────────────────────────────────────────
   function scheduleSend(iframe, payload, force) {
     var key = (payload.productId || "") + "|" + (payload.variantId || "") + "|" + (payload.size || "");
     if (!force && key === lastSentKey) return;
     lastSentKey = key;
-
-    try {
-      iframe.contentWindow && iframe.contentWindow.postMessage(payload, "*");
-    } catch (_) {}
+    try { iframe.contentWindow && iframe.contentWindow.postMessage(payload, "*"); } catch (_) {}
   }
 
-  // ---------- ATC BUTTON FIX ----------
+  // ── ATC button helpers ───────────────────────────────────────────────────────
   function findAtcButton(scope) {
     return (
       $('button[data-h2h-atc="true"]', scope) ||
@@ -116,8 +161,7 @@
 
   function getAtcLabelNode(btn) {
     if (!btn) return null;
-    var span = $("span", btn);
-    return span || btn;
+    return $("span", btn) || btn;
   }
 
   function snapshotOriginalAtcLabel(scope) {
@@ -125,100 +169,138 @@
     if (!btn) return;
     var node = getAtcLabelNode(btn);
     if (!node) return;
-
     var txt = (node.textContent || "").trim();
-    if (txt && originalAtcLabel === null) {
-      originalAtcLabel = txt;
-    }
+    if (txt && originalAtcLabel === null) originalAtcLabel = txt;
   }
 
   function forceAtcLabel(scope, label) {
     var btn = findAtcButton(scope);
     if (!btn) return;
-
     var node = getAtcLabelNode(btn);
     if (!node) return;
-
     if (originalAtcLabel === null) {
       var current = (node.textContent || "").trim();
       if (current) originalAtcLabel = current;
     }
-
     node.textContent = label;
-    try {
-      btn.setAttribute("aria-label", label);
-    } catch (_) {}
+    try { btn.setAttribute("aria-label", label); } catch (_) {}
   }
 
   function restoreAtcLabel(scope) {
     if (!originalAtcLabel) return;
     forceAtcLabel(scope, originalAtcLabel);
   }
-  // -----------------------------------
 
+  // ── Hidden input helpers ─────────────────────────────────────────────────────
   function setHiddenInputValue(id, value) {
     var input = document.getElementById(id);
     if (!input) return;
     input.value = value;
-
     try {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
     } catch (_) {}
   }
 
-  function mount() {
-    var host = findHost();
-    if (!host) return;
+  // Inject all H2H hidden inputs into the cart form (idempotent — skips if already present).
+  // The `name` attributes use Shopify's `properties[_key]` convention; underscore prefix
+  // hides them from customer-facing order confirmations.
+  var HIDDEN_INPUTS = [
+    // Standard reservation flow
+    { id: "h2h_jersey_number",          name: "properties[Jersey Number]" },
+    { id: "h2h_pending_allocation_id",  name: "properties[_h2h_pending_allocation_id]" },
+    { id: "h2h_reserved_at",            name: "properties[_h2h_reserved_at]" },
+    // Pre-order flow
+    { id: "h2h_preorder_mode",          name: "properties[_h2h_preorder_mode]" },
+    { id: "h2h_pref_1",                 name: "properties[_h2h_pref_1]" },
+    { id: "h2h_pref_2",                 name: "properties[_h2h_pref_2]" },
+    { id: "h2h_pref_3",                 name: "properties[_h2h_pref_3]" },
+    { id: "h2h_any_number",             name: "properties[_h2h_any_number]" },
+    { id: "h2h_claimed_current",        name: "properties[_h2h_claimed_current]" },
+    { id: "h2h_first_name_preorder",    name: "properties[_h2h_first_name_preorder]" },
+    { id: "h2h_last_name_preorder",     name: "properties[_h2h_last_name_preorder]" },
+    { id: "h2h_yob_preorder",           name: "properties[_h2h_yob_preorder]" },
+    { id: "h2h_age_group_preorder",     name: "properties[_h2h_age_group_preorder]" },
+    { id: "h2h_club_id_preorder",       name: "properties[_h2h_club_id_preorder]" },
+    { id: "h2h_size_preorder",          name: "properties[_h2h_size_preorder]" },
+  ];
 
-    if (host.getAttribute("data-h2h-mounted") === "true") return;
-    host.setAttribute("data-h2h-mounted", "true");
+  function injectHiddenInputs(form) {
+    HIDDEN_INPUTS.forEach(function (spec) {
+      if (document.getElementById(spec.id)) return; // already present
+      var el = document.createElement("input");
+      el.type = "hidden";
+      el.id = spec.id;
+      el.name = spec.name;
+      el.value = "";
+      form.appendChild(el);
+    });
+  }
+
+  // ── Main mount ───────────────────────────────────────────────────────────────
+  function mount(productId) {
+    // Find the cart form — our injection anchor
+    var form = $('form[action^="/cart/add"]');
+    if (!form) return;
+
+    // Avoid double-mounting (e.g. page cached in BFCache or SPA navigation)
+    if (document.getElementById("h2h-widget-host")) return;
+
+    // Create and inject the widget container. Insert it before the ATC submit button
+    // so it appears naturally in the product form flow.
+    var host = document.createElement("div");
+    host.id = "h2h-widget-host";
+    host.setAttribute("data-h2h-widget", "true");
+    host.setAttribute("data-product-id", String(productId));
+    host.style.marginTop = "1rem";
+
+    var atcBtn =
+      $('button[name="add"][type="submit"]', form) ||
+      $('button[type="submit"]', form);
+    if (atcBtn) {
+      form.insertBefore(host, atcBtn);
+    } else {
+      form.appendChild(host);
+    }
+
+    // Inject all hidden line-item property inputs into the form
+    injectHiddenInputs(form);
 
     var scope = findProductScope(host);
-    var baseUrl = new URL(document.currentScript.src).origin;
-
-    var productId = "";
-    try {
-      productId = (host.getAttribute("data-product-id") || "").trim();
-    } catch (_) {}
-
     snapshotOriginalAtcLabel(scope);
 
+    // Create the iframe. Start invisible — it becomes visible on the first
+    // h2h:resize event with a meaningful height (only fires when a club mapping
+    // is found and the widget renders real content). This means non-H2H product
+    // pages silently show nothing.
     var iframe = document.createElement("iframe");
-    iframe.src = baseUrl + "/embed/widget-demo" + "?productId=" + encodeURIComponent(productId || "");
+    iframe.src = baseUrl + "/embed/widget-demo?productId=" + encodeURIComponent(String(productId));
     iframe.style.width = "100%";
     iframe.style.border = "0";
-    iframe.style.minHeight = "520px";
+    iframe.style.height = "0";
+    iframe.style.overflow = "hidden";
+    iframe.style.opacity = "0";
+    iframe.style.transition = "opacity 0.2s";
     iframe.setAttribute("loading", "lazy");
-
     host.appendChild(iframe);
 
+    // ── Variant state broadcasting ──────────────────────────────────────────
     function sendVariantState(force) {
       var size = findSelectedSizeValue(scope);
       var variantId = findSelectedVariantId(scope);
-
       scheduleSend(
         iframe,
-        {
-          type: "h2h:variantChanged",
-          productId: productId,
-          size: size,
-          variantId: variantId,
-        },
+        { type: "h2h:variantChanged", productId: String(productId), size: size, variantId: variantId },
         force
       );
-
       snapshotOriginalAtcLabel(scope);
     }
 
-    iframe.addEventListener("load", function () {
-      sendVariantState();
-    });
+    iframe.addEventListener("load", function () { sendVariantState(); });
 
     scope.addEventListener("click", function (e) {
       var t = e && e.target;
       if (!t) return;
-
       if (
         (t.classList && t.classList.contains("swatch-anchor")) ||
         (t.closest && t.closest(".swatch-anchor")) ||
@@ -229,17 +311,13 @@
     });
 
     try {
-      var mo = new MutationObserver(function () {
-        setTimeout(sendVariantState, 0);
-      });
+      var mo = new MutationObserver(function () { setTimeout(sendVariantState, 0); });
       mo.observe(scope, { subtree: true, attributes: true, childList: true });
     } catch (_) {}
 
-    scope.addEventListener("change", function () {
-      setTimeout(sendVariantState, 0);
-    });
+    scope.addEventListener("change", function () { setTimeout(sendVariantState, 0); });
 
-    // Widget -> Shopify messages
+    // ── Widget → Shopify messages ───────────────────────────────────────────
     window.addEventListener("message", function (event) {
       try {
         if (!event || !event.data) return;
@@ -249,29 +327,20 @@
           var jerseyNum = data.jerseyNumber;
           var pendingId = data.pendingAllocationId || "";
 
-          // Dispatch CustomEvent with detail so buy-buttons.liquid unlocks
-          window.dispatchEvent(
-            new CustomEvent("h2h:reservation:ready", {
-              detail: { jerseyNumber: jerseyNum, pendingAllocationId: pendingId },
-            })
-          );
+          window.dispatchEvent(new CustomEvent("h2h:reservation:ready", {
+            detail: { jerseyNumber: jerseyNum, pendingAllocationId: pendingId },
+          }));
 
-          // Set hidden line item properties. h2h_reserved_at lets the cart watchdog
-          // (see runCartWatchdog below) know when this hold's 30-minute window started,
-          // so it can clear the line item if it's still sitting unpurchased well after
-          // the reservation itself has lapsed.
           setHiddenInputValue("h2h_jersey_number", String(jerseyNum));
           setHiddenInputValue("h2h_pending_allocation_id", String(pendingId));
           setHiddenInputValue("h2h_reserved_at", new Date().toISOString());
 
-          // Force label once unlocked
           forceAtcLabel(scope, "Add to cart");
         }
 
         if (data.type === "h2h:reservation:cleared") {
           window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
 
-          // Clear hidden line item properties
           setHiddenInputValue("h2h_jersey_number", "");
           setHiddenInputValue("h2h_pending_allocation_id", "");
           setHiddenInputValue("h2h_reserved_at", "");
@@ -279,38 +348,52 @@
           restoreAtcLabel(scope);
         }
 
-        // The widget asks for the current size/variant the moment it's actually ready
-        // to receive it -- closes the race where a customer taps a size before the
-        // iframe's React app has attached its own listener, which would otherwise
-        // drop that selection silently with no retry. "force" bypasses the dedupe
-        // below so the same size/variant gets resent even if nothing has changed.
+        // Pre-order: customer submitted preferences
+        if (data.type === "h2h:preorder:ready") {
+          setHiddenInputValue("h2h_preorder_mode",       "true");
+          setHiddenInputValue("h2h_pref_1",              data.pref1 != null ? String(data.pref1) : "");
+          setHiddenInputValue("h2h_pref_2",              data.pref2 != null ? String(data.pref2) : "");
+          setHiddenInputValue("h2h_pref_3",              data.pref3 != null ? String(data.pref3) : "");
+          setHiddenInputValue("h2h_any_number",          data.anyNumber ? "true" : "false");
+          setHiddenInputValue("h2h_claimed_current",     data.claimedCurrent != null ? String(data.claimedCurrent) : "");
+          setHiddenInputValue("h2h_first_name_preorder", String(data.firstName || ""));
+          setHiddenInputValue("h2h_last_name_preorder",  String(data.lastName || ""));
+          setHiddenInputValue("h2h_yob_preorder",        data.yob != null ? String(data.yob) : "");
+          setHiddenInputValue("h2h_age_group_preorder",  String(data.ageGroup || ""));
+          setHiddenInputValue("h2h_club_id_preorder",    String(data.clubId || ""));
+          setHiddenInputValue("h2h_size_preorder",       String(data.size || ""));
+
+          window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: data }));
+          forceAtcLabel(scope, "Add to cart");
+        }
+
+        // Widget asks for current variant the moment its React app is ready to receive it
         if (data.type === "h2h:requestState") {
           sendVariantState(true);
         }
 
-        // Widget reports its real content height as questions/results appear, so the
-        // iframe can grow to fit instead of showing its own internal scrollbar --
-        // customers were missing newly-revealed content further down the form.
-        if (data.type === "h2h:resize" && typeof data.height === "number" && data.height > 0) {
+        // Widget reports real content height — used to size the iframe and to reveal it
+        // (opacity 0 → 1) on the first resize with meaningful content. Non-H2H product
+        // pages never get meaningful content, so their iframe stays invisible.
+        if (data.type === "h2h:resize" && typeof data.height === "number") {
           iframe.style.height = data.height + "px";
+          if (data.height > 80 && iframe.style.opacity === "0") {
+            iframe.style.opacity = "1";
+          }
         }
       } catch (_) {}
     });
   }
 
-  // ---------- CART WATCHDOG ----------
-  // Catches the case where a customer reserves a number, adds it to their cart, then
-  // comes back well after the 30-minute hold has lapsed and checks out anyway. Shopify
-  // has no idea our reservation expired -- it'll happily let them pay. This runs on
-  // EVERY page (not just the product page, since this script needs to load site-wide
-  // via theme.liquid for the check to matter) and clears any stale H2H line item from
-  // the cart before that can happen, same as the customer clicking "Remove" themselves.
+  // ── Cart watchdog ─────────────────────────────────────────────────────────
+  // Removes stale H2H reservation line items from the cart after the 30-minute
+  // hold has lapsed. Pre-order items are intentionally excluded (they have no
+  // _h2h_reserved_at property) so they are never auto-removed.
   var H2H_RESERVATION_MINUTES = 30;
 
   function showExpiredCartBanner(count) {
     try {
       if (document.getElementById("h2h-expired-banner")) return;
-
       var banner = document.createElement("div");
       banner.id = "h2h-expired-banner";
       banner.setAttribute("role", "alert");
@@ -319,14 +402,12 @@
         "background:#fff7ed;color:#9a3412;border-bottom:2px solid #f59e0b;" +
         "padding:10px 16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;" +
         "text-align:center;";
-
       var msg = document.createElement("span");
       msg.textContent =
         count === 1
           ? "Your jersey number reservation expired, so we've removed it from your cart. Please go back to the product and choose your number again."
           : "Some jersey number reservations in your cart expired, so we've removed them. Please go back to the product(s) and choose your number(s) again.";
       banner.appendChild(msg);
-
       var closeBtn = document.createElement("button");
       closeBtn.type = "button";
       closeBtn.textContent = "Dismiss";
@@ -337,7 +418,6 @@
         banner.parentNode && banner.parentNode.removeChild(banner);
       };
       banner.appendChild(closeBtn);
-
       document.body.insertBefore(banner, document.body.firstChild);
     } catch (_) {}
   }
@@ -345,23 +425,12 @@
   function runCartWatchdog() {
     if (window.__h2hCartWatchdogStarted) return;
     window.__h2hCartWatchdogStarted = true;
-
     var expiryMs = H2H_RESERVATION_MINUTES * 60 * 1000;
-
     fetch("/cart.js", { credentials: "same-origin" })
-      .then(function (res) {
-        return res.ok ? res.json() : null;
-      })
+      .then(function (res) { return res.ok ? res.json() : null; })
       .then(function (cart) {
         if (!cart || !Array.isArray(cart.items)) return;
-
         var stale = cart.items.filter(function (item) {
-          // NOTE: Shopify's /cart.js returns line item properties keyed by whatever
-          // the form input's "name" attribute was (e.g. "Jersey Number", "Reservation
-          // ID" -- the customer-visible labels), NOT by the input's "id" attribute.
-          // _h2h_reserved_at is the one property we control end-to-end with a fixed,
-          // code-friendly name, so it alone is enough to identify a stale H2H item --
-          // no other line item on the site will ever carry this property.
           var props = item.properties || {};
           var reservedAtRaw = props.h2h_reserved_at || props._h2h_reserved_at;
           if (!reservedAtRaw) return false;
@@ -369,9 +438,7 @@
           if (!isFinite(reservedAt)) return false;
           return Date.now() - reservedAt > expiryMs;
         });
-
         if (stale.length === 0) return;
-
         var removals = stale.map(function (item) {
           return fetch("/cart/change.js", {
             method: "POST",
@@ -380,18 +447,28 @@
             body: JSON.stringify({ id: item.key, quantity: 0 }),
           }).catch(function () {});
         });
-
-        Promise.all(removals).then(function () {
-          showExpiredCartBanner(stale.length);
-        });
+        Promise.all(removals).then(function () { showExpiredCartBanner(stale.length); });
       })
       .catch(function () {});
   }
-  // -----------------------------------
 
+  // ── Init ──────────────────────────────────────────────────────────────────
   function init() {
-    mount();
-    runCartWatchdog();
+    runCartWatchdog(); // runs on every page — cart can be stale anywhere
+
+    if (!isProductPage()) return;
+
+    // ShopifyAnalytics isn't available until DOMContentLoaded — by the time
+    // we reach here, it should be ready. If not, retry once after a short delay.
+    var productId = getShopifyProductId();
+    if (productId) {
+      mount(productId);
+    } else {
+      setTimeout(function () {
+        productId = getShopifyProductId();
+        if (productId) mount(productId);
+      }, 500);
+    }
   }
 
   if (document.readyState === "loading") {
