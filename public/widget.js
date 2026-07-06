@@ -418,12 +418,15 @@
         // Widget reports real content height — used to size the iframe and to reveal it
         // (opacity 0 → 1) on the first resize with meaningful content. Non-H2H product
         // pages never get meaningful content, so their iframe stays invisible.
+        // Reveal only when JerseyWidget explicitly confirms a valid club mapping.
+        // This prevents the iframe appearing on any non-H2H product page.
+        if (data.type === "h2h:clubConfirmed") {
+          iframe.style.opacity = "1";
+          host.style.marginTop = "1rem";
+        }
+
         if (data.type === "h2h:resize" && typeof data.height === "number") {
           iframe.style.height = data.height + "px";
-          if (data.height > 80 && iframe.style.opacity === "0") {
-            iframe.style.opacity = "1";
-            host.style.marginTop = "1rem";
-          }
         }
       } catch (_) {}
     });

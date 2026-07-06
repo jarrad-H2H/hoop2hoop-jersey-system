@@ -184,6 +184,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     demoMode ? genderToProductType(gender) : "default"
   );
 
+  const [preorderMode, setPreorderMode] = useState<"off" | "open" | "closed" | "locked">("off");
+
   // Player gender — needed to find Gold Coast's girls-only Junior/Open Girls teams,
   // which the standard YOB-derived age ladder (U10/U12/.../U18) can never match on its
   // own. For mens/womens-labeled products this is known automatically from the Shopify
@@ -244,6 +246,15 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
   const [tick, setTick] = useState<number>(Date.now());
   const [pendingAllocationId, setPendingAllocationId] = useState<string>("");
+
+  // Pre-order preference form state (only used when preorderMode === "open")
+  const [pref1, setPref1] = useState<string>("");
+  const [pref2, setPref2] = useState<string>("");
+  const [pref3, setPref3] = useState<string>("");
+  const [anyNumber, setAnyNumber] = useState<boolean>(false);
+  const [claimedCurrentChecked, setClaimedCurrentChecked] = useState<boolean>(false);
+  const [claimedCurrentNum, setClaimedCurrentNum] = useState<string>("");
+  const [preorderSubmitted, setPreorderSubmitted] = useState<boolean>(false);
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
@@ -348,6 +359,17 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     return () => observer.disconnect();
   }, []);
 
+  // Tell widget.js the moment a valid club is confirmed so it can reveal the iframe.
+  // This is the authoritative reveal signal — widget.js never reveals based on height alone.
+  useEffect(() => {
+    if (!selectedClubId) return;
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "h2h:clubConfirmed" }, "*");
+      }
+    } catch (_) {}
+  }, [selectedClubId]);
+
   // Demo mode: sync club + size from props when they change
   useEffect(() => {
     if (!demoMode) return;
@@ -417,21 +439,24 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     const run = async () => {
       setClubDetectError(null);
       setSelectedClubId("");
+      setPreorderMode("off");
       const pid = (shopifyProductId || "").trim();
       if (!pid) return;
       const { data, error } = await supabase
         .from("shopify_product_club_map")
-        .select("shopify_product_id, club_id, product_type")
+        .select("shopify_product_id, club_id, product_type, clubs(preorder_mode)")
         .eq("shopify_product_id", pid)
         .limit(1);
       if (error) { setClubDetectError(error.message); return; }
-      const row = (data?.[0] as MappingRow | undefined) ?? undefined;
+      const row = (data?.[0] as (MappingRow & { clubs?: { preorder_mode?: string } | { preorder_mode?: string }[] | null }) | undefined) ?? undefined;
       if (!row?.club_id) {
         setClubDetectError("Club could not be detected for this product.");
         return;
       }
       setSelectedClubId(row.club_id);
       setSelectedProductType(row.product_type ?? "default");
+      const clubJoin = Array.isArray(row.clubs) ? row.clubs[0] : row.clubs;
+      setPreorderMode((clubJoin?.preorder_mode as "off" | "open" | "closed" | "locked") ?? "off");
     };
     void run();
   }, [demoMode, shopifyProductId]);
@@ -813,6 +838,58 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     }
   };
 
+  const handlePreorderSubmit = () => {
+    setError(null);
+    if (!selectedClubId) { setError(clubDetectError || "Club could not be detected for this product."); return; }
+    if (!sizeSelected) { setError("Please select a size above to continue."); return; }
+    if (!namesFilled) { setError("Please enter first name and surname."); return; }
+    if (!yobValid) { setError("Please enter a valid year of birth."); return; }
+
+    const parsePref = (s: string): number | null => {
+      if (!s.trim()) return null;
+      const n = Number(s.trim());
+      return Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= 99 && n !== 69 ? n : null;
+    };
+    const p1 = parsePref(pref1);
+    const p2 = parsePref(pref2);
+    const p3 = parsePref(pref3);
+    const claimedCurrent = claimedCurrentChecked ? parsePref(claimedCurrentNum) : null;
+
+    if (!anyNumber && p1 === null && p2 === null && p3 === null && !claimedCurrentChecked) {
+      setError("Please enter at least one number preference, or check 'Any number is fine'.");
+      return;
+    }
+    if ([pref1, pref2, pref3].some(s => s.trim() && parsePref(s) === null)) {
+      setError("Preferences must be valid jersey numbers (0–99, not 69).");
+      return;
+    }
+    if (claimedCurrentChecked && !claimedCurrentNum.trim()) {
+      setError("Please enter your current jersey number, or uncheck the keep-my-number option.");
+      return;
+    }
+    if (claimedCurrentChecked && claimedCurrent === null) {
+      setError("Current jersey number must be valid (0–99, not 69).");
+      return;
+    }
+
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({
+          type: "h2h:preorder:ready",
+          pref1: p1, pref2: p2, pref3: p3,
+          anyNumber, claimedCurrent,
+          firstName: firstName.trim(), lastName: lastName.trim(),
+          yob: yobNum, ageGroup: derivedAgeGroup,
+          clubId: selectedClubId, size: selectedSize,
+        }, "*");
+      }
+      window.dispatchEvent(new CustomEvent("h2h:preorder:ready", {
+        detail: { pref1: p1, pref2: p2, pref3: p3, anyNumber, claimedCurrent, firstName: firstName.trim(), lastName: lastName.trim(), yob: yobNum, ageGroup: derivedAgeGroup, clubId: selectedClubId, size: selectedSize },
+      }));
+    } catch (_) {}
+    setPreorderSubmitted(true);
+  };
+
   // ── Auto-scroll: nudge the customer to each newly-revealed section instead of
   // relying on them to notice and scroll manually (see useScrollIntoViewOnReveal). ──
   const genderPromptRef = useRef<HTMLDivElement>(null);
@@ -831,6 +908,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // together on screen at that point -- scrolling here risked carrying the disclaimer
   // checkbox off-screen past the customer's eye line, right before the one step they
   // must not skip.
+
+  // Production: render nothing until a club mapping is confirmed.
+  // The iframe starts at opacity:0 in widget.js and only reveals on h2h:resize
+  // with height > 80px. Returning an empty div here keeps scrollHeight = 0,
+  // so non-H2H product pages stay invisible throughout (no flash, no layout shift).
+  if (!demoMode && !selectedClubId) {
+    return <div ref={widgetRootRef} />;
+  }
 
   return (
     <div ref={widgetRootRef} className="w-full max-w-[440px]">
@@ -865,6 +950,90 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             {sizeSelected ? selectedSize : "Select a size above to continue"}
           </div>
         </div>
+
+        {/* Pre-order: window closed or locked */}
+        {(preorderMode === "closed" || preorderMode === "locked") && (
+          <div className="py-6 text-center">
+            <div className="text-3xl mb-2">🏀</div>
+            <p className="font-semibold text-gray-900">Pre-orders are now closed</p>
+            <p className="text-sm text-gray-500 mt-2">
+              Jersey number preferences are being allocated. Your club will notify you of the outcome soon.
+            </p>
+          </div>
+        )}
+
+        {/* Pre-order: window open */}
+        {preorderMode === "open" && (
+          preorderSubmitted ? (
+            <div className="py-6 text-center">
+              <div className="text-3xl mb-2">✅</div>
+              <p className="font-semibold text-gray-900">Preferences submitted!</p>
+              <p className="text-sm text-gray-500 mt-2">
+                Your jersey number preferences have been recorded. The club will allocate numbers and let you know before jerseys are produced.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">First Name</label>
+                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Michael" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Surname</label>
+                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Smith" value={lastName} onChange={(e) => setLastName(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth</label>
+                <input type="number" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2013" value={yearOfBirth} onChange={(e) => setYearOfBirth(e.target.value)} />
+              </div>
+              <div className="border-t pt-3">
+                <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">Jersey Number Preferences</div>
+                <p className="text-xs text-gray-500 mb-3">Enter up to three choices in order. Numbers are allocated first-come-first-served by payment time — earlier payers get higher priority.</p>
+                {[
+                  { label: "1st choice", val: pref1, set: setPref1 },
+                  { label: "2nd choice", val: pref2, set: setPref2 },
+                  { label: "3rd choice", val: pref3, set: setPref3 },
+                ].map(({ label, val, set }) => (
+                  <div key={label} className="flex items-center gap-2 mb-2">
+                    <label className="text-xs text-gray-600 w-24 flex-shrink-0">{label}</label>
+                    <input
+                      type="number"
+                      className="border rounded px-3 py-1.5 text-sm w-20 disabled:bg-gray-100"
+                      placeholder="0–99"
+                      value={val}
+                      onChange={(e) => set(e.target.value)}
+                      min={0}
+                      max={99}
+                      disabled={anyNumber}
+                    />
+                  </div>
+                ))}
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer mt-1">
+                  <input type="checkbox" checked={anyNumber} onChange={(e) => { setAnyNumber(e.target.checked); if (e.target.checked) { setPref1(""); setPref2(""); setPref3(""); } }} />
+                  Any number is fine — I have no preference
+                </label>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input type="checkbox" checked={claimedCurrentChecked} onChange={(e) => { setClaimedCurrentChecked(e.target.checked); if (!e.target.checked) setClaimedCurrentNum(""); }} />
+                  I currently have a jersey number I want to keep
+                </label>
+                {claimedCurrentChecked && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <label className="text-xs text-gray-600">My current number:</label>
+                    <input type="number" className="border rounded px-3 py-1.5 text-sm w-20" placeholder="0–99" value={claimedCurrentNum} onChange={(e) => setClaimedCurrentNum(e.target.value)} min={0} max={99} />
+                  </div>
+                )}
+              </div>
+              <button type="button" onClick={handlePreorderSubmit} className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
+                Submit Preferences
+              </button>
+            </>
+          )
+        )}
+
+        {/* Normal mode — not a pre-order window */}
+        {preorderMode === "off" && <>
 
         {/* First Name */}
         <div>
@@ -1174,6 +1343,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             Reservation ID saved for checkout.
           </div>
         )}
+
+        </>}
       </div>
     </div>
   );
