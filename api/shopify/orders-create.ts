@@ -12,6 +12,14 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
+// Vercel must NOT pre-parse the body — we need the raw bytes for HMAC verification.
+// Without this, Vercel consumes the stream and rawBody reads as "", breaking HMAC.
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 type ShopifyLineItem = {
   id?: number | string;
   quantity?: number;
@@ -90,6 +98,41 @@ function extractProperties(props: any): { reservationId: string; jerseyNumber: s
   }
 
   return { reservationId, jerseyNumber };
+}
+
+function extractPreorderProperties(props: any): {
+  isPreorder: boolean; pref1: number | null; pref2: number | null; pref3: number | null;
+  anyNumber: boolean; claimedCurrent: number | null;
+  firstName: string; lastName: string; yob: number | null;
+  ageGroup: string | null; clubId: string; size: string;
+} {
+  const get = (key: string): string => {
+    if (Array.isArray(props)) {
+      const p = props.find((p: any) => normalizeKey(p?.name ?? p?.key) === normalizeKey(key));
+      return String(p?.value ?? "").trim();
+    }
+    if (props && typeof props === "object") return String(props[key] ?? "").trim();
+    return "";
+  };
+  const toInt = (s: string): number | null => {
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) && Number.isInteger(n) ? n : null;
+  };
+  return {
+    isPreorder: get("_h2h_preorder_mode") === "true",
+    pref1: toInt(get("_h2h_pref_1")),
+    pref2: toInt(get("_h2h_pref_2")),
+    pref3: toInt(get("_h2h_pref_3")),
+    anyNumber: get("_h2h_any_number") === "true",
+    claimedCurrent: toInt(get("_h2h_claimed_current")),
+    firstName: get("_h2h_first_name"),
+    lastName: get("_h2h_last_name"),
+    yob: toInt(get("_h2h_yob")),
+    ageGroup: get("_h2h_age_group") || null,
+    clubId: get("_h2h_club_id"),
+    size: get("_h2h_size"),
+  };
 }
 
 async function logEvent(supabase: any, event: {
@@ -175,6 +218,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const issues: any[] = [];
 
   for (const li of lineItems) {
+    // Pre-order: detect before the reservation check
+    const preorderProps = extractPreorderProperties(li.properties);
+    if (preorderProps.isPreorder) {
+      if (!preorderProps.clubId || !preorderProps.firstName || !preorderProps.lastName || !preorderProps.yob) {
+        await logEvent(supabase, {
+          order_id: orderId, order_number: orderNumber, level: "error",
+          message: "Pre-order line item missing required fields", meta: { preorderProps },
+        });
+        continue;
+      }
+      try {
+        const { error: poErr } = await supabase.from("preorder_requests").insert({
+          club_id: preorderProps.clubId,
+          first_name: preorderProps.firstName,
+          last_name: preorderProps.lastName,
+          year_of_birth: preorderProps.yob,
+          size: preorderProps.size || "Unknown",
+          age_group: preorderProps.ageGroup,
+          pref_1: preorderProps.pref1,
+          pref_2: preorderProps.pref2,
+          pref_3: preorderProps.pref3,
+          any_number: preorderProps.anyNumber,
+          claimed_current: preorderProps.claimedCurrent,
+          shopify_order_id: orderId,
+          order_number: orderNumber || null,
+          paid_at: nowIso,
+          status: "pending",
+        });
+        if (poErr) {
+          await logEvent(supabase, { order_id: orderId, order_number: orderNumber, level: "error", message: "Failed to insert preorder_request", meta: { detail: poErr.message } });
+        } else {
+          processed += 1;
+          await logEvent(supabase, { order_id: orderId, order_number: orderNumber, level: "info", message: "Pre-order preference recorded", meta: { clubId: preorderProps.clubId, name: `${preorderProps.firstName} ${preorderProps.lastName}` } });
+        }
+      } catch (e: any) {
+        await logEvent(supabase, { order_id: orderId, order_number: orderNumber, level: "error", message: "Exception writing preorder_request", meta: { detail: e?.message ?? String(e) } });
+      }
+      continue; // don't fall through to reservation logic
+    }
+
     const { reservationId, jerseyNumber } = extractProperties(li.properties);
     if (!reservationId) continue; // not a jersey item
 

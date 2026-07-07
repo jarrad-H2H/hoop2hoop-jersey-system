@@ -312,6 +312,20 @@
     var scope = findProductScope(host);
     snapshotOriginalAtcLabel(scope);
 
+    // Tracks the last confirmed reservation so it can be re-applied if Dawn's
+    // Section Rendering API recreates the product form (destroying our injected inputs).
+    var lastReservation = null;
+
+    // Re-injects hidden inputs into the CURRENT form if they were destroyed
+    // (e.g. Dawn section rendering replaces product-form innerHTML on variant change).
+    function ensureInputsInCurrentForm() {
+      if (document.getElementById("h2h_jersey_number")) return; // still there
+      var cur = mainSection
+        ? $('form[action^="/cart/add"]', mainSection)
+        : $('form[action^="/cart/add"]');
+      if (cur) injectHiddenInputs(cur);
+    }
+
     // Create the iframe. Start invisible — it becomes visible on the first
     // h2h:resize event with a meaningful height (only fires when a club mapping
     // is found and the widget renders real content). This means non-H2H product
@@ -354,7 +368,19 @@
     });
 
     try {
-      var mo = new MutationObserver(function () { setTimeout(sendVariantState, 0); });
+      var mo = new MutationObserver(function () {
+        setTimeout(function () {
+          sendVariantState();
+          // Dawn's Section Rendering may have replaced product-form innerHTML,
+          // destroying our hidden inputs. Re-inject and re-apply any live reservation.
+          if (lastReservation && !document.getElementById("h2h_jersey_number")) {
+            ensureInputsInCurrentForm();
+            setHiddenInputValue("h2h_jersey_number", String(lastReservation.jerseyNumber));
+            setHiddenInputValue("h2h_pending_allocation_id", String(lastReservation.pendingId));
+            setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+          }
+        }, 0);
+      });
       mo.observe(scope, { subtree: true, attributes: true, childList: true });
     } catch (_) {}
 
@@ -370,18 +396,29 @@
           var jerseyNum = data.jerseyNumber;
           var pendingId = data.pendingAllocationId || "";
 
+          lastReservation = {
+            jerseyNumber: jerseyNum,
+            pendingId: pendingId,
+            reservedAt: new Date().toISOString(),
+          };
+
+          // Re-inject if form was recreated by Dawn section rendering before this message arrived
+          ensureInputsInCurrentForm();
+
           window.dispatchEvent(new CustomEvent("h2h:reservation:ready", {
             detail: { jerseyNumber: jerseyNum, pendingAllocationId: pendingId },
           }));
 
           setHiddenInputValue("h2h_jersey_number", String(jerseyNum));
           setHiddenInputValue("h2h_pending_allocation_id", String(pendingId));
-          setHiddenInputValue("h2h_reserved_at", new Date().toISOString());
+          setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
 
           forceAtcLabel(scope, "Add to cart");
         }
 
         if (data.type === "h2h:reservation:cleared") {
+          lastReservation = null;
+
           window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
 
           setHiddenInputValue("h2h_jersey_number", "");
@@ -430,6 +467,22 @@
         }
       } catch (_) {}
     });
+
+    // Capture-phase submit listener: fires before Dawn's submit handler reads FormData.
+    // Last-chance enforcement — ensures values are correct at the exact moment of
+    // form submission even if the form was recreated or values were cleared.
+    document.addEventListener("submit", function (e) {
+      try {
+        if (!lastReservation) return;
+        var t = e && e.target;
+        if (!t || !t.action) return;
+        if (String(t.action).indexOf("/cart/add") === -1) return;
+        ensureInputsInCurrentForm();
+        setHiddenInputValue("h2h_jersey_number", String(lastReservation.jerseyNumber));
+        setHiddenInputValue("h2h_pending_allocation_id", String(lastReservation.pendingId));
+        setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+      } catch (_) {}
+    }, true); // capture phase: fires before event reaches form or Dawn's listener
   }
 
   // ── Cart watchdog ─────────────────────────────────────────────────────────
