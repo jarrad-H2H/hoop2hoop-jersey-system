@@ -315,6 +315,7 @@
     // Tracks the last confirmed reservation so it can be re-applied if Dawn's
     // Section Rendering API recreates the product form (destroying our injected inputs).
     var lastReservation = null;
+    var lastPreorder = null;
 
     // Re-injects hidden inputs into the CURRENT form if they were destroyed
     // (e.g. Dawn section rendering replaces product-form innerHTML on variant change).
@@ -337,7 +338,7 @@
       atcBtn.setAttribute("data-h2h-atc-click", "true");
 
       atcBtn.addEventListener("click", function (e) {
-        if (!lastReservation) return; // no reservation → let Dawn handle normally
+        if (!lastReservation && !lastPreorder) return; // nothing set → let Dawn handle normally
 
         var variantId = findSelectedVariantId(scope);
         if (!variantId) return; // no variant selected → let Dawn handle
@@ -350,7 +351,32 @@
         var savedLabel = labelNode ? (labelNode.textContent || "").trim() : "";
         if (labelNode) labelNode.textContent = "Adding…";
 
-        var snap = lastReservation; // freeze at click time
+        var properties;
+        if (lastReservation) {
+          var snap = lastReservation; // freeze at click time
+          properties = {
+            "Jersey Number": String(snap.jerseyNumber),
+            "_h2h_pending_allocation_id": String(snap.pendingId),
+            "_h2h_reserved_at": snap.reservedAt,
+          };
+        } else {
+          var snap = lastPreorder; // freeze at click time
+          properties = {
+            "_h2h_preorder_mode": "true",
+            "_h2h_pref_1": snap.pref1 != null ? String(snap.pref1) : "",
+            "_h2h_pref_2": snap.pref2 != null ? String(snap.pref2) : "",
+            "_h2h_pref_3": snap.pref3 != null ? String(snap.pref3) : "",
+            "_h2h_any_number": snap.anyNumber ? "true" : "false",
+            "_h2h_claimed_current": snap.claimedCurrent != null ? String(snap.claimedCurrent) : "",
+            "_h2h_first_name": String(snap.firstName || ""),
+            "_h2h_last_name": String(snap.lastName || ""),
+            "_h2h_yob": snap.yob != null ? String(snap.yob) : "",
+            "_h2h_age_group": String(snap.ageGroup || ""),
+            "_h2h_club_id": String(snap.clubId || ""),
+            "_h2h_size": String(snap.size || ""),
+          };
+        }
+
         fetch("/cart/add.js", {
           method: "POST",
           credentials: "same-origin",
@@ -358,22 +384,16 @@
           body: JSON.stringify({
             id: Number(variantId),
             quantity: 1,
-            properties: {
-              "Jersey Number": String(snap.jerseyNumber),
-              "_h2h_pending_allocation_id": String(snap.pendingId),
-              "_h2h_reserved_at": snap.reservedAt,
-            },
+            properties: properties,
           }),
         })
           .then(function (r) { return r.json(); })
           .then(function (resp) {
             if (resp && resp.status && Number(resp.status) >= 400) {
-              // Shopify returned an API error (e.g. sold out, invalid variant)
               btn.removeAttribute("aria-disabled");
               if (labelNode && savedLabel) labelNode.textContent = savedLabel;
               return;
             }
-            // Success — navigate to cart so the customer can proceed to checkout
             window.location.href = "/cart";
           })
           .catch(function () {
@@ -492,23 +512,20 @@
           restoreAtcLabel(scope);
         }
 
-        // Pre-order: customer submitted preferences
+        // Pre-order: customer submitted preferences — store in lastPreorder so the
+        // ATC click handler can write them via /cart/add.js (same approach as reservations).
         if (data.type === "h2h:preorder:ready") {
-          setHiddenInputValue("h2h_preorder_mode",       "true");
-          setHiddenInputValue("h2h_pref_1",              data.pref1 != null ? String(data.pref1) : "");
-          setHiddenInputValue("h2h_pref_2",              data.pref2 != null ? String(data.pref2) : "");
-          setHiddenInputValue("h2h_pref_3",              data.pref3 != null ? String(data.pref3) : "");
-          setHiddenInputValue("h2h_any_number",          data.anyNumber ? "true" : "false");
-          setHiddenInputValue("h2h_claimed_current",     data.claimedCurrent != null ? String(data.claimedCurrent) : "");
-          setHiddenInputValue("h2h_first_name_preorder", String(data.firstName || ""));
-          setHiddenInputValue("h2h_last_name_preorder",  String(data.lastName || ""));
-          setHiddenInputValue("h2h_yob_preorder",        data.yob != null ? String(data.yob) : "");
-          setHiddenInputValue("h2h_age_group_preorder",  String(data.ageGroup || ""));
-          setHiddenInputValue("h2h_club_id_preorder",    String(data.clubId || ""));
-          setHiddenInputValue("h2h_size_preorder",       String(data.size || ""));
-
+          lastPreorder = {
+            pref1: data.pref1, pref2: data.pref2, pref3: data.pref3,
+            anyNumber: data.anyNumber,
+            claimedCurrent: data.claimedCurrent,
+            firstName: data.firstName, lastName: data.lastName,
+            yob: data.yob, ageGroup: data.ageGroup,
+            clubId: data.clubId, size: data.size,
+          };
           window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
+          setupAtcClickHandler();
         }
 
         // Widget asks for current variant the moment its React app is ready to receive it

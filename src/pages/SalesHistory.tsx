@@ -1,7 +1,7 @@
 // FILE: src/pages/SalesHistory.tsx
 // Sales History admin page — shows all completed jersey sales logged by the webhook.
 import React, { useEffect, useState, useCallback } from "react";
-import { supabase } from "../services/supabase";
+import { supabase, fetchAllPages } from "../services/supabase";
 import { ShoppingBag, RefreshCw, Filter, Download } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
@@ -58,17 +58,19 @@ const SalesHistory: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [{ data: salesData, error: sErr }, { data: clubData }] = await Promise.all([
-        supabase
-          .from("orders")
-          .select("*")
-          .not("purchased_at", "is", null)
-          .order("purchased_at", { ascending: false }),
+      const [salesData, { data: clubData }] = await Promise.all([
+        fetchAllPages<SaleRow>((from, to) =>
+          supabase
+            .from("orders")
+            .select("*")
+            .not("purchased_at", "is", null)
+            .order("purchased_at", { ascending: false })
+            .range(from, to)
+        ),
         supabase.from("clubs").select("id, name").order("name"),
       ]);
 
-      if (sErr) throw sErr;
-      setSales((salesData ?? []) as SaleRow[]);
+      setSales(salesData);
       setClubs((clubData ?? []) as Club[]);
     } catch (e: any) {
       setError(e?.message ?? "Failed to load sales history.");

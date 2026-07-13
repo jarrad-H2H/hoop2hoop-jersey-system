@@ -18,6 +18,7 @@ import {
   Search,
   Activity,
   FileSpreadsheet,
+  ClipboardList,
 } from "lucide-react";
 
 type NavItem = {
@@ -102,6 +103,12 @@ const Layout: React.FC = () => {
       label: "Sales History",
       icon: <ShoppingBag size={20} />,
       match: (p) => p.startsWith("/admin/sales-history"),
+    },
+    {
+      path: "/admin/preorder",
+      label: "Pre-Order Manager",
+      icon: <ClipboardList size={20} />,
+      match: (p) => p.startsWith("/admin/preorder"),
     },
     {
       path: "/admin/stock-planner",

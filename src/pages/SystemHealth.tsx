@@ -1,6 +1,6 @@
 // FILE: src/pages/SystemHealth.tsx
 import React, { useCallback, useEffect, useState } from "react";
-import { supabase } from "../services/supabase";
+import { supabase, fetchAllPages } from "../services/supabase";
 import { Activity, AlertTriangle, CheckCircle2, RefreshCw, Mail } from "lucide-react";
 import { SkeletonCards } from "../components/ui/Skeleton";
 
@@ -117,20 +117,21 @@ const SystemHealth: React.FC = () => {
     setError(null);
 
     try {
+      // inventory and allocations must paginate — both are cross-club full-table
+      // scans that will silently truncate at 1000 rows as the system grows.
       const [
         clubsRes,
         mappingsRes,
         sizesRes,
-        inventoryRes,
         pendingRes,
         webhookRes,
-        allocationsLogRes,
         reconciledRes,
+        inventoryRows,
+        allocationsLogRows,
       ] = await Promise.all([
         supabase.from("clubs").select("id, name, is_client").eq("is_client", true),
         supabase.from("shopify_product_club_map").select("club_id"),
         supabase.from("club_sizes").select("club_id"),
-        supabase.from("inventory").select("club_id, jersey_number, status"),
         supabase
           .from("pending_allocations")
           .select("id, club_id, jersey_number, expires_at, status")
@@ -143,15 +144,21 @@ const SystemHealth: React.FC = () => {
           .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
           .order("created_at", { ascending: false }),
         supabase
-          .from("allocations")
-          .select("club_id, jersey_number, allocation_type, player_first_name, player_last_name, created_at")
-          .in("allocation_type", ["new", "swap", "end", "return"])
-          .order("created_at", { ascending: true }),
-        supabase
           .from("pending_allocations")
           .select("id, club_id, jersey_number, size, order_number, player_first_name, player_last_name, purchased_at")
           .eq("status", "reconciled")
           .order("purchased_at", { ascending: false }),
+        fetchAllPages<{ club_id: string; jersey_number: number; status: string }>((from, to) =>
+          supabase.from("inventory").select("club_id, jersey_number, status").range(from, to)
+        ),
+        fetchAllPages<{ club_id: string; jersey_number: number; allocation_type: string; player_first_name: string | null; player_last_name: string | null; created_at: string }>((from, to) =>
+          supabase
+            .from("allocations")
+            .select("club_id, jersey_number, allocation_type, player_first_name, player_last_name, created_at")
+            .in("allocation_type", ["new", "swap", "end", "return"])
+            .order("created_at", { ascending: true })
+            .range(from, to)
+        ),
       ]);
 
       const liveClubs = clubsRes.data ?? [];
@@ -162,7 +169,7 @@ const SystemHealth: React.FC = () => {
 
       const availableByClub = new Map<string, number>();
       const allocatedSet = new Set<string>(); // `${club_id}::${jersey_number}`
-      for (const row of inventoryRes.data ?? []) {
+      for (const row of inventoryRows) {
         if (row.status === "Available") {
           availableByClub.set(row.club_id, (availableByClub.get(row.club_id) ?? 0) + 1);
         }
@@ -208,7 +215,7 @@ const SystemHealth: React.FC = () => {
         string,
         { allocation_type: string; player_first_name: string | null; player_last_name: string | null; club_id: string }
       >();
-      for (const r of allocationsLogRes.data ?? []) {
+      for (const r of allocationsLogRows) {
         const key = `${r.club_id}::${r.jersey_number}`;
         latestAllocationByKey.set(key, r as any);
       }

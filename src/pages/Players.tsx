@@ -115,7 +115,8 @@ const Players: React.FC = () => {
 
         const { data, error } = await query
           .order("last_name", { ascending: true })
-          .order("first_name", { ascending: true });
+          .order("first_name", { ascending: true })
+          .limit(2000);
 
         if (error) {
           console.error("Players loadPlayers error", error);

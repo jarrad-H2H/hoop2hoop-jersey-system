@@ -1,7 +1,7 @@
 // FILE: src/pages/NumberReport.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { supabase } from "../services/supabase";
+import { supabase, fetchAllPages } from "../services/supabase";
 import { FileSpreadsheet, FileDown } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
@@ -27,29 +27,6 @@ interface Competition {
 interface Club {
   id: string;
   name: string;
-}
-
-const PAGE_SIZE = 1000;
-
-/** Pages through a query in batches of 1000 -- Supabase/PostgREST caps a single
- * request at 1000 rows by default, which silently truncates anything larger
- * (confirmed in production: 4000+ active players across two competitions). Every
- * fetch in this page is also scoped (by club, or by one competition) rather than
- * pulling the whole table, so this loop only ever runs over a bounded slice. */
-async function fetchAllPages<T>(
-  buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>
-): Promise<T[]> {
-  const rows: T[] = [];
-  let from = 0;
-  while (true) {
-    const { data, error } = await buildQuery(from, from + PAGE_SIZE - 1);
-    if (error) throw error;
-    const batch = data ?? [];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) break;
-    from += PAGE_SIZE;
-  }
-  return rows;
 }
 
 const PLAYER_COLUMNS =

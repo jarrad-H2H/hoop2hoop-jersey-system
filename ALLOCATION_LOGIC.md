@@ -254,6 +254,199 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 
 ---
 
+## 17. Pre-Order System (Planned — Not Yet Built)
+
+> This section documents the agreed design for a pre-order allocation mode. No code has been written. Read this before starting any implementation work on pre-orders.
+
+### What Pre-Order Is (and Isn't)
+
+The existing widget allocates jersey numbers from **physical stock already sitting in the H2H warehouse**. A customer picks a number, it reserves a specific jersey on the shelf, and the webhook confirms the allocation at checkout. The stock must exist before any order is taken.
+
+Pre-order is a **separate mode** for situations where jersey stock does not yet exist and won't be produced until after all the orders are collected — for example, a club launching a new jersey design, or a new club H2H is onboarding for the first time. In pre-order mode:
+
+- Players declare their **number preferences** (first, second, third choice, or "any")
+- H2H collects all requests before production begins
+- Once the pre-order window closes, numbers are **batch-assigned** using a FCFS-by-payment algorithm
+- The assigned numbers inform the production run (which numbers and sizes to make)
+
+Pre-order is **additive** — it does not replace the existing stock-based widget. Both modes coexist. The per-club `is_client` flag already gates the widget; a new per-club `preorder_mode` setting will gate pre-order independently.
+
+---
+
+### When Pre-Order Applies — Two Scenarios
+
+**Scenario A — New jersey design / new club rollout (no prior records):**
+The system has BC-imported player records (names, teams, age groups) but **no jersey number history at all** — `final_shirt` is null for everyone. The "I currently wear #X" reclaim tickbox (see below) is the *sole* mechanism to capture what numbers returning players already wear on their old jersey.
+
+**Scenario B — Established club already using the live widget (has records):**
+The `players` table already has `final_shirt` values from prior widget purchases. The system can treat those stored numbers as the player's existing claimed number — the reclaim tickbox is still offered but the system can pre-populate it from `final_shirt`.
+
+In both scenarios the algorithm and data model are the same. The only difference is whether `final_shirt` is already populated.
+
+---
+
+### Number Pool and Age-Group Boundaries
+
+Jersey number uniqueness in pre-order is scoped to **age-group pools**, not to individual teams. The pool boundary is the same 2-year age-group window already defined in Section 3 (`getClashYobWindow` / the age-group clash window table).
+
+**Why age-group pools, not single-year cohorts:**
+A player born in 2013 and a player born in 2014 can and do play on the same real team (age groups are 2-year bands). Splitting them into separate pools by single birth year would allow number clashes between genuine teammates. The existing 2-year window already captures this correctly.
+
+**Pool capacity:** 99 usable numbers (0–99 excluding 69). A pool is considered "at capacity" when all 99 numbers are claimed within it — see Overflow Handling below.
+
+---
+
+### FCFS-by-Payment Algorithm
+
+When the admin closes the pre-order window, the system runs a batch allocation in order of **payment timestamp** (Shopify `created_at` for the order, i.e. the time payment was confirmed).
+
+For each age-group pool at a club, working strictly in payment order:
+
+1. Take the player's **first preference** — if unclaimed in this pool, assign it.
+2. If first preference is taken, try **second preference**, then **third preference**.
+3. If all stated preferences are taken, assign any **remaining available number** automatically (system picks — no admin intervention needed for the routine case).
+4. Players who ticked "any number" (no specific preference) are processed last within each pool and receive whatever is still available.
+
+**Reclaimed existing numbers are processed before preferences:**
+Before the FCFS pass runs, all players who ticked "I currently wear #X" have that number tentatively reserved for them. Then FCFS runs on everyone else. If two players claim the same existing number via the reclaim tickbox, the earlier payer keeps it and the later payer is treated as if they had no reclaim (their numbered preferences are used instead).
+
+**No manual step is required** for the routine assignment — the algorithm fully allocates every player. The admin export/import flow (see below) exists for the exception case: reviewing and correcting assignments before production is finalised.
+
+---
+
+### Number Preference Collection (Widget Side)
+
+The pre-order widget asks players for, in addition to the standard fields (name, YOB, size):
+
+- **1st preference number** (required)
+- **2nd preference number** (optional)
+- **3rd preference number** (optional)
+- **"Any number" tickbox** — if ticked, preferences are ignored and the system assigns freely
+- **"I currently wear #X" tickbox** — see Reclaim Mechanism below
+
+The widget validates that stated preferences are valid jersey numbers (0–99, not 69) but does **not** do real-time clash checking — it cannot know whether that number will conflict with a later payer. Clash resolution happens in the batch step after the window closes, not at order time. The widget should make this expectation explicit to the customer: "We'll confirm your number after the pre-order window closes."
+
+---
+
+### Returning Player / Reclaim Mechanism
+
+In the live widget, `lookupPlayerByName` checks the `players` table for a player's existing jersey and allows them to "keep" it. This works because the system holds a confirmed `final_shirt` from a prior purchase.
+
+**In a pre-order rollout (Scenario A), there are no prior purchase records.** The reclaim tickbox is the only source of truth:
+
+- Player ticks "I currently wear number X on my old jersey"
+- This is taken **on trust** — no verification is possible
+- It is recorded on the `preorder_requests` row as `claimed_current_number`
+- During batch allocation, claimed numbers get first priority for those players (subject to collision resolution — see FCFS above)
+- If a player falsely claims a number that isn't theirs, admin can correct it via the export/import round-trip before production is locked in
+
+In Scenario B (established club), `final_shirt` from the players table is shown to the player as their known current number, and the reclaim tickbox is pre-ticked accordingly. The player can un-tick if they want a different number this season.
+
+---
+
+### Overflow Handling
+
+**Design principle: never hard-cap an order.** If more than 99 players in one age-group pool place pre-orders, the system must not block the 100th order. Basketball is unpredictable — a club can't guarantee exact headcounts — and refusing to take an order creates more operational pain than having two players share a number temporarily.
+
+**When a pool exceeds 99 pre-orders:**
+- Accept the order normally and record the request
+- Flag the overflow to the admin (email alert or a System Health indicator)
+- The excess players (those who did not receive an unshared number after the batch run) appear clearly in the admin export as "overflow — needs resolution"
+- Admin resolves by: (a) negotiating with the club (some players may agree to share across different teams, which is allowed per Sections 2a and 2c), (b) adding numbers from a different pool if the player is permitted to play up, or (c) contacting affected players to assign a number manually
+
+The overflow case is expected to be genuinely rare given that a typical team is 8–12 players and an age-group pool can fit 99. It becomes possible only if a single club has 8+ full teams in one age group. Admin is the safety valve — the system surfaces the problem but does not attempt to auto-resolve it.
+
+---
+
+### Admin Workflow
+
+1. **Open pre-order window** — admin sets the club to `preorder_mode = 'open'`. From this point, the pre-order widget is live for that club.
+2. **Monitor requests** — admin can view incoming pre-order requests in real time (no allocation yet — just a list of requests).
+3. **Close window and run allocation** — admin clicks "Close & Allocate". System runs the FCFS batch and writes assigned numbers to each `preorder_requests` row.
+4. **Review and correct** — admin exports to Excel, reviews the assignments, and corrects any overflow or edge cases. Clubs cannot re-submit the spreadsheet with freeform annotations — strict re-import format only (see below).
+5. **Import corrections** — admin re-imports the corrected Excel. System validates format strictly and updates assignments.
+6. **Lock and produce** — admin marks the pre-order as finalised. The assigned numbers are written back to `players.final_shirt` and `inventory` rows are created, so the records look the same as if the purchases had gone through the live widget.
+7. **Optional: reopen for another round** — admin can reopen the pre-order window for late registrations. A new FCFS pass runs over the late requests using the already-assigned numbers as taken, so latecomers fill whatever gaps remain. Multiple rounds are supported.
+
+---
+
+### Excel Export/Import Round-Trip
+
+**Export format (columns we control — never deviate):**
+
+| Column | Notes |
+|---|---|
+| `request_id` | UUID generated by the system — the re-import key. Never modify. |
+| `club_name` | Read-only label (display only). |
+| `age_group` | Read-only label. |
+| `first_name` | Read-only label. |
+| `last_name` | Read-only label. |
+| `year_of_birth` | Read-only label. |
+| `size` | Read-only label. |
+| `pref_1` | Player's stated 1st preference (read-only). |
+| `pref_2` | Player's stated 2nd preference (read-only). |
+| `pref_3` | Player's stated 3rd preference (read-only). |
+| `any_number` | TRUE/FALSE — player's "any" flag (read-only). |
+| `claimed_current` | Player's reclaim tickbox value, if set (read-only). |
+| `assigned_number` | The system-assigned number. **Admin edits this column only.** |
+| `admin_notes` | Free text for internal use — ignored on re-import. |
+
+**Import validation rules (strict — no exceptions):**
+- All columns must be present with exact header names (case-sensitive)
+- No extra columns, no merged cells, no hidden rows
+- `request_id` must match an existing pre-order request exactly — unknown IDs are rejected
+- `assigned_number` must be a valid integer 0–99 (excluding 69), or blank (means "leave unchanged")
+- Any row that fails validation rejects the **entire import** with a clear error listing which row(s) failed and why
+- The `admin_notes` column is accepted but completely ignored — it is there so staff can leave annotations without breaking the import
+- Colour coding, bold, italics, borders — all ignored silently (we read cell values only)
+
+**Why this strictness:** Clubs will inevitably try to send back spreadsheets with highlights, strikethroughs, and margin notes. Attempting to interpret these would introduce silent data corruption. The rule is: `assigned_number` column + `request_id` key only. Everything else is decoration.
+
+---
+
+### Data Model (Planned — Not Yet Created)
+
+**New table: `preorder_requests`**
+```
+id               uuid PK
+club_id          uuid FK → clubs
+player_id        uuid FK → players (nullable — new players won't have a record yet)
+season           int  (e.g. 2027)
+first_name       text
+last_name        text
+year_of_birth    int
+size             text
+age_group        text  (derived at request time from YOB)
+pref_1           int nullable
+pref_2           int nullable
+pref_3           int nullable
+any_number       bool default false
+claimed_current  int nullable   (reclaim tickbox value)
+assigned_number  int nullable   (set by batch allocation or admin override)
+shopify_order_id text           (for FCFS sort — matches orders.shopify_order_id)
+paid_at          timestamptz    (for FCFS sort)
+status           text           ('pending' | 'allocated' | 'overflow' | 'locked')
+created_at       timestamptz default now()
+```
+
+**New column: `clubs.preorder_mode`**
+```
+preorder_mode    text default 'off'   ('off' | 'open' | 'closed' | 'locked')
+```
+
+The `preorder_mode` column gates the pre-order widget independently of `is_client`. A club can be `is_client = true` (live widget active) and `preorder_mode = 'open'` simultaneously — the two modes serve different products/seasons and do not interfere with each other.
+
+---
+
+### What Is Not Changing
+
+- **Clash logic in `allocation.ts`** is not touched for pre-order. The batch allocator re-uses `getClashYobWindow` to determine pool boundaries, but does not call `smartCheckNumber`/`suggestNumbersForClubRanked` (those are for real-time stock-based checking).
+- **`reserve_jersey` RPC** is not involved in pre-order — there is no inventory to reserve against until after production.
+- **The existing live widget** continues operating unchanged for clubs in stock-based mode.
+- **BC CSV import** is unchanged — pre-order relies on the same `players` table populated by BC import.
+
+---
+
 ## 16. Task #32 / #35 Test Results (2026-06-22)
 
 Verified using a synthetic "H2H Test Club" fixture and `scripts/test-task32-35.ts`, which calls the real exported functions (`isAgeGroupCrossPool`, `smartCheckNumber`, `reserveNumberForPurchase`) under the anon key, the same way the live widget does. All scenarios passed after fixing three real bugs uncovered along the way:
