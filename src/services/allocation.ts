@@ -819,8 +819,7 @@ export async function suggestNumbersForClubRanked(input: {
 
     const stockDepth = stockCounts.get(n) ?? 0;
     const adjUse = adjCounts.get(n) ?? 0;
-    const lowNumberPenalty = n >= 0 && n <= 10 ? 2 : 0;
-    const score = adjUse * 100 + lowNumberPenalty * 10 - stockDepth * 2;
+    const score = adjUse * 100 - stockDepth * 2;
 
     scored.push({ jersey_number: n, total_stock: stockDepth, score });
   }

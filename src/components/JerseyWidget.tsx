@@ -734,7 +734,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         crossPoolCheck,
         productType: selectedProductType,
         excludePlayerId: matchedPlayerId,
-        limit: 12,
+        limit: 30,
       });
 
       const pref = Number(preferredNumber);
