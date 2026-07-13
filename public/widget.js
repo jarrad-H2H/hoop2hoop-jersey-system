@@ -326,6 +326,63 @@
       if (cur) injectHiddenInputs(cur);
     }
 
+    // Intercepts the Add-to-Cart button click to write reservation properties
+    // directly into a /cart/add.js JSON request. This bypasses Dawn's FormData
+    // form-submit path entirely — the hidden-inputs approach is unreliable when
+    // Dawn's Section Rendering destroys and recreates the product form between
+    // reservation and submission.
+    function setupAtcClickHandler() {
+      var atcBtn = findAtcButton(scope);
+      if (!atcBtn || atcBtn.getAttribute("data-h2h-atc-click")) return;
+      atcBtn.setAttribute("data-h2h-atc-click", "true");
+
+      atcBtn.addEventListener("click", function (e) {
+        if (!lastReservation) return; // no reservation → let Dawn handle normally
+
+        var variantId = findSelectedVariantId(scope);
+        if (!variantId) return; // no variant selected → let Dawn handle
+
+        e.preventDefault();
+
+        var btn = e.currentTarget;
+        btn.setAttribute("aria-disabled", "true");
+        var labelNode = getAtcLabelNode(btn);
+        var savedLabel = labelNode ? (labelNode.textContent || "").trim() : "";
+        if (labelNode) labelNode.textContent = "Adding…";
+
+        var snap = lastReservation; // freeze at click time
+        fetch("/cart/add.js", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            id: Number(variantId),
+            quantity: 1,
+            properties: {
+              "Jersey Number": String(snap.jerseyNumber),
+              "_h2h_pending_allocation_id": String(snap.pendingId),
+              "_h2h_reserved_at": snap.reservedAt,
+            },
+          }),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (resp) {
+            if (resp && resp.status && Number(resp.status) >= 400) {
+              // Shopify returned an API error (e.g. sold out, invalid variant)
+              btn.removeAttribute("aria-disabled");
+              if (labelNode && savedLabel) labelNode.textContent = savedLabel;
+              return;
+            }
+            // Success — navigate to cart so the customer can proceed to checkout
+            window.location.href = "/cart";
+          })
+          .catch(function () {
+            btn.removeAttribute("aria-disabled");
+            if (labelNode && savedLabel) labelNode.textContent = savedLabel;
+          });
+      }, true); // capture phase — fires before Dawn's submit handler
+    }
+
     // Create the iframe. Start invisible — it becomes visible on the first
     // h2h:resize event with a meaningful height (only fires when a club mapping
     // is found and the widget renders real content). This means non-H2H product
@@ -354,6 +411,7 @@
     }
 
     iframe.addEventListener("load", function () { sendVariantState(); });
+    setupAtcClickHandler();
 
     scope.addEventListener("click", function (e) {
       var t = e && e.target;
@@ -379,6 +437,8 @@
             setHiddenInputValue("h2h_pending_allocation_id", String(lastReservation.pendingId));
             setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
           }
+          // Re-attach click handler if ATC button was recreated by Section Rendering
+          setupAtcClickHandler();
         }, 0);
       });
       mo.observe(scope, { subtree: true, attributes: true, childList: true });
@@ -412,6 +472,10 @@
           setHiddenInputValue("h2h_jersey_number", String(jerseyNum));
           setHiddenInputValue("h2h_pending_allocation_id", String(pendingId));
           setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+
+          // Ensure the click-interception handler is attached to the current ATC button.
+          // (The button could have been recreated since mount() ran.)
+          setupAtcClickHandler();
 
           forceAtcLabel(scope, "Add to cart");
         }
