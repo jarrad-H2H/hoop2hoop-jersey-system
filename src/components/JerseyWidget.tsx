@@ -859,6 +859,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     const p3 = parsePref(pref3);
     const claimedCurrent = claimedCurrentChecked ? parsePref(claimedCurrentNum) : null;
 
+    if (!playerGenderAnswer) { setError("Please select a gender."); return; }
     if (!anyNumber && p1 === null && p2 === null && p3 === null && !claimedCurrentChecked) {
       setError("Please enter at least one number preference, or check 'Any number is fine'.");
       return;
@@ -885,10 +886,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           firstName: firstName.trim(), lastName: lastName.trim(),
           yob: yobNum, ageGroup: derivedAgeGroup,
           clubId: selectedClubId, size: selectedSize,
+          gender: playerGenderAnswer,
         }, "*");
       }
       window.dispatchEvent(new CustomEvent("h2h:preorder:ready", {
-        detail: { pref1: p1, pref2: p2, pref3: p3, anyNumber, claimedCurrent, firstName: firstName.trim(), lastName: lastName.trim(), yob: yobNum, ageGroup: derivedAgeGroup, clubId: selectedClubId, size: selectedSize },
+        detail: { pref1: p1, pref2: p2, pref3: p3, anyNumber, claimedCurrent, firstName: firstName.trim(), lastName: lastName.trim(), yob: yobNum, ageGroup: derivedAgeGroup, clubId: selectedClubId, size: selectedSize, gender: playerGenderAnswer },
       }));
     } catch (_) {}
     setPreorderSubmitted(true);
@@ -989,6 +991,17 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth</label>
                 <input type="number" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2013" value={yearOfBirth} onChange={(e) => setYearOfBirth(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Gender</label>
+                <div className="flex gap-4">
+                  {(["Male", "Female"] as const).map((g) => (
+                    <label key={g} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                      <input type="radio" name="preorder-gender" checked={playerGenderAnswer === g} onChange={() => setPlayerGenderAnswer(g)} />
+                      {g}
+                    </label>
+                  ))}
+                </div>
               </div>
               <div className="border-t pt-3">
                 <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">Jersey Number Preferences</div>

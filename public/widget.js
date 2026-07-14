@@ -374,6 +374,7 @@
             "_h2h_age_group": String(snap.ageGroup || ""),
             "_h2h_club_id": String(snap.clubId || ""),
             "_h2h_size": String(snap.size || ""),
+            "_h2h_gender": String(snap.gender || ""),
           };
         }
 
@@ -522,6 +523,7 @@
             firstName: data.firstName, lastName: data.lastName,
             yob: data.yob, ageGroup: data.ageGroup,
             clubId: data.clubId, size: data.size,
+            gender: data.gender,
           };
           window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: data }));
           forceAtcLabel(scope, "Add to cart");

@@ -104,7 +104,7 @@ function extractPreorderProperties(props: any): {
   isPreorder: boolean; pref1: number | null; pref2: number | null; pref3: number | null;
   anyNumber: boolean; claimedCurrent: number | null;
   firstName: string; lastName: string; yob: number | null;
-  ageGroup: string | null; clubId: string; size: string;
+  ageGroup: string | null; clubId: string; size: string; gender: string | null;
 } {
   const get = (key: string): string => {
     if (Array.isArray(props)) {
@@ -132,6 +132,7 @@ function extractPreorderProperties(props: any): {
     ageGroup: get("_h2h_age_group") || null,
     clubId: get("_h2h_club_id"),
     size: get("_h2h_size"),
+    gender: get("_h2h_gender") || null,
   };
 }
 
@@ -241,6 +242,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           pref_3: preorderProps.pref3,
           any_number: preorderProps.anyNumber,
           claimed_current: preorderProps.claimedCurrent,
+          gender: preorderProps.gender,
           shopify_order_id: orderId,
           order_number: orderNumber || null,
           paid_at: nowIso,

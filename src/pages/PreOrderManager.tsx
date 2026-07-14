@@ -34,7 +34,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 const EXPORT_COLUMNS = [
   "request_id", "club_name", "age_group", "first_name", "last_name",
-  "year_of_birth", "size", "pref_1", "pref_2", "pref_3", "any_number",
+  "year_of_birth", "gender", "size", "pref_1", "pref_2", "pref_3", "any_number",
   "claimed_current", "assigned_number", "status", "order_number", "paid_at", "admin_notes",
 ];
 
@@ -83,7 +83,7 @@ const PreOrderManager: React.FC = () => {
       const rows = await fetchAllPages<PreorderRequest>((from, to) =>
         supabase
           .from("preorder_requests")
-          .select("id, club_id, first_name, last_name, year_of_birth, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at")
+          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at")
           .eq("club_id", selectedClubId)
           .eq("season", season)
           .order("paid_at", { ascending: true, nullsFirst: false })
@@ -166,6 +166,7 @@ const PreOrderManager: React.FC = () => {
       first_name: r.first_name,
       last_name: r.last_name,
       year_of_birth: r.year_of_birth,
+      gender: r.gender ?? "",
       size: r.size,
       pref_1: r.pref_1 ?? "",
       pref_2: r.pref_2 ?? "",
@@ -476,6 +477,7 @@ const PreOrderManager: React.FC = () => {
                 <th className="px-3 py-2 text-left font-semibold">#</th>
                 <th className="px-3 py-2 text-left font-semibold">Player</th>
                 <th className="px-3 py-2 text-left font-semibold">YOB</th>
+                <th className="px-3 py-2 text-left font-semibold">Gender</th>
                 <th className="px-3 py-2 text-left font-semibold">Age Group</th>
                 <th className="px-3 py-2 text-left font-semibold">Size</th>
                 <th className="px-3 py-2 text-left font-semibold">Preferences</th>
@@ -493,6 +495,7 @@ const PreOrderManager: React.FC = () => {
                     {r.order_number && <span className="ml-1 text-gray-400">#{r.order_number}</span>}
                   </td>
                   <td className="px-3 py-2">{r.year_of_birth}</td>
+                  <td className="px-3 py-2">{r.gender ?? "—"}</td>
                   <td className="px-3 py-2">{r.age_group ?? "—"}</td>
                   <td className="px-3 py-2">{r.size}</td>
                   <td className="px-3 py-2">

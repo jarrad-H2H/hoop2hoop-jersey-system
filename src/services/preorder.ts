@@ -16,6 +16,7 @@ export interface PreorderRequest {
   pref_3: number | null;
   any_number: boolean;
   claimed_current: number | null;
+  gender: "Male" | "Female" | null;
   assigned_number: number | null;
   shopify_order_id: string | null;
   order_number: string | null;
@@ -47,7 +48,7 @@ export async function runFcfsAllocation(
   const allRequests = await fetchAllPages<PreorderRequest>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("id, club_id, first_name, last_name, year_of_birth, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, paid_at, status, created_at, shopify_order_id, order_number")
+      .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, paid_at, status, created_at, shopify_order_id, order_number")
       .eq("club_id", clubId)
       .eq("season", season)
       .neq("status", "overflow")
