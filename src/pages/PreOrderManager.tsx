@@ -359,7 +359,7 @@ const PreOrderManager: React.FC = () => {
 
           {/* Action buttons */}
           <div className="flex flex-wrap gap-3">
-            {(mode === "off" || mode === "closed") && (
+            {(mode === "off" || mode === "closed" || mode === "locked") && (
               <button
                 type="button"
                 onClick={() => setMode("open")}
