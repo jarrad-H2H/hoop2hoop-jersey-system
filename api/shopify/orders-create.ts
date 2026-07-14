@@ -136,6 +136,75 @@ function extractPreorderProperties(props: any): {
   };
 }
 
+// ── Shopify inventory sync helper ───────────────────────────────────────────
+// Reads Available jersey counts per size from our inventory table and pushes
+// them to Shopify variant stock levels. Called after each confirmed stock-mode
+// order so the Shopify storefront always reflects real available stock.
+// Errors are logged but never throw — they must not affect the webhook response.
+const SHOPIFY_API_VERSION_SYNC = "2024-01";
+
+function shopifyAdminFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const domain = process.env.SHOPIFY_STORE_DOMAIN ?? "";
+  const token = process.env.SHOPIFY_ADMIN_TOKEN ?? "";
+  return fetch(`https://${domain}/admin/api/${SHOPIFY_API_VERSION_SYNC}/${path}`, {
+    ...options,
+    headers: {
+      "X-Shopify-Access-Token": token,
+      "Content-Type": "application/json",
+      ...(options.headers ?? {}),
+    },
+  });
+}
+
+async function syncClubToShopify(supabase: any, clubId: string): Promise<void> {
+  if (!process.env.SHOPIFY_ADMIN_TOKEN || !process.env.SHOPIFY_STORE_DOMAIN) return;
+
+  const { data: mappings } = await supabase
+    .from("shopify_product_club_map")
+    .select("shopify_product_id, product_type")
+    .eq("club_id", clubId);
+  if (!mappings || mappings.length === 0) return;
+
+  const { data: inv } = await supabase
+    .from("inventory")
+    .select("size, product_type")
+    .eq("club_id", clubId)
+    .eq("status", "Available");
+
+  const countsByProductType: Record<string, Record<string, number>> = {};
+  for (const row of inv ?? []) {
+    const pt = String((row as any).product_type || "default") || "default";
+    const size = String((row as any).size || "").trim();
+    if (!size) continue;
+    countsByProductType[pt] ??= {};
+    countsByProductType[pt][size] = (countsByProductType[pt][size] ?? 0) + 1;
+  }
+
+  const locRes = await shopifyAdminFetch("locations.json");
+  if (!locRes.ok) return;
+  const { locations } = await locRes.json() as { locations: { id: number; active: boolean }[] };
+  const location = locations.find(l => l.active) ?? locations[0];
+  if (!location) return;
+
+  for (const m of mappings as { shopify_product_id: string; product_type: string }[]) {
+    const counts = countsByProductType[m.product_type || "default"] ?? {};
+    const varRes = await shopifyAdminFetch(`products/${m.shopify_product_id}/variants.json?limit=250`);
+    if (!varRes.ok) continue;
+    const { variants } = await varRes.json() as { variants: { title: string; inventory_item_id: number }[] };
+    for (const v of variants) {
+      await shopifyAdminFetch("inventory_levels/set.json", {
+        method: "POST",
+        body: JSON.stringify({
+          location_id: location.id,
+          inventory_item_id: v.inventory_item_id,
+          available: counts[v.title.trim()] ?? 0,
+        }),
+      });
+    }
+  }
+}
+// ────────────────────────────────────────────────────────────────────────────
+
 async function logEvent(supabase: any, event: {
   order_id?: string | null;
   order_number?: string | null;
@@ -217,6 +286,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const nowIso = new Date().toISOString();
   let processed = 0;
   const issues: any[] = [];
+  const syncClubIds = new Set<string>(); // clubs with confirmed stock-mode orders → sync to Shopify after loop
 
   for (const li of lineItems) {
     // Pre-order: detect before the reservation check
@@ -291,6 +361,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
         continue;
       }
+
+      // Track this club for post-loop Shopify inventory sync (stock mode only)
+      const reservationClubId = String((pending as any).club_id ?? "");
+      if (reservationClubId) syncClubIds.add(reservationClubId);
 
       // Idempotency: Shopify retries webhooks — a second delivery is a no-op
       if (pending.status === "purchased" || pending.status === "reconciled") {
@@ -535,6 +609,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await logEvent(supabase, {
         level: "error", message: "Unhandled exception processing reservation",
         meta: { detail: e?.message ?? String(e) },
+      });
+    }
+  }
+
+  // Sync available inventory counts to Shopify for every club that had a confirmed
+  // stock-mode order this webhook call. Pre-order line items never add to syncClubIds.
+  for (const clubId of syncClubIds) {
+    try {
+      await syncClubToShopify(supabase, clubId);
+      await logEvent(supabase, {
+        order_id: orderId, order_number: orderNumber, level: "info",
+        message: "Shopify inventory synced after order", meta: { clubId },
+      });
+    } catch (syncErr: any) {
+      await logEvent(supabase, {
+        order_id: orderId, order_number: orderNumber, level: "warn",
+        message: "Shopify inventory sync failed after order — run manual sync from Bulk Stock Upload",
+        meta: { clubId, detail: syncErr?.message ?? String(syncErr) },
       });
     }
   }
