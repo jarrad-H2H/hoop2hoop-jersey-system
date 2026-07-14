@@ -169,6 +169,7 @@ interface FinaliseRow {
   age_group: string | null;
   assigned_number: number;
   player_id: string | null;
+  product_type: string | null;
 }
 
 export async function finalisePreorder(
@@ -178,7 +179,7 @@ export async function finalisePreorder(
   const requests = await fetchAllPages<FinaliseRow>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id")
+      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "allocated")
@@ -218,7 +219,7 @@ export async function finalisePreorder(
         jersey_number: req.assigned_number,
         size: req.size,
         status: "Allocated",
-        product_type: "default",
+        product_type: req.product_type ?? "unisex",
       });
       await supabase.from("preorder_requests").update({ status: "locked" }).eq("id", req.id);
       locked++;

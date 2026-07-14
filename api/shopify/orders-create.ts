@@ -22,6 +22,7 @@ export const config = {
 
 type ShopifyLineItem = {
   id?: number | string;
+  product_id?: number | string;
   quantity?: number;
   properties?: any;
 };
@@ -300,6 +301,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         continue;
       }
       try {
+        // Look up the product type from the Shopify product mapping so finalise
+        // can create inventory rows with the correct product_type.
+        let preorderProductType: string | null = null;
+        const lineProductId = li.product_id != null ? String(li.product_id) : null;
+        if (lineProductId) {
+          const { data: mapRow } = await supabase
+            .from("shopify_product_club_map")
+            .select("jersey_gender")
+            .eq("shopify_product_id", lineProductId)
+            .maybeSingle();
+          preorderProductType = (mapRow as any)?.jersey_gender ?? null;
+        }
+
         const { error: poErr } = await supabase.from("preorder_requests").insert({
           club_id: preorderProps.clubId,
           first_name: preorderProps.firstName,
@@ -313,6 +327,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           any_number: preorderProps.anyNumber,
           claimed_current: preorderProps.claimedCurrent,
           gender: preorderProps.gender,
+          product_type: preorderProductType,
           shopify_order_id: orderId,
           order_number: orderNumber || null,
           paid_at: nowIso,
