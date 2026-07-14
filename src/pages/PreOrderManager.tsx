@@ -48,6 +48,7 @@ const PreOrderManager: React.FC = () => {
 
   const [requests, setRequests] = useState<PreorderRequest[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [actionLoading, setActionLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -79,7 +80,13 @@ const PreOrderManager: React.FC = () => {
   const loadRequests = useCallback(async () => {
     if (!selectedClubId) { setRequests([]); return; }
     setLoadingRequests(true);
+    setLoadError(null);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setLoadError("Session expired — please sign out and sign back in to view pre-order requests.");
+        return;
+      }
       const rows = await fetchAllPages<PreorderRequest>((from, to) =>
         supabase
           .from("preorder_requests")
@@ -91,6 +98,8 @@ const PreOrderManager: React.FC = () => {
           .range(from, to)
       );
       setRequests(rows);
+    } catch (e: any) {
+      setLoadError(e?.message ?? "Failed to load requests. Your session may have expired — try signing out and back in.");
     } finally {
       setLoadingRequests(false);
     }
@@ -458,7 +467,13 @@ const PreOrderManager: React.FC = () => {
       {/* Requests table */}
       {loadingRequests && <SkeletonTable rows={6} cols={8} />}
 
-      {!loadingRequests && requests.length === 0 && selectedClubId && (
+      {loadError && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
+          {loadError}
+        </div>
+      )}
+
+      {!loadingRequests && !loadError && requests.length === 0 && selectedClubId && (
         <EmptyState
           icon={ClipboardList}
           title="No pre-order requests yet"
