@@ -21,6 +21,7 @@ import CrossClubSearch from "./pages/CrossClubSearch";
 import NumberReport from "./pages/NumberReport";
 import SystemHealth from "./pages/SystemHealth";
 import PreOrderManager from "./pages/PreOrderManager";
+import UserManagement from "./pages/UserManagement";
 
 // Components
 import Importer from "./components/Importer";
@@ -62,6 +63,7 @@ const AppRouter: React.FC = () => {
         <Route path="inventory/bulk-upload/:clubId" element={<BulkStockUpload />} />
         <Route path="sales-history" element={<SalesHistory />} />
         <Route path="preorder" element={<PreOrderManager />} />
+        <Route path="users" element={<UserManagement />} />
         <Route path="widget-demo" element={<WidgetDemo />} />
       </Route>
 

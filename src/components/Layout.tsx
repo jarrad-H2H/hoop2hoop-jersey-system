@@ -19,6 +19,7 @@ import {
   Activity,
   FileSpreadsheet,
   ClipboardList,
+  UserCog,
 } from "lucide-react";
 
 type NavItem = {
@@ -127,6 +128,12 @@ const Layout: React.FC = () => {
       label: "Competition Gender",
       icon: <SplitSquareVertical size={20} />,
       match: (p) => p.startsWith("/admin/competition-gender"),
+    },
+    {
+      path: "/admin/users",
+      label: "User Management",
+      icon: <UserCog size={20} />,
+      match: (p) => p.startsWith("/admin/users"),
     },
     {
       path: "/admin/settings",
