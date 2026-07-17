@@ -125,19 +125,30 @@ const PreOrderManager: React.FC = () => {
     setActionLoading(false);
   };
 
-  const handleCloseAndAllocate = async () => {
+  const handleGenerateReport = async () => {
     if (!selectedClubId) return;
-    if (!window.confirm(`Run FCFS allocation now for ${selectedClub?.name ?? "this club"} — season ${season}?\n\nThis will assign numbers to all pending requests. You can still correct them via Export/Import before locking.`)) return;
+    if (!window.confirm(`Generate allocation report for ${selectedClub?.name ?? "this club"} — season ${season}?\n\nThis will run the FCFS number allocation and download an Excel report for the club to review.`)) return;
     setActionLoading(true);
     setActionMsg(null);
     try {
       const result = await runFcfsAllocation(selectedClubId, season);
-      await setModeNoConfirm("closed");
-      await loadRequests();
+      // Fetch the freshly allocated rows so the export includes assigned numbers
+      const fresh = await fetchAllPages<PreorderRequest>((from, to) =>
+        supabase
+          .from("preorder_requests")
+          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at")
+          .eq("club_id", selectedClubId)
+          .eq("season", season)
+          .order("paid_at", { ascending: true, nullsFirst: false })
+          .order("created_at", { ascending: true })
+          .range(from, to)
+      );
+      setRequests(fresh);
+      handleExport(fresh);
       const overflowNote = result.overflow > 0 ? ` ⚠️ ${result.overflow} overflow — pool(s) exceeded 99 players, manual resolution needed.` : "";
-      setActionMsg({ type: result.overflow > 0 ? "err" : "ok", text: `Allocated ${result.allocated} requests.${overflowNote}` });
+      setActionMsg({ type: result.overflow > 0 ? "err" : "ok", text: `Report generated and downloaded. Send it to the club for review.${overflowNote}` });
     } catch (e: any) {
-      setActionMsg({ type: "err", text: `Allocation failed: ${e?.message ?? "unknown error"}` });
+      setActionMsg({ type: "err", text: `Report generation failed: ${e?.message ?? "unknown error"}` });
     }
     setActionLoading(false);
   };
@@ -180,7 +191,7 @@ const PreOrderManager: React.FC = () => {
       }
 
       const hasErr = result.errors.length > 0;
-      setActionMsg({ type: hasErr ? "err" : "ok", text: `Locked ${result.locked} requests.${errNote}${shopifyNote}` });
+      setActionMsg({ type: hasErr ? "err" : "ok", text: `Confirmed ${result.locked} allocations.${errNote}${shopifyNote}` });
     } catch (e: any) {
       setActionMsg({ type: "err", text: `Lock failed: ${e?.message ?? "unknown error"}` });
     }
@@ -193,10 +204,11 @@ const PreOrderManager: React.FC = () => {
   };
 
   // ── Excel export ────────────────────────────────────────────────────────────
-  const handleExport = () => {
-    if (requests.length === 0) return;
+  const handleExport = (exportRows?: PreorderRequest[]) => {
+    const data = exportRows ?? requests;
+    if (data.length === 0) return;
     const clubName = selectedClub?.name ?? "";
-    const rows = requests.map(r => ({
+    const sheetRows = data.map(r => ({
       request_id: r.id,
       club_name: clubName,
       age_group: r.age_group ?? "",
@@ -216,9 +228,7 @@ const PreOrderManager: React.FC = () => {
       paid_at: r.paid_at ? new Date(r.paid_at).toLocaleString() : "",
       admin_notes: "",
     }));
-    const ws = XLSX.utils.json_to_sheet(rows, { header: EXPORT_COLUMNS });
-
-    // Lock all columns except assigned_number and admin_notes for clarity
+    const ws = XLSX.utils.json_to_sheet(sheetRows, { header: EXPORT_COLUMNS });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Pre-Orders");
     XLSX.writeFile(wb, `preorder_${clubName.replace(/\s+/g, "_")}_${season}.xlsx`);
@@ -385,9 +395,11 @@ const PreOrderManager: React.FC = () => {
             </div>
           )}
 
-          {/* Action buttons */}
+          {/* Action buttons — linear 4-step workflow */}
           <div className="flex flex-wrap gap-3">
-            {(mode === "off" || mode === "closed" || mode === "locked") && (
+
+            {/* Step 0: open the window */}
+            {(mode === "off" || mode === "locked") && (
               <button
                 type="button"
                 onClick={() => setMode("open")}
@@ -399,78 +411,75 @@ const PreOrderManager: React.FC = () => {
               </button>
             )}
 
-            {mode === "open" && (
-              <button
-                type="button"
-                onClick={handleCloseAndAllocate}
-                disabled={actionLoading || counts.pending === 0}
-                className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50"
-              >
-                <Play size={15} />
-                Close &amp; Run Allocation
-                {counts.pending > 0 && <span className="ml-1 bg-white/20 px-1.5 rounded-full">{counts.pending}</span>}
-              </button>
-            )}
-
+            {/* Step 1: close the window (taking orders → closed) */}
             {mode === "open" && (
               <button
                 type="button"
                 onClick={() => setMode("closed")}
                 disabled={actionLoading}
-                className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
-              >
-                Close Window (no allocation yet)
-              </button>
-            )}
-
-            {mode === "closed" && (
-              <button
-                type="button"
-                onClick={handleLock}
-                disabled={actionLoading}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50"
               >
                 <Lock size={15} />
-                Lock &amp; Finalise
+                Close Pre-Orders
               </button>
             )}
 
-            {(mode === "closed" || mode === "locked") && requests.length > 0 && (
+            {/* Step 2: run FCFS + auto-download report for club review
+                Only shown when mode=closed and no numbers have been allocated yet */}
+            {mode === "closed" && counts.allocated === 0 && counts.overflow === 0 && counts.pending > 0 && (
+              <button
+                type="button"
+                onClick={handleGenerateReport}
+                disabled={actionLoading}
+                className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50"
+              >
+                <Play size={15} />
+                Generate Allocation Report
+                <span className="ml-1 bg-white/20 px-1.5 rounded-full">{counts.pending}</span>
+              </button>
+            )}
+
+            {/* Steps 3 & 4: shown once allocation has been run */}
+            {mode === "closed" && (counts.allocated > 0 || counts.overflow > 0) && (
               <>
+                {/* Step 3: upload the club's approved/corrected report */}
+                <label className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 cursor-pointer">
+                  <Upload size={15} />
+                  Upload Approved Report
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleImportFile}
+                    className="hidden"
+                  />
+                </label>
+
+                {/* Step 4: lock, write to players/inventory, and update Shopify orders */}
                 <button
                   type="button"
-                  onClick={handleExport}
-                  className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
+                  onClick={handleLock}
+                  disabled={actionLoading}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
                 >
-                  <Download size={15} />
-                  Export to Excel
+                  <Lock size={15} />
+                  Confirm &amp; Write to Orders
                 </button>
-                {mode === "closed" && (
-                  <label className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 cursor-pointer">
-                    <Upload size={15} />
-                    Import Corrections
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".xlsx,.xls"
-                      onChange={handleImportFile}
-                      className="hidden"
-                    />
-                  </label>
-                )}
               </>
             )}
 
-            {mode === "open" && requests.length > 0 && (
+            {/* Re-download report — available whenever there are requests */}
+            {requests.length > 0 && mode !== "off" && (
               <button
                 type="button"
-                onClick={handleExport}
+                onClick={() => handleExport()}
                 className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
               >
                 <Download size={15} />
-                Export Current Requests
+                {mode === "open" ? "Export Current Requests" : "Re-download Report"}
               </button>
             )}
+
           </div>
 
           {/* Action result */}
