@@ -151,8 +151,36 @@ const PreOrderManager: React.FC = () => {
       const result = await finalisePreorder(selectedClubId, season);
       await setModeNoConfirm("locked");
       await loadRequests();
+
       const errNote = result.errors.length > 0 ? ` ${result.errors.length} error(s): ${result.errors.slice(0, 3).join("; ")}` : "";
-      setActionMsg({ type: result.errors.length > 0 ? "err" : "ok", text: `Locked ${result.locked} requests.${errNote}` });
+      let shopifyNote = "";
+
+      // Write allocated numbers back to Shopify orders as note_attributes (shows on packing slip)
+      if (result.shopifyUpdates.length > 0) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token ?? "";
+          const syncRes = await fetch("/api/preorder/sync-orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+            body: JSON.stringify({ orders: result.shopifyUpdates }),
+          });
+          const syncJson = await syncRes.json();
+          if (syncJson.ok) {
+            shopifyNote = ` ${syncJson.updated} Shopify order${syncJson.updated !== 1 ? "s" : ""} updated with allocated numbers.`;
+            if (syncJson.errors?.length > 0) {
+              shopifyNote += ` (${syncJson.errors.length} Shopify update error(s) — check server logs.)`;
+            }
+          } else {
+            shopifyNote = ` Shopify update failed: ${syncJson.error ?? "unknown"}`;
+          }
+        } catch {
+          shopifyNote = " Could not update Shopify orders — numbers are locked in the system but packing slips may need manual update.";
+        }
+      }
+
+      const hasErr = result.errors.length > 0;
+      setActionMsg({ type: hasErr ? "err" : "ok", text: `Locked ${result.locked} requests.${errNote}${shopifyNote}` });
     } catch (e: any) {
       setActionMsg({ type: "err", text: `Lock failed: ${e?.message ?? "unknown error"}` });
     }

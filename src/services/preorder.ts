@@ -170,16 +170,22 @@ interface FinaliseRow {
   assigned_number: number;
   player_id: string | null;
   product_type: string | null;
+  shopify_order_id: string | null;
+}
+
+export interface ShopifyOrderUpdate {
+  shopifyOrderId: string;
+  jerseyNumber: number;
 }
 
 export async function finalisePreorder(
   clubId: string,
   season: number
-): Promise<{ locked: number; errors: string[] }> {
+): Promise<{ locked: number; errors: string[]; shopifyUpdates: ShopifyOrderUpdate[] }> {
   const requests = await fetchAllPages<FinaliseRow>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type")
+      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type, shopify_order_id")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "allocated")
@@ -189,6 +195,7 @@ export async function finalisePreorder(
 
   let locked = 0;
   const errors: string[] = [];
+  const shopifyUpdates: ShopifyOrderUpdate[] = [];
 
   for (const req of requests) {
     if (req.assigned_number == null) continue;
@@ -223,13 +230,16 @@ export async function finalisePreorder(
       });
       await supabase.from("preorder_requests").update({ status: "locked" }).eq("id", req.id);
       locked++;
+      if (req.shopify_order_id) {
+        shopifyUpdates.push({ shopifyOrderId: req.shopify_order_id, jerseyNumber: req.assigned_number });
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "unknown error";
       errors.push(`${req.first_name} ${req.last_name}: ${msg}`);
     }
   }
 
-  return { locked, errors };
+  return { locked, errors, shopifyUpdates };
 }
 
 /** Validates a row from the admin correction Excel import.
