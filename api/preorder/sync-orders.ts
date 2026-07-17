@@ -1,11 +1,13 @@
 // FILE: api/preorder/sync-orders.ts
 // After pre-order finalisation, writes each player's allocated jersey number
-// back to their Shopify order as a note_attribute so it appears on the packing slip.
-// POST { orders: [{shopifyOrderId, jerseyNumber}] }  — requires authenticated admin JWT.
+// back to their Shopify line item properties so it appears on the packing slip.
+// POST { orders: [{shopifyOrderId, shopifyLineItemId, jerseyNumber}] } — requires authenticated admin JWT.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
 export const maxDuration = 60;
+
+const SHOPIFY_API_VERSION = "2024-01";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
@@ -42,38 +44,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Parse body
   const body = req.body ?? {};
-  const raw: Array<{ shopifyOrderId: string; jerseyNumber: number }> = Array.isArray(body.orders) ? body.orders : [];
+  const raw: Array<{ shopifyOrderId: string; shopifyLineItemId: string; jerseyNumber: number }> =
+    Array.isArray(body.orders) ? body.orders : [];
 
   if (raw.length === 0) {
     return res.status(200).json({ ok: true, updated: 0, errors: [] });
   }
 
-  // Group by shopifyOrderId — one order can have multiple jersey line items (rare but possible)
-  const grouped = new Map<string, number[]>();
+  // Group by shopifyOrderId — one PUT per order even when a parent bought for two kids
+  const grouped = new Map<string, Array<{ lineItemId: string; jerseyNumber: number }>>();
   for (const o of raw) {
-    const id = String(o.shopifyOrderId ?? "").trim();
-    if (!id) continue;
-    if (!grouped.has(id)) grouped.set(id, []);
-    grouped.get(id)!.push(Number(o.jerseyNumber));
+    const orderId = String(o.shopifyOrderId ?? "").trim();
+    const lineItemId = String(o.shopifyLineItemId ?? "").trim();
+    if (!orderId || !lineItemId) continue;
+    if (!grouped.has(orderId)) grouped.set(orderId, []);
+    grouped.get(orderId)!.push({ lineItemId, jerseyNumber: Number(o.jerseyNumber) });
   }
 
   let updated = 0;
   const errors: string[] = [];
 
   const results = await Promise.allSettled(
-    Array.from(grouped.entries()).map(async ([shopifyOrderId, jerseyNumbers]) => {
-      const noteAttributes = [
-        { name: "Allocated Jersey #", value: jerseyNumbers.join(", ") },
-      ];
+    Array.from(grouped.entries()).map(async ([shopifyOrderId, items]) => {
+      // One PUT per order: send only the line items being updated.
+      // Shopify updates those line items in place, leaving all others untouched.
+      // properties is a full replacement — this clears all _h2h_* pre-order fields
+      // and writes just "Jersey Number: 42" for a clean packing slip.
+      const lineItemsPayload = items.map(({ lineItemId, jerseyNumber }) => ({
+        id: Number(lineItemId),
+        properties: [{ name: "Jersey Number", value: String(jerseyNumber) }],
+      }));
 
-      const url = `https://${STORE_DOMAIN}/admin/api/2024-10/orders/${shopifyOrderId}.json`;
+      const url = `https://${STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/orders/${shopifyOrderId}.json`;
       const resp = await fetch(url, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           "X-Shopify-Access-Token": ADMIN_TOKEN,
         },
-        body: JSON.stringify({ order: { id: Number(shopifyOrderId), note_attributes: noteAttributes } }),
+        body: JSON.stringify({
+          order: { id: Number(shopifyOrderId), line_items: lineItemsPayload },
+        }),
       });
 
       if (!resp.ok) {
@@ -84,11 +95,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   );
 
   for (const r of results) {
-    if (r.status === "fulfilled") {
-      updated++;
-    } else {
-      errors.push((r.reason as Error)?.message ?? "unknown error");
-    }
+    if (r.status === "fulfilled") updated++;
+    else errors.push((r.reason as Error)?.message ?? "unknown error");
   }
 
   return res.status(200).json({ ok: true, updated, errors });

@@ -329,6 +329,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           gender: preorderProps.gender,
           product_type: preorderProductType,
           shopify_order_id: orderId,
+          shopify_line_item_id: li?.id != null ? String(li.id) : null,
           order_number: orderNumber || null,
           paid_at: nowIso,
           status: "pending",

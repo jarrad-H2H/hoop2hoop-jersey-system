@@ -171,10 +171,12 @@ interface FinaliseRow {
   player_id: string | null;
   product_type: string | null;
   shopify_order_id: string | null;
+  shopify_line_item_id: string | null;
 }
 
 export interface ShopifyOrderUpdate {
   shopifyOrderId: string;
+  shopifyLineItemId: string;
   jerseyNumber: number;
 }
 
@@ -185,7 +187,7 @@ export async function finalisePreorder(
   const requests = await fetchAllPages<FinaliseRow>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type, shopify_order_id")
+      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type, shopify_order_id, shopify_line_item_id")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "allocated")
@@ -230,8 +232,12 @@ export async function finalisePreorder(
       });
       await supabase.from("preorder_requests").update({ status: "locked" }).eq("id", req.id);
       locked++;
-      if (req.shopify_order_id) {
-        shopifyUpdates.push({ shopifyOrderId: req.shopify_order_id, jerseyNumber: req.assigned_number });
+      if (req.shopify_order_id && req.shopify_line_item_id) {
+        shopifyUpdates.push({
+          shopifyOrderId: req.shopify_order_id,
+          shopifyLineItemId: req.shopify_line_item_id,
+          jerseyNumber: req.assigned_number,
+        });
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "unknown error";
