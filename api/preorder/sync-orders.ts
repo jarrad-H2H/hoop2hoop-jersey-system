@@ -66,30 +66,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const results = await Promise.allSettled(
     Array.from(grouped.entries()).map(async ([shopifyOrderId, items]) => {
-      // One PUT per order: send only the line items being updated.
-      // Shopify updates those line items in place, leaving all others untouched.
-      // properties is a full replacement — this clears all _h2h_* pre-order fields
-      // and writes just "Jersey Number: 42" for a clean packing slip.
-      const lineItemsPayload = items.map(({ lineItemId, jerseyNumber }) => ({
-        id: Number(lineItemId),
-        properties: [{ name: "Jersey Number", value: String(jerseyNumber) }],
-      }));
+      const baseUrl = `https://${STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}`;
+      const headers = { "Content-Type": "application/json", "X-Shopify-Access-Token": ADMIN_TOKEN };
 
-      const url = `https://${STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/orders/${shopifyOrderId}.json`;
-      const resp = await fetch(url, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Access-Token": ADMIN_TOKEN,
-        },
-        body: JSON.stringify({
-          order: { id: Number(shopifyOrderId), line_items: lineItemsPayload },
-        }),
+      // GET full order to retrieve all line items (Shopify requires the full array in the PUT)
+      const getResp = await fetch(`${baseUrl}/orders/${shopifyOrderId}.json?fields=id,line_items`, { headers });
+      if (!getResp.ok) {
+        const text = await getResp.text().catch(() => getResp.statusText);
+        throw new Error(`Order ${shopifyOrderId} GET: HTTP ${getResp.status} — ${text.slice(0, 200)}`);
+      }
+      const { order: existingOrder } = await getResp.json() as { order: { id: number; line_items: Array<{ id: number; properties: Array<{ name: string; value: string }> }> } };
+
+      // Build a lookup of which line items need their properties replaced
+      const updateMap = new Map(items.map(({ lineItemId, jerseyNumber }) => [String(lineItemId), jerseyNumber]));
+
+      // Send ALL line items back: H2H ones get new properties, others keep existing
+      const lineItemsPayload = existingOrder.line_items.map(li => {
+        const jerseyNumber = updateMap.get(String(li.id));
+        if (jerseyNumber != null) {
+          return { id: li.id, properties: [{ name: "Jersey Number", value: String(jerseyNumber) }] };
+        }
+        return { id: li.id, properties: li.properties ?? [] };
       });
 
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => resp.statusText);
-        throw new Error(`Order ${shopifyOrderId}: HTTP ${resp.status} — ${text.slice(0, 200)}`);
+      const putResp = await fetch(`${baseUrl}/orders/${shopifyOrderId}.json`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ order: { id: Number(shopifyOrderId), line_items: lineItemsPayload } }),
+      });
+
+      if (!putResp.ok) {
+        const text = await putResp.text().catch(() => putResp.statusText);
+        throw new Error(`Order ${shopifyOrderId} PUT: HTTP ${putResp.status} — ${text.slice(0, 200)}`);
       }
     })
   );
