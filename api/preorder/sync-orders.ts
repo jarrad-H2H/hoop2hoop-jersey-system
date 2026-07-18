@@ -71,27 +71,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const results = await Promise.allSettled(
     Array.from(grouped.entries()).map(async ([shopifyOrderId, players]) => {
-      // One note_attribute per player — clearly labelled on the packing slip.
-      // Single child:  "Jersey # - Emma Test: 7"
-      // Multi-child:   separate lines, one per child, so pickers know exactly which number goes to which kid.
-      const noteAttributes = players.map(p => ({
-        name: `Jersey # - ${p.firstName} ${p.lastName}`,
-        value: String(p.jerseyNumber),
-      }));
+      const baseUrl = `https://${STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}`;
+      const headers = { "Content-Type": "application/json", "X-Shopify-Access-Token": ADMIN_TOKEN };
 
-      const url = `https://${STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/orders/${shopifyOrderId}.json`;
-      const resp = await fetch(url, {
+      // GET existing order note so we can append rather than overwrite
+      const getResp = await fetch(`${baseUrl}/orders/${shopifyOrderId}.json?fields=id,note`, { headers });
+      if (!getResp.ok) {
+        const text = await getResp.text().catch(() => getResp.statusText);
+        throw new Error(`Order ${shopifyOrderId} GET: HTTP ${getResp.status} — ${text.slice(0, 200)}`);
+      }
+      const { order: existingOrder } = await getResp.json() as { order: { id: number; note: string | null } };
+
+      // Build the jersey allocation block — one line per player
+      const allocationLines = players
+        .map(p => `${p.firstName} ${p.lastName} — Jersey #${p.jerseyNumber}`)
+        .join("\n");
+      const allocationBlock = `JERSEY ALLOCATIONS:\n${allocationLines}`;
+
+      // Append to existing note if present, otherwise set as the note
+      const existingNote = (existingOrder.note ?? "").trim();
+      const newNote = existingNote ? `${existingNote}\n\n${allocationBlock}` : allocationBlock;
+
+      const putResp = await fetch(`${baseUrl}/orders/${shopifyOrderId}.json`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Access-Token": ADMIN_TOKEN,
-        },
-        body: JSON.stringify({ order: { id: Number(shopifyOrderId), note_attributes: noteAttributes } }),
+        headers,
+        body: JSON.stringify({ order: { id: Number(shopifyOrderId), note: newNote } }),
       });
 
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => resp.statusText);
-        throw new Error(`Order ${shopifyOrderId}: HTTP ${resp.status} — ${text.slice(0, 200)}`);
+      if (!putResp.ok) {
+        const text = await putResp.text().catch(() => putResp.statusText);
+        throw new Error(`Order ${shopifyOrderId} PUT: HTTP ${putResp.status} — ${text.slice(0, 200)}`);
       }
     })
   );
