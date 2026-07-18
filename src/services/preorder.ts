@@ -248,6 +248,31 @@ export async function finalisePreorder(
   return { locked, errors, shopifyUpdates };
 }
 
+/** Returns ShopifyOrderUpdate entries for all locked requests that have both IDs set.
+ *  Used by the re-sync flow to push allocated numbers to Shopify without re-finalising. */
+export async function getLockedShopifyUpdates(
+  clubId: string,
+  season: number
+): Promise<ShopifyOrderUpdate[]> {
+  const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number }>((from, to) =>
+    supabase
+      .from("preorder_requests")
+      .select("shopify_order_id, shopify_line_item_id, assigned_number")
+      .eq("club_id", clubId)
+      .eq("season", season)
+      .eq("status", "locked")
+      .not("shopify_order_id", "is", null)
+      .not("shopify_line_item_id", "is", null)
+      .not("assigned_number", "is", null)
+      .range(from, to) as any
+  );
+  return rows.map(r => ({
+    shopifyOrderId: r.shopify_order_id,
+    shopifyLineItemId: r.shopify_line_item_id,
+    jerseyNumber: r.assigned_number,
+  }));
+}
+
 /** Validates a row from the admin correction Excel import.
  *  Returns an error string, or null if valid. */
 export function validateImportRow(

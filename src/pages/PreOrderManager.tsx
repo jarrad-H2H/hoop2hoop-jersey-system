@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, fetchAllPages } from "../services/supabase";
-import { runFcfsAllocation, validateImportRow, finalisePreorder, type PreorderRequest } from "../services/preorder";
+import { runFcfsAllocation, validateImportRow, finalisePreorder, getLockedShopifyUpdates, type PreorderRequest } from "../services/preorder";
 import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
@@ -194,6 +194,38 @@ const PreOrderManager: React.FC = () => {
       setActionMsg({ type: hasErr ? "err" : "ok", text: `Confirmed ${result.locked} allocations.${errNote}${shopifyNote}` });
     } catch (e: any) {
       setActionMsg({ type: "err", text: `Lock failed: ${e?.message ?? "unknown error"}` });
+    }
+    setActionLoading(false);
+  };
+
+  const handleResync = async () => {
+    if (!selectedClubId) return;
+    setActionLoading(true);
+    setActionMsg(null);
+    try {
+      const updates = await getLockedShopifyUpdates(selectedClubId, season);
+      if (updates.length === 0) {
+        setActionMsg({ type: "ok", text: "No locked allocations with Shopify order data found to re-sync." });
+        setActionLoading(false);
+        return;
+      }
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token ?? "";
+      const syncRes = await fetch("/api/preorder/sync-orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ orders: updates }),
+      });
+      const syncJson = await syncRes.json();
+      if (syncJson.ok) {
+        let msg = `Re-synced ${syncJson.updated} Shopify order${syncJson.updated !== 1 ? "s" : ""} with allocated numbers.`;
+        if (syncJson.errors?.length > 0) msg += ` (${syncJson.errors.length} error(s) — check server logs.)`;
+        setActionMsg({ type: "ok", text: msg });
+      } else {
+        setActionMsg({ type: "err", text: `Re-sync failed: ${syncJson.error ?? "unknown"}` });
+      }
+    } catch (e: any) {
+      setActionMsg({ type: "err", text: `Re-sync failed: ${e?.message ?? "unknown"}` });
     }
     setActionLoading(false);
   };
@@ -408,6 +440,19 @@ const PreOrderManager: React.FC = () => {
               >
                 <Unlock size={15} />
                 {mode === "off" ? "Open Pre-Order Window" : "Re-Open for Another Round"}
+              </button>
+            )}
+
+            {/* Re-sync: push allocated numbers to Shopify again (locked state only) */}
+            {mode === "locked" && (
+              <button
+                type="button"
+                onClick={handleResync}
+                disabled={actionLoading}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+              >
+                <RefreshCw size={15} />
+                Re-sync Shopify Orders
               </button>
             )}
 
