@@ -178,6 +178,8 @@ export interface ShopifyOrderUpdate {
   shopifyOrderId: string;
   shopifyLineItemId: string;
   jerseyNumber: number;
+  firstName: string;
+  lastName: string;
 }
 
 export async function finalisePreorder(
@@ -237,6 +239,8 @@ export async function finalisePreorder(
           shopifyOrderId: req.shopify_order_id,
           shopifyLineItemId: req.shopify_line_item_id,
           jerseyNumber: req.assigned_number,
+          firstName: req.first_name,
+          lastName: req.last_name,
         });
       }
     } catch (e: unknown) {
@@ -254,10 +258,10 @@ export async function getLockedShopifyUpdates(
   clubId: string,
   season: number
 ): Promise<ShopifyOrderUpdate[]> {
-  const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number }>((from, to) =>
+  const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number; first_name: string; last_name: string }>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("shopify_order_id, shopify_line_item_id, assigned_number")
+      .select("shopify_order_id, shopify_line_item_id, assigned_number, first_name, last_name")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "locked")
@@ -270,6 +274,8 @@ export async function getLockedShopifyUpdates(
     shopifyOrderId: r.shopify_order_id,
     shopifyLineItemId: r.shopify_line_item_id,
     jerseyNumber: r.assigned_number,
+    firstName: r.first_name,
+    lastName: r.last_name,
   }));
 }
 

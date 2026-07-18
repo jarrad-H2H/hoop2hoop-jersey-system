@@ -1,7 +1,9 @@
 // FILE: api/preorder/sync-orders.ts
 // After pre-order finalisation, writes each player's allocated jersey number
-// back to their Shopify line item properties so it appears on the packing slip.
-// POST { orders: [{shopifyOrderId, shopifyLineItemId, jerseyNumber}] } — requires authenticated admin JWT.
+// to the Shopify order as note_attributes so it appears on the packing slip.
+// Single child:    "Jersey # - Sophie Test: 10"
+// Multi-child:     one note_attribute per child, each clearly labelled
+// POST { orders: [{shopifyOrderId, shopifyLineItemId, jerseyNumber, firstName, lastName}] }
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
@@ -44,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Parse body
   const body = req.body ?? {};
-  const raw: Array<{ shopifyOrderId: string; shopifyLineItemId: string; jerseyNumber: number }> =
+  const raw: Array<{ shopifyOrderId: string; shopifyLineItemId: string; jerseyNumber: number; firstName: string; lastName: string }> =
     Array.isArray(body.orders) ? body.orders : [];
 
   if (raw.length === 0) {
@@ -52,52 +54,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Group by shopifyOrderId — one PUT per order even when a parent bought for two kids
-  const grouped = new Map<string, Array<{ lineItemId: string; jerseyNumber: number }>>();
+  const grouped = new Map<string, Array<{ jerseyNumber: number; firstName: string; lastName: string }>>();
   for (const o of raw) {
     const orderId = String(o.shopifyOrderId ?? "").trim();
-    const lineItemId = String(o.shopifyLineItemId ?? "").trim();
-    if (!orderId || !lineItemId) continue;
+    if (!orderId) continue;
     if (!grouped.has(orderId)) grouped.set(orderId, []);
-    grouped.get(orderId)!.push({ lineItemId, jerseyNumber: Number(o.jerseyNumber) });
+    grouped.get(orderId)!.push({
+      jerseyNumber: Number(o.jerseyNumber),
+      firstName: String(o.firstName ?? "").trim(),
+      lastName: String(o.lastName ?? "").trim(),
+    });
   }
 
   let updated = 0;
   const errors: string[] = [];
 
   const results = await Promise.allSettled(
-    Array.from(grouped.entries()).map(async ([shopifyOrderId, items]) => {
-      const baseUrl = `https://${STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}`;
-      const headers = { "Content-Type": "application/json", "X-Shopify-Access-Token": ADMIN_TOKEN };
+    Array.from(grouped.entries()).map(async ([shopifyOrderId, players]) => {
+      // One note_attribute per player — clearly labelled on the packing slip.
+      // Single child:  "Jersey # - Emma Test: 7"
+      // Multi-child:   separate lines, one per child, so pickers know exactly which number goes to which kid.
+      const noteAttributes = players.map(p => ({
+        name: `Jersey # - ${p.firstName} ${p.lastName}`,
+        value: String(p.jerseyNumber),
+      }));
 
-      // GET full order to retrieve all line items (Shopify requires the full array in the PUT)
-      const getResp = await fetch(`${baseUrl}/orders/${shopifyOrderId}.json?fields=id,line_items`, { headers });
-      if (!getResp.ok) {
-        const text = await getResp.text().catch(() => getResp.statusText);
-        throw new Error(`Order ${shopifyOrderId} GET: HTTP ${getResp.status} — ${text.slice(0, 200)}`);
-      }
-      const { order: existingOrder } = await getResp.json() as { order: { id: number; line_items: Array<{ id: number; properties: Array<{ name: string; value: string }> }> } };
-
-      // Build a lookup of which line items need their properties replaced
-      const updateMap = new Map(items.map(({ lineItemId, jerseyNumber }) => [String(lineItemId), jerseyNumber]));
-
-      // Send ALL line items back: H2H ones get new properties, others keep existing
-      const lineItemsPayload = existingOrder.line_items.map(li => {
-        const jerseyNumber = updateMap.get(String(li.id));
-        if (jerseyNumber != null) {
-          return { id: li.id, properties: [{ name: "Jersey Number", value: String(jerseyNumber) }] };
-        }
-        return { id: li.id, properties: li.properties ?? [] };
-      });
-
-      const putResp = await fetch(`${baseUrl}/orders/${shopifyOrderId}.json`, {
+      const url = `https://${STORE_DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/orders/${shopifyOrderId}.json`;
+      const resp = await fetch(url, {
         method: "PUT",
-        headers,
-        body: JSON.stringify({ order: { id: Number(shopifyOrderId), line_items: lineItemsPayload } }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": ADMIN_TOKEN,
+        },
+        body: JSON.stringify({ order: { id: Number(shopifyOrderId), note_attributes: noteAttributes } }),
       });
 
-      if (!putResp.ok) {
-        const text = await putResp.text().catch(() => putResp.statusText);
-        throw new Error(`Order ${shopifyOrderId} PUT: HTTP ${putResp.status} — ${text.slice(0, 200)}`);
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => resp.statusText);
+        throw new Error(`Order ${shopifyOrderId}: HTTP ${resp.status} — ${text.slice(0, 200)}`);
       }
     })
   );
