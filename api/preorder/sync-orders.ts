@@ -46,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Parse body
   const body = req.body ?? {};
-  const raw: Array<{ shopifyOrderId: string; shopifyLineItemId: string; jerseyNumber: number; firstName: string; lastName: string }> =
+  const raw: Array<{ shopifyOrderId: string; shopifyLineItemId: string; jerseyNumber: number; firstName: string; lastName: string; jerseyName?: string | null }> =
     Array.isArray(body.orders) ? body.orders : [];
 
   if (raw.length === 0) {
@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Group by shopifyOrderId — one PUT per order even when a parent bought for two kids
-  const grouped = new Map<string, Array<{ jerseyNumber: number; firstName: string; lastName: string }>>();
+  const grouped = new Map<string, Array<{ jerseyNumber: number; firstName: string; lastName: string; jerseyName: string | null }>>();
   for (const o of raw) {
     const orderId = String(o.shopifyOrderId ?? "").trim();
     if (!orderId) continue;
@@ -63,6 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       jerseyNumber: Number(o.jerseyNumber),
       firstName: String(o.firstName ?? "").trim(),
       lastName: String(o.lastName ?? "").trim(),
+      jerseyName: o.jerseyName ? String(o.jerseyName).trim() : null,
     });
   }
 
@@ -83,8 +84,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { order: existingOrder } = await getResp.json() as { order: { id: number; note: string | null } };
 
       // Build the jersey allocation block — one line per player
+      // Pre-allocated mode supplies a confirmed jersey name (last name only);
+      // FCFS mode uses the full first+last name from the order.
       const allocationLines = players
-        .map(p => `${p.firstName} ${p.lastName} — Jersey #${p.jerseyNumber}`)
+        .map(p => {
+          const displayName = p.jerseyName ? p.jerseyName : `${p.firstName} ${p.lastName}`;
+          return `${displayName} — Jersey #${p.jerseyNumber}`;
+        })
         .join("\n");
       const allocationBlock = `JERSEY ALLOCATIONS:\n${allocationLines}`;
 

@@ -165,13 +165,14 @@ interface FinaliseRow {
   first_name: string;
   last_name: string;
   year_of_birth: number;
-  size: string;
+  size: string | null;
   age_group: string | null;
   assigned_number: number;
   player_id: string | null;
   product_type: string | null;
   shopify_order_id: string | null;
   shopify_line_item_id: string | null;
+  jersey_name: string | null;
 }
 
 export interface ShopifyOrderUpdate {
@@ -180,6 +181,7 @@ export interface ShopifyOrderUpdate {
   jerseyNumber: number;
   firstName: string;
   lastName: string;
+  jerseyName: string | null;
 }
 
 export async function finalisePreorder(
@@ -189,7 +191,7 @@ export async function finalisePreorder(
   const requests = await fetchAllPages<FinaliseRow>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type, shopify_order_id, shopify_line_item_id")
+      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type, shopify_order_id, shopify_line_item_id, jersey_name")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "allocated")
@@ -203,6 +205,10 @@ export async function finalisePreorder(
 
   for (const req of requests) {
     if (req.assigned_number == null) continue;
+    if (!req.size) {
+      errors.push(`${req.first_name} ${req.last_name}: no size recorded — skipped (player may not have confirmed their size yet)`);
+      continue;
+    }
     try {
       if (req.player_id) {
         await supabase.from("players").update({ final_shirt: req.assigned_number }).eq("id", req.player_id);
@@ -241,6 +247,7 @@ export async function finalisePreorder(
           jerseyNumber: req.assigned_number,
           firstName: req.first_name,
           lastName: req.last_name,
+          jerseyName: req.jersey_name ?? null,
         });
       }
     } catch (e: unknown) {
@@ -258,10 +265,10 @@ export async function getLockedShopifyUpdates(
   clubId: string,
   season: number
 ): Promise<ShopifyOrderUpdate[]> {
-  const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number; first_name: string; last_name: string }>((from, to) =>
+  const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number; first_name: string; last_name: string; jersey_name: string | null }>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("shopify_order_id, shopify_line_item_id, assigned_number, first_name, last_name")
+      .select("shopify_order_id, shopify_line_item_id, assigned_number, first_name, last_name, jersey_name")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "locked")
@@ -276,7 +283,122 @@ export async function getLockedShopifyUpdates(
     jerseyNumber: r.assigned_number,
     firstName: r.first_name,
     lastName: r.last_name,
+    jerseyName: (r as any).jersey_name ?? null,
   }));
+}
+
+export interface PreallocatedImportRow {
+  first_name: string;
+  last_name: string;
+  jersey_number: number;
+  year_of_birth: number;
+  gender?: string | null;
+  age_group?: string | null;
+  parent_1_name?: string | null;
+  parent_1_email?: string | null;
+  parent_1_mobile?: string | null;
+  parent_2_name?: string | null;
+  parent_2_email?: string | null;
+  parent_2_mobile?: string | null;
+}
+
+export interface ImportPreallocatedResult {
+  inserted: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+/** Imports pre-allocated roster data into preorder_requests for a club+season.
+ *  Each row must have a pre-assigned jersey number.
+ *  Creates rows with status='needs_size' (awaiting player size confirmation via widget).
+ *  Upserts by matching first_name + last_name + year_of_birth within the club+season. */
+export async function importPreallocatedRoster(
+  clubId: string,
+  season: number,
+  rows: PreallocatedImportRow[]
+): Promise<ImportPreallocatedResult> {
+  const result: ImportPreallocatedResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };
+
+  // Load existing rows for this club+season to detect duplicates
+  const existing = await fetchAllPages<{ id: string; first_name: string; last_name: string; year_of_birth: number }>((from, to) =>
+    supabase
+      .from("preorder_requests")
+      .select("id, first_name, last_name, year_of_birth")
+      .eq("club_id", clubId)
+      .eq("season", season)
+      .range(from, to) as any
+  );
+
+  const existingKey = (r: { first_name: string; last_name: string; year_of_birth: number }) =>
+    `${r.first_name.trim().toLowerCase()}|${r.last_name.trim().toLowerCase()}|${r.year_of_birth}`;
+
+  const existingMap = new Map(existing.map(r => [existingKey(r), r.id]));
+
+  for (const row of rows) {
+    const key = existingKey({ first_name: row.first_name, last_name: row.last_name, year_of_birth: row.year_of_birth });
+    const existingId = existingMap.get(key);
+
+    const payload = {
+      club_id: clubId,
+      season,
+      first_name: row.first_name.trim(),
+      last_name: row.last_name.trim(),
+      year_of_birth: row.year_of_birth,
+      gender: (row.gender ?? null) as "Male" | "Female" | null,
+      age_group: row.age_group ?? null,
+      assigned_number: row.jersey_number,
+      jersey_name: row.last_name.trim().toUpperCase(),
+      status: "needs_size" as const,
+      size: null,
+      any_number: false,
+      pref_1: null,
+      pref_2: null,
+      pref_3: null,
+      parent_1_name: row.parent_1_name ?? null,
+      parent_1_email: row.parent_1_email ?? null,
+      parent_1_mobile: row.parent_1_mobile ?? null,
+      parent_2_name: row.parent_2_name ?? null,
+      parent_2_email: row.parent_2_email ?? null,
+      parent_2_mobile: row.parent_2_mobile ?? null,
+    };
+
+    if (existingId) {
+      // Update the existing row's jersey number and parent info (leave size/jersey_name if already confirmed)
+      const { error } = await supabase
+        .from("preorder_requests")
+        .update({
+          assigned_number: payload.assigned_number,
+          jersey_name: payload.jersey_name,
+          gender: payload.gender,
+          age_group: payload.age_group,
+          parent_1_name: payload.parent_1_name,
+          parent_1_email: payload.parent_1_email,
+          parent_1_mobile: payload.parent_1_mobile,
+          parent_2_name: payload.parent_2_name,
+          parent_2_email: payload.parent_2_email,
+          parent_2_mobile: payload.parent_2_mobile,
+        })
+        .eq("id", existingId)
+        .in("status", ["needs_size"]);
+      if (error) {
+        result.errors.push(`${row.first_name} ${row.last_name}: ${error.message}`);
+      } else {
+        result.updated++;
+      }
+    } else {
+      const { error } = await supabase
+        .from("preorder_requests")
+        .insert(payload);
+      if (error) {
+        result.errors.push(`${row.first_name} ${row.last_name}: ${error.message}`);
+      } else {
+        result.inserted++;
+      }
+    }
+  }
+
+  return result;
 }
 
 /** Validates a row from the admin correction Excel import.

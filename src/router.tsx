@@ -36,6 +36,7 @@ const AppRouter: React.FC = () => {
       <Route path="/login" element={<Login />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/embed/widget-demo" element={<JerseyWidget />} />
+      <Route path="/embed/preorder" element={<JerseyWidget />} />
 
       <Route
         path="/admin"

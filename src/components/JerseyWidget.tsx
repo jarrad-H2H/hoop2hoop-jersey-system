@@ -185,6 +185,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   );
 
   const [preorderMode, setPreorderMode] = useState<"off" | "open" | "closed" | "locked">("off");
+  const [allocationTypeState, setAllocationTypeState] = useState<"fcfs" | "pre_allocated">("fcfs");
 
   // Player gender — needed to find Gold Coast's girls-only Junior/Open Girls teams,
   // which the standard YOB-derived age ladder (U10/U12/.../U18) can never match on its
@@ -247,7 +248,29 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [tick, setTick] = useState<number>(Date.now());
   const [pendingAllocationId, setPendingAllocationId] = useState<string>("");
 
-  // Pre-order preference form state (only used when preorderMode === "open")
+  // Pre-allocated form state (only used when preorderMode === "open" && allocationTypeState === "pre_allocated")
+  interface PreAllocCandidate {
+    id: string;
+    firstName: string;
+    lastName: string;
+    assignedNumber: number;
+    defaultJerseyName: string;
+    alreadyConfirmed: boolean;
+  }
+  const [paFirstName, setPaFirstName] = useState<string>("");
+  const [paLastName, setPaLastName] = useState<string>("");
+  const [paYob, setPaYob] = useState<string>("");
+  const [paLookupDone, setPaLookupDone] = useState<boolean>(false);
+  const [paLooking, setPaLooking] = useState<boolean>(false);
+  const [paCandidates, setPaCandidates] = useState<PreAllocCandidate[]>([]);
+  const [paSelected, setPaSelected] = useState<PreAllocCandidate | null>(null);
+  const [paJerseyName, setPaJerseyName] = useState<string>("");
+  const [paSize, setPaSize] = useState<string>("");
+  const [paSubmitting, setPaSubmitting] = useState<boolean>(false);
+  const [paSubmitted, setPaSubmitted] = useState<boolean>(false);
+  const [paError, setPaError] = useState<string | null>(null);
+
+  // Pre-order preference form state (only used when preorderMode === "open" && allocationTypeState === "fcfs")
   const [pref1, setPref1] = useState<string>("");
   const [pref2, setPref2] = useState<string>("");
   const [pref3, setPref3] = useState<string>("");
@@ -387,13 +410,30 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setError(null);
   }, [demoMode, propSize]);
 
-  // Read query params (production: ?productId=... in iframe URL)
+  // Read query params (production: ?productId=... in iframe URL, or ?clubId=... for standalone pre-allocated form)
   useEffect(() => {
     if (demoMode) return; // skip in demo mode — club comes from props
     try {
       const params = new URLSearchParams(window.location.search);
       const pid = (params.get("productId") || params.get("product_id") || "").trim();
       if (pid) setShopifyProductId(pid);
+
+      // Standalone pre-allocated access: ?clubId=<uuid> bypasses Shopify product lookup
+      const directClubId = (params.get("clubId") || params.get("club_id") || "").trim();
+      if (directClubId && !pid) {
+        void (async () => {
+          const { data } = await supabase
+            .from("clubs")
+            .select("id, preorder_mode, allocation_type, is_client")
+            .eq("id", directClubId)
+            .limit(1);
+          const club = (data?.[0] as { id: string; preorder_mode: string; allocation_type: string; is_client: boolean } | undefined);
+          if (!club?.is_client) return;
+          setSelectedClubId(club.id);
+          setPreorderMode((club.preorder_mode as "off" | "open" | "closed" | "locked") ?? "off");
+          setAllocationTypeState((club.allocation_type as "fcfs" | "pre_allocated") ?? "fcfs");
+        })();
+      }
     } catch (_) {}
     setTeamChoice("not_sure");
   }, [demoMode]);
@@ -444,7 +484,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!pid) return;
       const { data, error } = await supabase
         .from("shopify_product_club_map")
-        .select("shopify_product_id, club_id, product_type, clubs(preorder_mode, is_client)")
+        .select("shopify_product_id, club_id, product_type, clubs(preorder_mode, allocation_type, is_client)")
         .eq("shopify_product_id", pid)
         .limit(1);
       if (error) { setClubDetectError(error.message); return; }
@@ -461,6 +501,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       setSelectedClubId(row.club_id);
       setSelectedProductType(row.product_type ?? "default");
       setPreorderMode((clubJoin?.preorder_mode as "off" | "open" | "closed" | "locked") ?? "off");
+      setAllocationTypeState(((clubJoin as any)?.allocation_type as "fcfs" | "pre_allocated") ?? "fcfs");
     };
     void run();
   }, [demoMode, shopifyProductId]);
@@ -842,6 +883,69 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     }
   };
 
+  // ── Pre-allocated mode handlers ──────────────────────────────────────────────
+
+  const handlePreAllocLookup = async () => {
+    setPaError(null);
+    if (!paFirstName.trim() || !paLastName.trim()) { setPaError("Please enter the player's first name and surname."); return; }
+    const yob = Number(paYob);
+    if (!Number.isFinite(yob) || yob < 1900 || yob > 2100) { setPaError("Please enter a valid year of birth."); return; }
+    setPaLooking(true);
+    setPaLookupDone(false);
+    setPaCandidates([]);
+    setPaSelected(null);
+    try {
+      const res = await fetch("/api/preorder/lookup-preallocated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clubId: selectedClubId, season: SEASON_YEAR, firstName: paFirstName.trim(), lastName: paLastName.trim(), yearOfBirth: yob }),
+      });
+      const json = await res.json();
+      if (!json.ok) { setPaError(json.error ?? "Lookup failed."); return; }
+      setPaCandidates(json.candidates ?? []);
+    } catch {
+      setPaError("Could not reach the server. Please try again.");
+    } finally {
+      setPaLooking(false);
+      setPaLookupDone(true);
+    }
+  };
+
+  const handlePreAllocSelectCandidate = (candidate: PreAllocCandidate) => {
+    setPaSelected(candidate);
+    setPaJerseyName(candidate.defaultJerseyName);
+    setPaError(null);
+  };
+
+  const JERSEY_NAME_RE = /^[A-Za-z'\-]+$/;
+
+  const handlePreAllocConfirm = async () => {
+    setPaError(null);
+    if (!paSelected) return;
+    if (!paJerseyName.trim()) { setPaError("Jersey name cannot be blank."); return; }
+    if (!JERSEY_NAME_RE.test(paJerseyName.trim())) { setPaError("Jersey name may only contain letters, hyphens, and apostrophes — no spaces."); return; }
+    if (paJerseyName.trim().length > 25) { setPaError("Jersey name must be 25 characters or fewer."); return; }
+    const size = selectedSize || paSize.trim();
+    if (!size) { setPaError("Please enter your jersey size."); return; }
+    setPaSubmitting(true);
+    try {
+      const res = await fetch("/api/preorder/confirm-size", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preorderRequestId: paSelected.id, jerseyName: paJerseyName.trim().toUpperCase(), size }),
+      });
+      const json = await res.json();
+      if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
+      setPaSubmitted(true);
+    } catch {
+      setPaError("Could not reach the server. Please try again.");
+    } finally {
+      setPaSubmitting(false);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
   const handlePreorderSubmit = () => {
     setError(null);
     if (!selectedClubId) { setError(clubDetectError || "Club could not be detected for this product."); return; }
@@ -968,8 +1072,155 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </div>
         )}
 
-        {/* Pre-order: window open */}
-        {preorderMode === "open" && (
+        {/* Pre-allocated: window open — player confirms size + jersey name */}
+        {preorderMode === "open" && allocationTypeState === "pre_allocated" && (
+          paSubmitted && paSelected ? (
+            <div className="py-6 text-center">
+              <div className="text-3xl mb-2">✅</div>
+              <p className="font-semibold text-gray-900">All done!</p>
+              <p className="text-sm text-gray-600 mt-2">
+                Your jersey number is <span className="font-bold text-indigo-700">#{paSelected.assignedNumber}</span> and
+                will be printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.
+              </p>
+              <p className="text-xs text-gray-500 mt-2">You can close this page.</p>
+            </div>
+          ) : (
+            <>
+              {paError && (
+                <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
+                  {paError}
+                </div>
+              )}
+
+              {/* Step 1: Name + DOB entry */}
+              {!paSelected && (
+                <>
+                  <p className="text-xs text-gray-500">Your jersey number has already been allocated by the club. Enter your details below to confirm your size.</p>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Player's First Name</label>
+                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Arnah-Leigh" value={paFirstName} onChange={e => { setPaFirstName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Player's Surname</label>
+                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Reedy" value={paLastName} onChange={e => { setPaLastName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth</label>
+                    <input type="number" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2008" value={paYob} onChange={e => { setPaYob(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handlePreAllocLookup}
+                    disabled={paLooking}
+                    className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  >
+                    {paLooking ? "Searching…" : "Find My Record"}
+                  </button>
+
+                  {/* Lookup results */}
+                  {paLookupDone && paCandidates.length === 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
+                      We couldn't find a match in our records. Please check the spelling, or make sure you're entering the <strong>player's</strong> name (not a parent's name).
+                    </div>
+                  )}
+                  {paLookupDone && paCandidates.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">We found the following — is one of these the player?</p>
+                      <div className="space-y-2">
+                        {paCandidates.map(c => (
+                          <div key={c.id} className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded p-3">
+                            <div>
+                              <span className="font-semibold text-gray-900">{c.firstName} {c.lastName}</span>
+                              <span className="ml-2 text-indigo-700 font-bold">#{c.assignedNumber}</span>
+                              {c.alreadyConfirmed && <span className="ml-2 text-xs text-green-700">(size already confirmed)</span>}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handlePreAllocSelectCandidate(c)}
+                              className="px-3 py-1.5 text-xs font-semibold bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                            >
+                              Yes, that's me
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => { setPaLookupDone(false); setPaCandidates([]); }}
+                          className="text-xs text-gray-500 underline"
+                        >
+                          None of these are me — try again
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Step 2: Confirm number + jersey name + size */}
+              {paSelected && (
+                <>
+                  <div className="bg-indigo-50 border border-indigo-200 rounded p-3">
+                    <p className="text-sm font-semibold text-indigo-900">Your jersey number is <span className="text-2xl font-bold">#{paSelected.assignedNumber}</span></p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+                      Name on Jersey <span className="font-normal text-gray-400 normal-case">(last name only)</span>
+                    </label>
+                    <input
+                      type="text"
+                      className="border rounded px-3 py-2 w-full text-base uppercase"
+                      value={paJerseyName}
+                      onChange={e => {
+                        const v = e.target.value.replace(/[^A-Za-z'\-]/g, "");
+                        setPaJerseyName(v.toUpperCase());
+                      }}
+                      maxLength={25}
+                      placeholder="SMITH"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Correct the spelling if needed. Letters, hyphens, and apostrophes only.</p>
+                  </div>
+
+                  {/* Size: use Shopify variant if available, otherwise show input */}
+                  {!selectedSize && (
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Size</label>
+                      <input
+                        type="text"
+                        className="border rounded px-3 py-2 w-full text-base"
+                        placeholder="e.g. S, M, L, XL, 2XL"
+                        value={paSize}
+                        onChange={e => setPaSize(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { setPaSelected(null); setPaJerseyName(""); setPaSize(""); setPaError(null); }}
+                      className="px-4 py-2 border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handlePreAllocConfirm}
+                      disabled={paSubmitting}
+                      className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                    >
+                      {paSubmitting ? "Saving…" : "Confirm"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )
+        )}
+
+        {/* Pre-order FCFS: window open */}
+        {preorderMode === "open" && allocationTypeState === "fcfs" && (
           preorderSubmitted ? (
             <div className="py-6 text-center">
               <div className="text-3xl mb-2">✅</div>

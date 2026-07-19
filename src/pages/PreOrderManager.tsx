@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, fetchAllPages } from "../services/supabase";
-import { runFcfsAllocation, validateImportRow, finalisePreorder, getLockedShopifyUpdates, type PreorderRequest } from "../services/preorder";
+import { runFcfsAllocation, validateImportRow, finalisePreorder, getLockedShopifyUpdates, importPreallocatedRoster, type PreorderRequest, type PreallocatedImportRow } from "../services/preorder";
 import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
@@ -16,6 +16,7 @@ interface Club {
   id: string;
   name: string;
   preorder_mode: PreorderMode;
+  allocation_type: "fcfs" | "pre_allocated";
 }
 
 const MODE_BADGE: Record<PreorderMode, { label: string; className: string }> = {
@@ -27,6 +28,7 @@ const MODE_BADGE: Record<PreorderMode, { label: string; className: string }> = {
 
 const STATUS_BADGE: Record<string, string> = {
   pending: "bg-gray-100 text-gray-700",
+  needs_size: "bg-amber-100 text-amber-800",
   allocated: "bg-green-100 text-green-800",
   overflow: "bg-red-100 text-red-700",
   locked: "bg-blue-100 text-blue-700",
@@ -34,7 +36,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 const EXPORT_COLUMNS = [
   "request_id", "club_name", "age_group", "first_name", "last_name",
-  "year_of_birth", "gender", "size", "pref_1", "pref_2", "pref_3", "any_number",
+  "year_of_birth", "gender", "size", "jersey_name", "pref_1", "pref_2", "pref_3", "any_number",
   "claimed_current", "assigned_number", "status", "order_number", "paid_at", "admin_notes",
 ];
 
@@ -57,6 +59,10 @@ const PreOrderManager: React.FC = () => {
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [rosterImportError, setRosterImportError] = useState<string | null>(null);
+  const [rosterImportSuccess, setRosterImportSuccess] = useState<string | null>(null);
+  const rosterFileInputRef = useRef<HTMLInputElement>(null);
+
   const selectedClub = clubs.find(c => c.id === selectedClubId) ?? null;
 
   // ── Load clubs ──────────────────────────────────────────────────────────────
@@ -64,10 +70,10 @@ const PreOrderManager: React.FC = () => {
     setLoadingClubs(true);
     const { data } = await supabase
       .from("clubs")
-      .select("id, name, preorder_mode")
+      .select("id, name, preorder_mode, allocation_type")
       .eq("is_client", true)
       .order("name");
-    setClubs((data ?? []) as Club[]);
+    setClubs(((data ?? []) as any[]).map(c => ({ ...c, allocation_type: c.allocation_type ?? "fcfs" })) as Club[]);
     if (data && data.length > 0 && !selectedClubId) {
       setSelectedClubId((data[0] as Club).id);
     }
@@ -90,7 +96,7 @@ const PreOrderManager: React.FC = () => {
       const rows = await fetchAllPages<PreorderRequest>((from, to) =>
         supabase
           .from("preorder_requests")
-          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at")
+          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at, jersey_name")
           .eq("club_id", selectedClubId)
           .eq("season", season)
           .order("paid_at", { ascending: true, nullsFirst: false })
@@ -136,7 +142,7 @@ const PreOrderManager: React.FC = () => {
       const fresh = await fetchAllPages<PreorderRequest>((from, to) =>
         supabase
           .from("preorder_requests")
-          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at")
+          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at, jersey_name")
           .eq("club_id", selectedClubId)
           .eq("season", season)
           .order("paid_at", { ascending: true, nullsFirst: false })
@@ -248,7 +254,8 @@ const PreOrderManager: React.FC = () => {
       last_name: r.last_name,
       year_of_birth: r.year_of_birth,
       gender: r.gender ?? "",
-      size: r.size,
+      size: r.size ?? "",
+      jersey_name: (r as any).jersey_name ?? "",
       pref_1: r.pref_1 ?? "",
       pref_2: r.pref_2 ?? "",
       pref_3: r.pref_3 ?? "",
@@ -340,12 +347,106 @@ const PreOrderManager: React.FC = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  // ── Allocation type toggle ───────────────────────────────────────────────────
+  const setAllocationType = async (type: "fcfs" | "pre_allocated") => {
+    if (!selectedClubId) return;
+    const { error } = await supabase.from("clubs").update({ allocation_type: type }).eq("id", selectedClubId);
+    if (!error) {
+      setClubs(prev => prev.map(c => c.id === selectedClubId ? { ...c, allocation_type: type } : c));
+    }
+  };
+
+  // ── Pre-allocated roster CSV import ─────────────────────────────────────────
+  const handleRosterImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setRosterImportError(null);
+    setRosterImportSuccess(null);
+
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+
+      if (rawRows.length === 0) { setRosterImportError("File is empty."); return; }
+
+      const firstRow = rawRows[0] ?? {};
+      const required = ["first_name", "last_name", "jersey_number", "year_of_birth"];
+      const missing = required.filter(c => !(c in firstRow));
+      if (missing.length > 0) {
+        setRosterImportError(`Missing required columns: ${missing.join(", ")}. Download the template and use it as the base.`);
+        return;
+      }
+
+      const errors: string[] = [];
+      const parsed: PreallocatedImportRow[] = [];
+
+      rawRows.forEach((row, i) => {
+        const rowNum = i + 2;
+        const firstName = String(row["first_name"] ?? "").trim();
+        const lastName = String(row["last_name"] ?? "").trim();
+        const jerseyNumber = Number(row["jersey_number"]);
+        const yearOfBirth = Number(row["year_of_birth"]);
+
+        if (!firstName) { errors.push(`Row ${rowNum}: first_name is blank.`); return; }
+        if (!lastName) { errors.push(`Row ${rowNum}: last_name is blank.`); return; }
+        if (!Number.isFinite(jerseyNumber) || !Number.isInteger(jerseyNumber) || jerseyNumber < 0 || jerseyNumber > 99 || jerseyNumber === 69) {
+          errors.push(`Row ${rowNum}: jersey_number "${row["jersey_number"]}" must be 0–99 and not 69.`); return;
+        }
+        if (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100) {
+          errors.push(`Row ${rowNum}: year_of_birth "${row["year_of_birth"]}" is not valid.`); return;
+        }
+
+        parsed.push({
+          first_name: firstName,
+          last_name: lastName,
+          jersey_number: jerseyNumber,
+          year_of_birth: yearOfBirth,
+          gender: String(row["gender"] ?? "").trim() || null,
+          age_group: String(row["age_group"] ?? "").trim() || null,
+          parent_1_name: String(row["parent_1_name"] ?? "").trim() || null,
+          parent_1_email: String(row["parent_1_email"] ?? "").trim() || null,
+          parent_1_mobile: String(row["parent_1_mobile"] ?? "").trim() || null,
+          parent_2_name: String(row["parent_2_name"] ?? "").trim() || null,
+          parent_2_email: String(row["parent_2_email"] ?? "").trim() || null,
+          parent_2_mobile: String(row["parent_2_mobile"] ?? "").trim() || null,
+        });
+      });
+
+      if (errors.length > 0) {
+        setRosterImportError(`Import rejected — fix the following errors:\n\n${errors.join("\n")}`);
+        return;
+      }
+
+      const result = await importPreallocatedRoster(selectedClubId, season, parsed);
+      await loadRequests();
+      const parts = [`Imported ${result.inserted} new + updated ${result.updated} existing records.`];
+      if (result.errors.length > 0) parts.push(`${result.errors.length} error(s): ${result.errors.slice(0, 3).join("; ")}`);
+      setRosterImportSuccess(parts.join(" "));
+    } catch (e: any) {
+      setRosterImportError(`Import failed: ${e?.message ?? "unknown error"}`);
+    }
+
+    if (rosterFileInputRef.current) rosterFileInputRef.current.value = "";
+  };
+
+  const handleDownloadRosterTemplate = () => {
+    const headers = ["first_name", "last_name", "jersey_number", "year_of_birth", "gender", "age_group", "parent_1_name", "parent_1_email", "parent_1_mobile", "parent_2_name", "parent_2_email", "parent_2_mobile"];
+    const example = { first_name: "Arnah-Leigh", last_name: "Reedy", jersey_number: 6, year_of_birth: 2008, gender: "Female", age_group: "U18", parent_1_name: "Jarnelle Reedy", parent_1_email: "aj.205@bigpond.com", parent_1_mobile: "0488778698", parent_2_name: "", parent_2_email: "", parent_2_mobile: "" };
+    const ws = XLSX.utils.json_to_sheet([example], { header: headers });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Roster");
+    XLSX.writeFile(wb, "preallocated_roster_template.xlsx");
+  };
+
   // ── Counts ──────────────────────────────────────────────────────────────────
   const counts = {
     pending: requests.filter(r => r.status === "pending").length,
     allocated: requests.filter(r => r.status === "allocated").length,
     overflow: requests.filter(r => r.status === "overflow").length,
     locked: requests.filter(r => r.status === "locked").length,
+    needs_size: requests.filter(r => r.status === "needs_size").length,
     total: requests.length,
   };
 
@@ -410,20 +511,44 @@ const PreOrderManager: React.FC = () => {
       {/* Mode status card */}
       {selectedClub && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
-          <div className="flex items-center gap-3 mb-4">
-            <span className="text-sm font-semibold text-gray-700">Pre-Order Window:</span>
-            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${MODE_BADGE[mode].className}`}>
-              {MODE_BADGE[mode].label}
-            </span>
+          <div className="flex flex-wrap items-center gap-4 mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-700">Pre-Order Window:</span>
+              <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${MODE_BADGE[mode].className}`}>
+                {MODE_BADGE[mode].label}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-700">Mode:</span>
+              <select
+                value={selectedClub?.allocation_type ?? "fcfs"}
+                onChange={e => setAllocationType(e.target.value as "fcfs" | "pre_allocated")}
+                disabled={mode === "locked"}
+                className="border rounded px-2 py-1 text-xs"
+              >
+                <option value="fcfs">FCFS (players choose)</option>
+                <option value="pre_allocated">Pre-allocated (numbers set by club)</option>
+              </select>
+            </div>
           </div>
 
           {/* Count summary */}
           {counts.total > 0 && (
             <div className="flex flex-wrap gap-4 mb-4 text-sm">
               <span className="text-gray-600">Total: <strong>{counts.total}</strong></span>
-              <span className="text-gray-600">Pending: <strong>{counts.pending}</strong></span>
-              <span className="text-emerald-700">Allocated: <strong>{counts.allocated}</strong></span>
-              {counts.overflow > 0 && <span className="text-red-700">Overflow: <strong>{counts.overflow}</strong></span>}
+              {selectedClub?.allocation_type === "pre_allocated" ? (
+                <>
+                  <span className="text-amber-700">Awaiting size: <strong>{counts.needs_size}</strong></span>
+                  <span className="text-emerald-700">Size confirmed: <strong>{counts.allocated}</strong></span>
+                </>
+              ) : (
+                <>
+                  <span className="text-gray-600">Pending: <strong>{counts.pending}</strong></span>
+                  <span className="text-emerald-700">Allocated: <strong>{counts.allocated}</strong></span>
+                  {counts.overflow > 0 && <span className="text-red-700">Overflow: <strong>{counts.overflow}</strong></span>}
+                </>
+              )}
+              {counts.locked > 0 && <span className="text-blue-700">Locked: <strong>{counts.locked}</strong></span>}
             </div>
           )}
 
@@ -469,9 +594,55 @@ const PreOrderManager: React.FC = () => {
               </button>
             )}
 
+            {/* Pre-allocated: import roster (shown when mode is open or closed, not locked) */}
+            {selectedClub?.allocation_type === "pre_allocated" && mode !== "locked" && mode !== "off" && (
+              <>
+                <label className="flex items-center gap-2 px-4 py-2 border border-amber-400 text-amber-800 bg-amber-50 rounded-lg text-sm font-medium hover:bg-amber-100 cursor-pointer">
+                  <Upload size={15} />
+                  Import Pre-Allocated Roster
+                  <input
+                    ref={rosterFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    onChange={handleRosterImport}
+                    className="hidden"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleDownloadRosterTemplate}
+                  className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
+                >
+                  <Download size={15} />
+                  Download Template
+                </button>
+              </>
+            )}
+
+            {/* Pre-allocated: lock when all sizes confirmed */}
+            {selectedClub?.allocation_type === "pre_allocated" && mode === "closed" && counts.needs_size === 0 && counts.allocated > 0 && (
+              <button
+                type="button"
+                onClick={handleLock}
+                disabled={actionLoading}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              >
+                <Lock size={15} />
+                Confirm &amp; Write to Orders
+                <span className="ml-1 bg-white/20 px-1.5 rounded-full">{counts.allocated}</span>
+              </button>
+            )}
+
+            {/* Pre-allocated: waiting on sizes message */}
+            {selectedClub?.allocation_type === "pre_allocated" && mode === "closed" && counts.needs_size > 0 && (
+              <span className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Waiting on {counts.needs_size} player{counts.needs_size !== 1 ? "s" : ""} to confirm their size before you can finalise.
+              </span>
+            )}
+
             {/* Step 2: run FCFS + auto-download report for club review
-                Only shown when mode=closed and no numbers have been allocated yet */}
-            {mode === "closed" && counts.allocated === 0 && counts.overflow === 0 && counts.pending > 0 && (
+                Only shown when mode=closed, FCFS mode, and no numbers have been allocated yet */}
+            {selectedClub?.allocation_type !== "pre_allocated" && mode === "closed" && counts.allocated === 0 && counts.overflow === 0 && counts.pending > 0 && (
               <button
                 type="button"
                 onClick={handleGenerateReport}
@@ -484,8 +655,8 @@ const PreOrderManager: React.FC = () => {
               </button>
             )}
 
-            {/* Steps 3 & 4: shown once allocation has been run */}
-            {mode === "closed" && (counts.allocated > 0 || counts.overflow > 0) && (
+            {/* Steps 3 & 4: shown once FCFS allocation has been run */}
+            {selectedClub?.allocation_type !== "pre_allocated" && mode === "closed" && (counts.allocated > 0 || counts.overflow > 0) && (
               <>
                 {/* Step 3: upload the club's approved/corrected report */}
                 <label className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 cursor-pointer">
@@ -543,6 +714,16 @@ const PreOrderManager: React.FC = () => {
               {importSuccess}
             </div>
           )}
+          {rosterImportError && (
+            <div className="mt-4 p-3 rounded text-sm bg-red-50 text-red-800 whitespace-pre-wrap">
+              {rosterImportError}
+            </div>
+          )}
+          {rosterImportSuccess && (
+            <div className="mt-4 p-3 rounded text-sm bg-green-50 text-green-800">
+              {rosterImportSuccess}
+            </div>
+          )}
         </div>
       )}
 
@@ -579,6 +760,7 @@ const PreOrderManager: React.FC = () => {
                 <th className="px-3 py-2 text-left font-semibold">Size</th>
                 <th className="px-3 py-2 text-left font-semibold">Preferences</th>
                 <th className="px-3 py-2 text-left font-semibold">Assigned #</th>
+                <th className="px-3 py-2 text-left font-semibold">Jersey Name</th>
                 <th className="px-3 py-2 text-left font-semibold">Status</th>
                 <th className="px-3 py-2 text-left font-semibold">Paid At</th>
               </tr>
@@ -614,9 +796,12 @@ const PreOrderManager: React.FC = () => {
                       ? <span className="font-bold text-brand-700">#{r.assigned_number}</span>
                       : <span className="text-gray-400">—</span>}
                   </td>
+                  <td className="px-3 py-2 font-medium text-gray-800">
+                    {(r as any).jersey_name ?? <span className="text-gray-400">—</span>}
+                  </td>
                   <td className="px-3 py-2">
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_BADGE[r.status] ?? ""}`}>
-                      {r.status}
+                      {r.status === "needs_size" ? "needs size" : r.status}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
