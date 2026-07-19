@@ -260,6 +260,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [paFirstName, setPaFirstName] = useState<string>("");
   const [paLastName, setPaLastName] = useState<string>("");
   const [paYob, setPaYob] = useState<string>("");
+  const [paSeasonParam, setPaSeasonParam] = useState<string>("");
   const [paLookupDone, setPaLookupDone] = useState<boolean>(false);
   const [paLooking, setPaLooking] = useState<boolean>(false);
   const [paCandidates, setPaCandidates] = useState<PreAllocCandidate[]>([]);
@@ -419,6 +420,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (pid) setShopifyProductId(pid);
 
       // Standalone pre-allocated access: ?clubId=<uuid> bypasses Shopify product lookup
+      const directSeasonParam = (params.get("season") || "").trim();
+      if (directSeasonParam) setPaSeasonParam(directSeasonParam);
+
       const directClubId = (params.get("clubId") || params.get("club_id") || "").trim();
       if (directClubId && !pid) {
         void (async () => {
@@ -898,7 +902,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const res = await fetch("/api/preorder/lookup-preallocated", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clubId: selectedClubId, season: SEASON_YEAR, firstName: paFirstName.trim(), lastName: paLastName.trim(), yearOfBirth: yob }),
+        body: JSON.stringify({ clubId: selectedClubId, season: paSeasonParam || String(SEASON_YEAR), firstName: paFirstName.trim(), lastName: paLastName.trim(), yearOfBirth: yob }),
       });
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Lookup failed."); return; }

@@ -45,7 +45,7 @@ const CURRENT_SEASON = new Date().getFullYear();
 const PreOrderManager: React.FC = () => {
   const [clubs, setClubs] = useState<Club[]>([]);
   const [selectedClubId, setSelectedClubId] = useState<string>("");
-  const [season, setSeason] = useState<number>(CURRENT_SEASON);
+  const [season, setSeason] = useState<string>(String(CURRENT_SEASON));
   const [loadingClubs, setLoadingClubs] = useState(true);
 
   const [requests, setRequests] = useState<PreorderRequest[]>([]);
@@ -487,12 +487,11 @@ const PreOrderManager: React.FC = () => {
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Season</label>
           <input
-            type="number"
+            type="text"
             value={season}
-            onChange={e => setSeason(Number(e.target.value))}
-            className="border rounded px-3 py-2 w-24"
-            min={2020}
-            max={CURRENT_SEASON + 2}
+            onChange={e => setSeason(e.target.value)}
+            className="border rounded px-3 py-2 w-32"
+            placeholder="e.g. 2027 U18"
           />
         </div>
         <div className="flex items-end">

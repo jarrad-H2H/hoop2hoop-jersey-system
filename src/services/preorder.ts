@@ -42,7 +42,7 @@ const VALID_NUMBERS = Array.from({ length: 100 }, (_, i) => i).filter(n => n !==
  */
 export async function runFcfsAllocation(
   clubId: string,
-  season: number
+  season: string
 ): Promise<{ allocated: number; overflow: number; pools: Record<string, { allocated: number; overflow: number }> }> {
   // Fetch all non-overflow requests to seed already-taken numbers from prior rounds
   const allRequests = await fetchAllPages<PreorderRequest>((from, to) =>
@@ -186,7 +186,7 @@ export interface ShopifyOrderUpdate {
 
 export async function finalisePreorder(
   clubId: string,
-  season: number
+  season: string
 ): Promise<{ locked: number; errors: string[]; shopifyUpdates: ShopifyOrderUpdate[] }> {
   const requests = await fetchAllPages<FinaliseRow>((from, to) =>
     supabase
@@ -263,7 +263,7 @@ export async function finalisePreorder(
  *  Used by the re-sync flow to push allocated numbers to Shopify without re-finalising. */
 export async function getLockedShopifyUpdates(
   clubId: string,
-  season: number
+  season: string
 ): Promise<ShopifyOrderUpdate[]> {
   const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number; first_name: string; last_name: string; jersey_name: string | null }>((from, to) =>
     supabase
@@ -315,7 +315,7 @@ export interface ImportPreallocatedResult {
  *  Upserts by matching first_name + last_name + year_of_birth within the club+season. */
 export async function importPreallocatedRoster(
   clubId: string,
-  season: number,
+  season: string,
   rows: PreallocatedImportRow[]
 ): Promise<ImportPreallocatedResult> {
   const result: ImportPreallocatedResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };

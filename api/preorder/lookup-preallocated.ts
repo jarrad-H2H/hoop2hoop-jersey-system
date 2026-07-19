@@ -63,7 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = req.body ?? {};
   const clubId = String(body.clubId ?? "").trim();
-  const season = Number(body.season);
+  const season = String(body.season ?? "").trim();
   const firstName = String(body.firstName ?? "").trim();
   const lastName = String(body.lastName ?? "").trim();
   const yearOfBirth = Number(body.yearOfBirth);
