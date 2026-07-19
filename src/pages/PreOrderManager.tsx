@@ -523,7 +523,6 @@ const PreOrderManager: React.FC = () => {
               <select
                 value={selectedClub?.allocation_type ?? "fcfs"}
                 onChange={e => setAllocationType(e.target.value as "fcfs" | "pre_allocated")}
-                disabled={mode === "locked"}
                 className="border rounded px-2 py-1 text-xs"
               >
                 <option value="fcfs">FCFS (players choose)</option>
