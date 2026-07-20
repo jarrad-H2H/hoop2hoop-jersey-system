@@ -63,7 +63,26 @@ const PreOrderManager: React.FC = () => {
   const [rosterImportSuccess, setRosterImportSuccess] = useState<string | null>(null);
   const rosterFileInputRef = useRef<HTMLInputElement>(null);
 
+  const [availableSeasons, setAvailableSeasons] = useState<string[]>([]);
+  const [addingNewSeason, setAddingNewSeason] = useState(false);
+  const [newSeasonInput, setNewSeasonInput] = useState("");
+
   const selectedClub = clubs.find(c => c.id === selectedClubId) ?? null;
+
+  // ── Load available seasons for selected club ────────────────────────────────
+  const loadAvailableSeasons = useCallback(async (clubId: string) => {
+    if (!clubId) return;
+    const { data } = await supabase
+      .from("preorder_requests")
+      .select("season")
+      .eq("club_id", clubId)
+      .order("season", { ascending: false });
+    const distinct = [...new Set((data ?? []).map((r: any) => String(r.season)))];
+    setAvailableSeasons(distinct);
+    if (distinct.length > 0 && !distinct.includes(season)) {
+      setSeason(distinct[0]);
+    }
+  }, [season]);
 
   // ── Load clubs ──────────────────────────────────────────────────────────────
   const loadClubs = useCallback(async () => {
@@ -112,6 +131,7 @@ const PreOrderManager: React.FC = () => {
   }, [selectedClubId, season]);
 
   useEffect(() => { void loadRequests(); }, [loadRequests]);
+  useEffect(() => { if (selectedClubId) void loadAvailableSeasons(selectedClubId); }, [selectedClubId]);
 
   // ── Mode actions ────────────────────────────────────────────────────────────
   const setMode = async (mode: PreorderMode) => {
@@ -422,7 +442,7 @@ const PreOrderManager: React.FC = () => {
       }
 
       const result = await importPreallocatedRoster(selectedClubId, season, parsed);
-      await loadRequests();
+      await Promise.all([loadRequests(), loadAvailableSeasons(selectedClubId)]);
       const parts = [`Imported ${result.inserted} new + updated ${result.updated} existing records.`];
       if (result.errors.length > 0) parts.push(`${result.errors.length} error(s): ${result.errors.slice(0, 3).join("; ")}`);
       setRosterImportSuccess(parts.join(" "));
@@ -488,13 +508,67 @@ const PreOrderManager: React.FC = () => {
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Season</label>
-          <input
-            type="text"
-            value={season}
-            onChange={e => setSeason(e.target.value)}
-            className="border rounded px-3 py-2 w-32"
-            placeholder="e.g. 2027 U18"
-          />
+          <div className="flex items-center gap-2">
+            {availableSeasons.length > 0 && !addingNewSeason ? (
+              <select
+                value={season}
+                onChange={e => setSeason(e.target.value)}
+                className="border rounded px-3 py-2 min-w-[140px]"
+              >
+                {availableSeasons.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            ) : !addingNewSeason ? (
+              <span className="text-sm text-gray-400 italic">No seasons yet</span>
+            ) : null}
+            {addingNewSeason ? (
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={newSeasonInput}
+                  onChange={e => setNewSeasonInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && newSeasonInput.trim()) {
+                      const s = newSeasonInput.trim();
+                      setAvailableSeasons(prev => prev.includes(s) ? prev : [s, ...prev]);
+                      setSeason(s);
+                      setNewSeasonInput("");
+                      setAddingNewSeason(false);
+                    }
+                    if (e.key === "Escape") { setAddingNewSeason(false); setNewSeasonInput(""); }
+                  }}
+                  autoFocus
+                  placeholder="e.g. 2027 U18"
+                  className="border rounded px-3 py-2 w-36"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const s = newSeasonInput.trim();
+                    if (!s) return;
+                    setAvailableSeasons(prev => prev.includes(s) ? prev : [s, ...prev]);
+                    setSeason(s);
+                    setNewSeasonInput("");
+                    setAddingNewSeason(false);
+                  }}
+                  className="px-3 py-2 bg-brand-600 text-white rounded text-sm font-medium hover:bg-brand-700"
+                >Add</button>
+                <button
+                  type="button"
+                  onClick={() => { setAddingNewSeason(false); setNewSeasonInput(""); }}
+                  className="px-2 py-2 text-gray-400 hover:text-gray-600 text-sm"
+                >✕</button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAddingNewSeason(true)}
+                className="px-3 py-2 border border-dashed border-gray-400 text-gray-600 rounded text-sm hover:bg-gray-50"
+                title="Add new season / age group"
+              >+ New</button>
+            )}
+          </div>
         </div>
         <div className="flex items-end">
           <button
