@@ -61,7 +61,7 @@ const PreOrderManager: React.FC = () => {
 
   const [rosterImportError, setRosterImportError] = useState<string | null>(null);
   const [rosterImportSuccess, setRosterImportSuccess] = useState<string | null>(null);
-  const [rosterProductType, setRosterProductType] = useState<"unisex" | "mens" | "womens">("unisex");
+  const [rosterProductType, setRosterProductType] = useState<"" | "unisex" | "mens" | "womens">("");
   const rosterFileInputRef = useRef<HTMLInputElement>(null);
 
   const [availableSeasons, setAvailableSeasons] = useState<string[]>([]);
@@ -473,6 +473,7 @@ const PreOrderManager: React.FC = () => {
     }
 
     if (rosterFileInputRef.current) rosterFileInputRef.current.value = "";
+    setRosterProductType("");
   };
 
   const handleDownloadRosterTemplate = () => {
@@ -695,15 +696,16 @@ const PreOrderManager: React.FC = () => {
               <>
                 <select
                   value={rosterProductType}
-                  onChange={e => setRosterProductType(e.target.value as "unisex" | "mens" | "womens")}
-                  className="border rounded px-2 py-2 text-xs text-gray-700"
-                  title="Product type for this roster (used to tag inventory correctly at finalise)"
+                  onChange={e => setRosterProductType(e.target.value as "" | "unisex" | "mens" | "womens")}
+                  className={`border rounded px-2 py-2 text-xs ${rosterProductType === "" ? "text-gray-400 border-red-300" : "text-gray-700"}`}
+                  title="Select product type before importing"
                 >
+                  <option value="" disabled>— Select product type —</option>
                   <option value="unisex">Unisex</option>
                   <option value="mens">Mens</option>
                   <option value="womens">Womens</option>
                 </select>
-                <label className="flex items-center gap-2 px-4 py-2 border border-amber-400 text-amber-800 bg-amber-50 rounded-lg text-sm font-medium hover:bg-amber-100 cursor-pointer">
+                <label className={`flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors ${rosterProductType === "" ? "border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed pointer-events-none" : "border-amber-400 text-amber-800 bg-amber-50 hover:bg-amber-100 cursor-pointer"}`}>
                   <Upload size={15} />
                   Import Pre-Allocated Roster
                   <input
@@ -711,6 +713,7 @@ const PreOrderManager: React.FC = () => {
                     type="file"
                     accept=".xlsx,.xls,.csv"
                     onChange={handleRosterImport}
+                    disabled={rosterProductType === ""}
                     className="hidden"
                   />
                 </label>
