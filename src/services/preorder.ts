@@ -316,7 +316,8 @@ export interface ImportPreallocatedResult {
 export async function importPreallocatedRoster(
   clubId: string,
   season: string,
-  rows: PreallocatedImportRow[]
+  rows: PreallocatedImportRow[],
+  productType: "unisex" | "mens" | "womens" = "unisex"
 ): Promise<ImportPreallocatedResult> {
   const result: ImportPreallocatedResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };
 
@@ -351,6 +352,7 @@ export async function importPreallocatedRoster(
       jersey_name: row.last_name.trim().toUpperCase(),
       status: "needs_size" as const,
       size: null,
+      product_type: productType,
       any_number: false,
       pref_1: null,
       pref_2: null,

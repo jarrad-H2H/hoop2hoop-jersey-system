@@ -61,6 +61,7 @@ const PreOrderManager: React.FC = () => {
 
   const [rosterImportError, setRosterImportError] = useState<string | null>(null);
   const [rosterImportSuccess, setRosterImportSuccess] = useState<string | null>(null);
+  const [rosterProductType, setRosterProductType] = useState<"unisex" | "mens" | "womens">("unisex");
   const rosterFileInputRef = useRef<HTMLInputElement>(null);
 
   const [availableSeasons, setAvailableSeasons] = useState<string[]>([]);
@@ -441,7 +442,7 @@ const PreOrderManager: React.FC = () => {
         return;
       }
 
-      const result = await importPreallocatedRoster(selectedClubId, season, parsed);
+      const result = await importPreallocatedRoster(selectedClubId, season, parsed, rosterProductType);
       await Promise.all([loadRequests(), loadAvailableSeasons(selectedClubId)]);
       const parts = [`Imported ${result.inserted} new + updated ${result.updated} existing records.`];
       if (result.errors.length > 0) parts.push(`${result.errors.length} error(s): ${result.errors.slice(0, 3).join("; ")}`);
@@ -671,6 +672,16 @@ const PreOrderManager: React.FC = () => {
             {/* Pre-allocated: import roster (shown when mode is open or closed, not locked) */}
             {selectedClub?.allocation_type === "pre_allocated" && mode !== "locked" && mode !== "off" && (
               <>
+                <select
+                  value={rosterProductType}
+                  onChange={e => setRosterProductType(e.target.value as "unisex" | "mens" | "womens")}
+                  className="border rounded px-2 py-2 text-xs text-gray-700"
+                  title="Product type for this roster (used to tag inventory correctly at finalise)"
+                >
+                  <option value="unisex">Unisex</option>
+                  <option value="mens">Mens</option>
+                  <option value="womens">Womens</option>
+                </select>
                 <label className="flex items-center gap-2 px-4 py-2 border border-amber-400 text-amber-800 bg-amber-50 rounded-lg text-sm font-medium hover:bg-amber-100 cursor-pointer">
                   <Upload size={15} />
                   Import Pre-Allocated Roster
