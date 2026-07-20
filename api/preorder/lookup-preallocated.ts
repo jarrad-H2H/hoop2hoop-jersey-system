@@ -68,19 +68,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const lastName = String(body.lastName ?? "").trim();
   const yearOfBirth = Number(body.yearOfBirth);
 
-  if (!clubId || !season || !firstName || !lastName) {
-    return res.status(400).json({ ok: false, error: "clubId, season, firstName, lastName are required" });
+  if (!clubId || !firstName || !lastName) {
+    return res.status(400).json({ ok: false, error: "clubId, firstName, lastName are required" });
   }
 
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("preorder_requests")
     .select("id, first_name, last_name, assigned_number, jersey_name, status")
     .eq("club_id", clubId)
-    .eq("season", season)
     .in("status", ["needs_size", "allocated"])
     .not("assigned_number", "is", null);
+
+  if (season) query = query.eq("season", season);
+
+  const { data, error } = await query;
 
   if (error) {
     return res.status(500).json({ ok: false, error: error.message });
