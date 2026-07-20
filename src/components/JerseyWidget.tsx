@@ -1102,11 +1102,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                   <p className="text-xs text-gray-500">Your jersey number has already been allocated by the club. Enter your details below to confirm your size.</p>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Player's First Name</label>
-                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Arnah-Leigh" value={paFirstName} onChange={e => { setPaFirstName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Jordan" value={paFirstName} onChange={e => { setPaFirstName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Player's Surname</label>
-                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Reedy" value={paLastName} onChange={e => { setPaLastName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Smith" value={paLastName} onChange={e => { setPaLastName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth</label>

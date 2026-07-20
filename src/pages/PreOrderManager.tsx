@@ -435,7 +435,7 @@ const PreOrderManager: React.FC = () => {
 
   const handleDownloadRosterTemplate = () => {
     const headers = ["first_name", "last_name", "jersey_number", "year_of_birth", "gender", "age_group", "parent_1_name", "parent_1_email", "parent_1_mobile", "parent_2_name", "parent_2_email", "parent_2_mobile"];
-    const example = { first_name: "Arnah-Leigh", last_name: "Reedy", jersey_number: 6, year_of_birth: 2008, gender: "Female", age_group: "U18", parent_1_name: "Jarnelle Reedy", parent_1_email: "aj.205@bigpond.com", parent_1_mobile: "0488778698", parent_2_name: "", parent_2_email: "", parent_2_mobile: "" };
+    const example = { first_name: "Jordan", last_name: "Smith", jersey_number: 6, year_of_birth: 2008, gender: "Female", age_group: "U18", parent_1_name: "Alex Smith", parent_1_email: "alex.smith@email.com", parent_1_mobile: "0400000000", parent_2_name: "", parent_2_email: "", parent_2_mobile: "" };
     const ws = XLSX.utils.json_to_sheet([example], { header: headers });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Roster");
