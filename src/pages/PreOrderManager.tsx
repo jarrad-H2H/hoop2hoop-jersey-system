@@ -387,15 +387,17 @@ const PreOrderManager: React.FC = () => {
         const firstName = String(row["first_name"] ?? "").trim();
         const lastName = String(row["last_name"] ?? "").trim();
         const jerseyNumber = Number(row["jersey_number"]);
-        const yearOfBirth = Number(row["year_of_birth"]);
+        const rawYob = row["year_of_birth"];
+        const yearOfBirth = rawYob !== undefined && rawYob !== null && rawYob !== ""
+          ? Number(rawYob) : null;
 
         if (!firstName) { errors.push(`Row ${rowNum}: first_name is blank.`); return; }
         if (!lastName) { errors.push(`Row ${rowNum}: last_name is blank.`); return; }
         if (!Number.isFinite(jerseyNumber) || !Number.isInteger(jerseyNumber) || jerseyNumber < 0 || jerseyNumber > 99 || jerseyNumber === 69) {
           errors.push(`Row ${rowNum}: jersey_number "${row["jersey_number"]}" must be 0–99 and not 69.`); return;
         }
-        if (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100) {
-          errors.push(`Row ${rowNum}: year_of_birth "${row["year_of_birth"]}" is not valid.`); return;
+        if (yearOfBirth !== null && (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100)) {
+          errors.push(`Row ${rowNum}: year_of_birth "${rawYob}" is not a valid year.`); return;
         }
 
         parsed.push({

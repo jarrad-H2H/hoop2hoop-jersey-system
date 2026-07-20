@@ -8,7 +8,7 @@ export interface PreorderRequest {
   club_id: string;
   first_name: string;
   last_name: string;
-  year_of_birth: number;
+  year_of_birth: number | null;
   size: string;
   age_group: string | null;
   pref_1: number | null;
@@ -291,7 +291,7 @@ export interface PreallocatedImportRow {
   first_name: string;
   last_name: string;
   jersey_number: number;
-  year_of_birth: number;
+  year_of_birth: number | null;
   gender?: string | null;
   age_group?: string | null;
   parent_1_name?: string | null;
@@ -330,8 +330,8 @@ export async function importPreallocatedRoster(
       .range(from, to) as any
   );
 
-  const existingKey = (r: { first_name: string; last_name: string; year_of_birth: number }) =>
-    `${r.first_name.trim().toLowerCase()}|${r.last_name.trim().toLowerCase()}|${r.year_of_birth}`;
+  const existingKey = (r: { first_name: string; last_name: string; year_of_birth: number | null }) =>
+    `${r.first_name.trim().toLowerCase()}|${r.last_name.trim().toLowerCase()}|${r.year_of_birth ?? ""}`;
 
   const existingMap = new Map(existing.map(r => [existingKey(r), r.id]));
 
@@ -344,7 +344,7 @@ export async function importPreallocatedRoster(
       season,
       first_name: row.first_name.trim(),
       last_name: row.last_name.trim(),
-      year_of_birth: row.year_of_birth,
+      year_of_birth: row.year_of_birth ?? null,
       gender: (row.gender ?? null) as "Male" | "Female" | null,
       age_group: row.age_group ?? null,
       assigned_number: row.jersey_number,
