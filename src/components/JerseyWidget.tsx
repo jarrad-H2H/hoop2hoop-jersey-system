@@ -1092,7 +1092,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 Your jersey number is <span className="font-bold text-indigo-700">#{paSelected.assignedNumber}</span> and
                 will be printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.
               </p>
-              <p className="text-xs text-gray-500 mt-2">You can close this page.</p>
+              <p className="text-xs text-gray-500 mt-2">Please continue to checkout to complete your order.</p>
             </div>
           ) : (
             <>
