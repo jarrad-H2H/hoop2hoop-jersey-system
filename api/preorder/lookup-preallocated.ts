@@ -64,6 +64,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const body = req.body ?? {};
   const clubId = String(body.clubId ?? "").trim();
   const season = String(body.season ?? "").trim();
+  const productType = String(body.productType ?? "").trim();
   const firstName = String(body.firstName ?? "").trim();
   const lastName = String(body.lastName ?? "").trim();
   const yearOfBirth = Number(body.yearOfBirth);
@@ -82,6 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     .not("assigned_number", "is", null);
 
   if (season) query = query.eq("season", season);
+  if (productType === "mens" || productType === "womens") query = query.eq("product_type", productType);
 
   const { data, error } = await query;
 

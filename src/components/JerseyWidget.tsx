@@ -903,7 +903,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const res = await fetch("/api/preorder/lookup-preallocated", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clubId: selectedClubId, season: paSeasonParam || null, firstName: paFirstName.trim(), lastName: paLastName.trim(), yearOfBirth: yob }),
+        body: JSON.stringify({ clubId: selectedClubId, season: paSeasonParam || null, productType: selectedProductType || null, firstName: paFirstName.trim(), lastName: paLastName.trim(), yearOfBirth: yob }),
       });
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Lookup failed."); return; }
