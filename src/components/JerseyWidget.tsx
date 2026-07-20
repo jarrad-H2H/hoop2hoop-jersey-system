@@ -1302,7 +1302,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               <div>
                 <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                   <input type="checkbox" checked={claimedCurrentChecked} onChange={(e) => { setClaimedCurrentChecked(e.target.checked); if (!e.target.checked) setClaimedCurrentNum(""); }} />
-                  I currently have a jersey number I want to keep
+                  I have a current jersey number I'd like to request again (not guaranteed)
                 </label>
                 {claimedCurrentChecked && (
                   <div className="flex items-center gap-2 mt-2">
