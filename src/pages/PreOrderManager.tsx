@@ -630,7 +630,7 @@ const PreOrderManager: React.FC = () => {
           <div className="flex flex-wrap gap-3">
 
             {/* Step 0: open the window */}
-            {(mode === "off" || mode === "locked") && (
+            {(mode === "off" || mode === "closed" || mode === "locked") && (
               <button
                 type="button"
                 onClick={() => setMode("open")}
@@ -638,7 +638,7 @@ const PreOrderManager: React.FC = () => {
                 className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
               >
                 <Unlock size={15} />
-                {mode === "off" ? "Open Pre-Order Window" : "Re-Open for Another Round"}
+                {mode === "off" ? "Open Pre-Order Window" : "Re-Open Window"}
               </button>
             )}
 
