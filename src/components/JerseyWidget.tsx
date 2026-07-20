@@ -1251,11 +1251,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             <>
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">First Name</label>
-                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Michael" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Surname</label>
-                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. Smith" value={lastName} onChange={(e) => setLastName(e.target.value)} />
+                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="Surname" value={lastName} onChange={(e) => setLastName(e.target.value)} />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth</label>
@@ -1329,7 +1329,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           <input
             type="text"
             className="border rounded px-3 py-2 w-full text-base"
-            placeholder="e.g. Michael"
+            placeholder="First name"
             value={firstName}
             onChange={(e) => {
               setFirstName(e.target.value);
@@ -1356,7 +1356,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           <input
             type="text"
             className="border rounded px-3 py-2 w-full text-base"
-            placeholder="e.g. Smith"
+            placeholder="Surname"
             value={lastName}
             onChange={(e) => {
               setLastName(e.target.value);
