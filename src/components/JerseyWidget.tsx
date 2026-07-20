@@ -346,7 +346,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     !loadingSuggest;
 
   const notifyShopify = (
-    type: "h2h:reservation:ready" | "h2h:reservation:cleared",
+    type: "h2h:reservation:ready" | "h2h:reservation:cleared" | "h2h:preallocated:ready",
     payload?: any
   ) => {
     try {
@@ -942,6 +942,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
       setPaSubmitted(true);
+      notifyShopify("h2h:preallocated:ready", {
+        jerseyNumber: paSelected.assignedNumber,
+        jerseyName: paJerseyName.trim().toUpperCase(),
+        preorderRequestId: paSelected.id,
+      });
     } catch {
       setPaError("Could not reach the server. Please try again.");
     } finally {

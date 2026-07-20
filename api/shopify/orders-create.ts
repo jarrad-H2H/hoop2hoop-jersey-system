@@ -137,6 +137,43 @@ function extractPreorderProperties(props: any): {
   };
 }
 
+function extractPreallocatedProperties(props: any): {
+  preorderRequestId: string; jerseyNumber: string; jerseyName: string;
+} {
+  const get = (key: string): string => {
+    if (Array.isArray(props)) {
+      const p = props.find((p: any) => normalizeKey(p?.name ?? p?.key) === normalizeKey(key));
+      return String(p?.value ?? "").trim();
+    }
+    if (props && typeof props === "object") return String(props[key] ?? "").trim();
+    return "";
+  };
+  return {
+    preorderRequestId: get("_h2h_preorder_request_id"),
+    jerseyNumber: get("_h2h_prealloc_jersey_number"),
+    jerseyName: get("_h2h_prealloc_jersey_name"),
+  };
+}
+
+async function writeOrderNotePreallocated(
+  orderId: string,
+  jerseyNumber: string,
+  jerseyName: string
+): Promise<void> {
+  if (!process.env.SHOPIFY_ADMIN_TOKEN || !process.env.SHOPIFY_STORE_DOMAIN) return;
+  const displayName = jerseyName || "Unknown";
+  const allocationBlock = `JERSEY ALLOCATIONS:\n${displayName} — Jersey #${jerseyNumber}`;
+  const getResp = await shopifyAdminFetch(`orders/${orderId}.json?fields=id,note`);
+  if (!getResp.ok) return;
+  const { order: existingOrder } = await getResp.json() as { order: { id: number; note: string | null } };
+  const existingNote = (existingOrder.note ?? "").trim();
+  const newNote = existingNote ? `${existingNote}\n\n${allocationBlock}` : allocationBlock;
+  await shopifyAdminFetch(`orders/${orderId}.json`, {
+    method: "PUT",
+    body: JSON.stringify({ order: { id: Number(orderId), note: newNote } }),
+  });
+}
+
 // ── Shopify inventory sync helper ───────────────────────────────────────────
 // Reads Available jersey counts per size from our inventory table and pushes
 // them to Shopify variant stock levels. Called after each confirmed stock-mode
@@ -290,6 +327,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const syncClubIds = new Set<string>(); // clubs with confirmed stock-mode orders → sync to Shopify after loop
 
   for (const li of lineItems) {
+    // Pre-allocated: player confirmed size+jersey name before checkout; write order note now.
+    const preallocProps = extractPreallocatedProperties(li.properties);
+    if (preallocProps.preorderRequestId) {
+      try {
+        const { error: paErr } = await supabase
+          .from("preorder_requests")
+          .update({
+            shopify_order_id: orderId,
+            shopify_line_item_id: li?.id != null ? String(li.id) : null,
+            order_number: orderNumber || null,
+            paid_at: nowIso,
+          })
+          .eq("id", preallocProps.preorderRequestId);
+        if (paErr) {
+          await logEvent(supabase, { order_id: orderId, order_number: orderNumber, level: "error", message: "Failed to update pre-allocated preorder_request with order info", meta: { detail: paErr.message, preorderRequestId: preallocProps.preorderRequestId } });
+        } else {
+          processed += 1;
+          await writeOrderNotePreallocated(orderId, preallocProps.jerseyNumber, preallocProps.jerseyName);
+          await logEvent(supabase, { order_id: orderId, order_number: orderNumber, level: "info", message: "Pre-allocated order note written", meta: { preorderRequestId: preallocProps.preorderRequestId, jerseyNumber: preallocProps.jerseyNumber, jerseyName: preallocProps.jerseyName } });
+        }
+      } catch (e: any) {
+        await logEvent(supabase, { order_id: orderId, order_number: orderNumber, level: "error", message: "Exception processing pre-allocated order", meta: { detail: e?.message ?? String(e), preorderRequestId: preallocProps.preorderRequestId } });
+      }
+      continue;
+    }
+
     // Pre-order: detect before the reservation check
     const preorderProps = extractPreorderProperties(li.properties);
     if (preorderProps.isPreorder) {

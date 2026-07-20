@@ -223,6 +223,10 @@
     { id: "h2h_age_group_preorder",     name: "properties[_h2h_age_group_preorder]" },
     { id: "h2h_club_id_preorder",       name: "properties[_h2h_club_id_preorder]" },
     { id: "h2h_size_preorder",          name: "properties[_h2h_size_preorder]" },
+    // Pre-allocated flow
+    { id: "h2h_prealloc_request_id",   name: "properties[_h2h_preorder_request_id]" },
+    { id: "h2h_prealloc_jersey_number", name: "properties[_h2h_prealloc_jersey_number]" },
+    { id: "h2h_prealloc_jersey_name",  name: "properties[_h2h_prealloc_jersey_name]" },
   ];
 
   function injectHiddenInputs(form) {
@@ -316,6 +320,7 @@
     // Section Rendering API recreates the product form (destroying our injected inputs).
     var lastReservation = null;
     var lastPreorder = null;
+    var lastPreallocated = null;
 
     // Re-injects hidden inputs into the CURRENT form if they were destroyed
     // (e.g. Dawn section rendering replaces product-form innerHTML on variant change).
@@ -338,7 +343,7 @@
       atcBtn.setAttribute("data-h2h-atc-click", "true");
 
       atcBtn.addEventListener("click", function (e) {
-        if (!lastReservation && !lastPreorder) return; // nothing set → let Dawn handle normally
+        if (!lastReservation && !lastPreorder && !lastPreallocated) return; // nothing set → let Dawn handle normally
 
         var variantId = findSelectedVariantId(scope);
         if (!variantId) return; // no variant selected → let Dawn handle
@@ -358,6 +363,13 @@
             "Jersey Number": String(snap.jerseyNumber),
             "_h2h_pending_allocation_id": String(snap.pendingId),
             "_h2h_reserved_at": snap.reservedAt,
+          };
+        } else if (lastPreallocated) {
+          var snap = lastPreallocated; // freeze at click time
+          properties = {
+            "_h2h_preorder_request_id": String(snap.preorderRequestId),
+            "_h2h_prealloc_jersey_number": String(snap.jerseyNumber),
+            "_h2h_prealloc_jersey_name": String(snap.jerseyName || ""),
           };
         } else {
           var snap = lastPreorder; // freeze at click time
@@ -526,6 +538,19 @@
             gender: data.gender,
           };
           window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: data }));
+          forceAtcLabel(scope, "Add to cart");
+          setupAtcClickHandler();
+        }
+
+        // Pre-allocated: customer confirmed size + jersey name in widget.
+        // Store details so the ATC click handler can write them to the cart.
+        if (data.type === "h2h:preallocated:ready") {
+          lastPreallocated = {
+            preorderRequestId: data.preorderRequestId,
+            jerseyNumber: data.jerseyNumber,
+            jerseyName: data.jerseyName || "",
+          };
+          window.dispatchEvent(new CustomEvent("h2h:preallocated:ready", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
         }
