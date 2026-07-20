@@ -76,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let query = supabase
     .from("preorder_requests")
-    .select("id, first_name, last_name, assigned_number, jersey_name, status")
+    .select("id, first_name, last_name, assigned_number, jersey_name, status, year_of_birth")
     .eq("club_id", clubId)
     .in("status", ["needs_size", "allocated"])
     .not("assigned_number", "is", null);
@@ -89,32 +89,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ ok: false, error: error.message });
   }
 
-  const rows = (data ?? []) as Row[];
-
-  // Score each row
-  const scored = rows.map(row => {
-    const lastScore = nameSimilarity(lastName, row.last_name);
-    const firstScore = nameSimilarity(firstName, row.first_name);
-    const yobBonus = Number.isFinite(yearOfBirth) && yearOfBirth > 0
-      ? (row as any).year_of_birth === yearOfBirth ? 30 : Math.abs(((row as any).year_of_birth ?? 0) - yearOfBirth) === 1 ? 10 : 0
-      : 0;
-    // Last name match is the primary signal; first name secondary
-    const total = lastScore * 1.5 + firstScore + yobBonus;
-    return { row, total };
-  });
-
-  // Need YOB in the query for scoring — re-fetch with YOB
-  // (We already have all rows; just need the YOB column for bonus)
-  // Re-fetch with year_of_birth included
-  const { data: withYob } = await supabase
-    .from("preorder_requests")
-    .select("id, first_name, last_name, assigned_number, jersey_name, status, year_of_birth")
-    .eq("club_id", clubId)
-    .eq("season", season)
-    .in("status", ["needs_size", "allocated"])
-    .not("assigned_number", "is", null);
-
-  const rowsWithYob = (withYob ?? []) as (Row & { year_of_birth: number })[];
+  const rowsWithYob = (data ?? []) as (Row & { year_of_birth: number | null })[];
 
   const scoredWithYob = rowsWithYob.map(row => {
     const lastScore = nameSimilarity(lastName, row.last_name);
