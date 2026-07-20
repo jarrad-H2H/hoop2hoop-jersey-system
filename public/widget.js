@@ -299,6 +299,23 @@
       }
     }
 
+    // Simple Bundles: insert after the last properties[] select (bundle component dropdowns)
+    if (!inserted) {
+      var bundleSelects = $all('select[name^="properties["]', searchRoot || form);
+      if (bundleSelects.length > 0) {
+        var lastBundleSel = bundleSelects[bundleSelects.length - 1];
+        var selWrapper = lastBundleSel.parentElement;
+        if (selWrapper && selWrapper.parentNode) {
+          if (selWrapper.nextSibling) {
+            selWrapper.parentNode.insertBefore(host, selWrapper.nextSibling);
+          } else {
+            selWrapper.parentNode.appendChild(host);
+          }
+          inserted = true;
+        }
+      }
+    }
+
     if (!inserted) {
       // Fallback: before product-form web component
       var productFormEl = form.closest("product-form");
