@@ -262,6 +262,27 @@ const PreOrderManager: React.FC = () => {
     setClubs(prev => prev.map(c => c.id === selectedClubId ? { ...c, preorder_mode: mode } : c));
   };
 
+  const handleClearRoster = async () => {
+    if (!selectedClubId || !season) return;
+    const clubName = selectedClub?.name ?? "this club";
+    if (!window.confirm(`Delete ALL pre-order records for ${clubName} — season "${season}"?\n\nThis cannot be undone.`)) return;
+    setActionLoading(true);
+    setActionMsg(null);
+    const { error } = await supabase
+      .from("preorder_requests")
+      .delete()
+      .eq("club_id", selectedClubId)
+      .eq("season", season);
+    if (error) {
+      setActionMsg({ type: "err", text: `Delete failed: ${error.message}` });
+    } else {
+      setRequests([]);
+      await loadAvailableSeasons(selectedClubId);
+      setActionMsg({ type: "ok", text: `All records for season "${season}" deleted.` });
+    }
+    setActionLoading(false);
+  };
+
   // ── Excel export ────────────────────────────────────────────────────────────
   const handleExport = (exportRows?: PreorderRequest[]) => {
     const data = exportRows ?? requests;
@@ -701,6 +722,16 @@ const PreOrderManager: React.FC = () => {
                   <Download size={15} />
                   Download Template
                 </button>
+                {requests.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearRoster}
+                    disabled={actionLoading}
+                    className="flex items-center gap-2 px-4 py-2 border border-red-300 text-red-700 bg-red-50 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50"
+                  >
+                    Delete Season
+                  </button>
+                )}
               </>
             )}
 
