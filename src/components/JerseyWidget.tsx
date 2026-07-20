@@ -488,7 +488,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!pid) return;
       const { data, error } = await supabase
         .from("shopify_product_club_map")
-        .select("shopify_product_id, club_id, product_type, clubs(preorder_mode, allocation_type, is_client)")
+        .select("shopify_product_id, club_id, product_type, bundle_jersey_property, clubs(preorder_mode, allocation_type, is_client)")
         .eq("shopify_product_id", pid)
         .limit(1);
       if (error) { setClubDetectError(error.message); return; }
@@ -506,6 +506,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       setSelectedProductType(row.product_type ?? "default");
       setPreorderMode((clubJoin?.preorder_mode as "off" | "open" | "closed" | "locked") ?? "off");
       setAllocationTypeState(((clubJoin as any)?.allocation_type as "fcfs" | "pre_allocated") ?? "fcfs");
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({
+            type: "h2h:config",
+            bundleJerseyProperty: (row as any).bundle_jersey_property ?? null,
+          }, "*");
+        }
+      } catch (_) {}
     };
     void run();
   }, [demoMode, shopifyProductId]);

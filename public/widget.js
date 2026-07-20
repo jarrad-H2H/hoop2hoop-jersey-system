@@ -87,7 +87,14 @@
     return fallback && fallback.value ? String(fallback.value).trim() : "";
   }
 
-  function findSelectedSizeValue(scope) {
+  function findSelectedSizeValue(scope, bundleJersProp) {
+    // 0) Simple Bundles: use the explicitly configured property name
+    if (bundleJersProp) {
+      var bSel = $('select[name="properties[' + bundleJersProp + ']"]', scope);
+      if (bSel) return (bSel.value || "").trim();
+      return ""; // configured but select not found — size stays empty (visible in widget)
+    }
+
     // 1) Dawn variant-selects dropdowns
     var variantSelects = $("variant-selects", scope);
     if (variantSelects) {
@@ -321,6 +328,7 @@
     var lastReservation = null;
     var lastPreorder = null;
     var lastPreallocated = null;
+    var bundleJerseyProperty = null;
 
     // Re-injects hidden inputs into the CURRENT form if they were destroyed
     // (e.g. Dawn section rendering replaces product-form innerHTML on variant change).
@@ -433,7 +441,7 @@
 
     // ── Variant state broadcasting ──────────────────────────────────────────
     function sendVariantState(force) {
-      var size = findSelectedSizeValue(scope);
+      var size = findSelectedSizeValue(scope, bundleJerseyProperty);
       var variantId = findSelectedVariantId(scope);
       scheduleSend(
         iframe,
@@ -553,6 +561,13 @@
           window.dispatchEvent(new CustomEvent("h2h:preallocated:ready", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
+        }
+
+        // Widget forwards the product mapping config (including bundle property name).
+        // Re-send variant state immediately so the widget gets the correct size.
+        if (data.type === "h2h:config") {
+          bundleJerseyProperty = data.bundleJerseyProperty || null;
+          sendVariantState(true);
         }
 
         // Widget asks for current variant the moment its React app is ready to receive it

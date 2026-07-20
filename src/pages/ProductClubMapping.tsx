@@ -20,6 +20,7 @@ interface MappingRow {
   shopify_product_id: string;
   club_id: string;
   gender: Gender;
+  bundle_jersey_property: string | null;
   created_at: string;
   updated_at: string;
   clubs?: { name: string } | null;
@@ -51,6 +52,7 @@ const ProductClubMapping: React.FC = () => {
 
   const [productInput, setProductInput] = useState("");
   const [parsedProductId, setParsedProductId] = useState<string | null>(null);
+  const [bundleJerseyProperty, setBundleJerseyProperty] = useState<string>("");
 
   const [mappings, setMappings] = useState<MappingRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -78,7 +80,7 @@ const ProductClubMapping: React.FC = () => {
   const loadMappings = async () => {
     const { data, error } = await supabase
       .from("shopify_product_club_map")
-      .select("id, shopify_product_id, club_id, gender, created_at, updated_at, clubs(name)")
+      .select("id, shopify_product_id, club_id, gender, bundle_jersey_property, created_at, updated_at, clubs(name)")
       .order("updated_at", { ascending: false });
 
     if (error) {
@@ -134,6 +136,7 @@ const ProductClubMapping: React.FC = () => {
             club_id: selectedClubId,
             gender: selectedGender,
             product_type: genderToProductType(selectedGender),
+            bundle_jersey_property: bundleJerseyProperty.trim() || null,
           }],
           { onConflict: "shopify_product_id" }
         );
@@ -145,6 +148,7 @@ const ProductClubMapping: React.FC = () => {
 
       setStatus(`Saved: product ${parsedProductId} → club (${GENDER_LABELS[selectedGender]})`);
       setProductInput("");
+      setBundleJerseyProperty("");
       await loadMappings();
     } finally {
       setLoading(false);
@@ -243,6 +247,22 @@ const ProductClubMapping: React.FC = () => {
           </div>
         </div>
 
+        <div>
+          <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+            Simple Bundles jersey property <span className="normal-case font-normal text-gray-500">(leave blank for standard products)</span>
+          </label>
+          <input
+            className="border rounded px-3 py-2 w-full font-mono text-sm"
+            placeholder="e.g. Reversible Playing Jersey - BOYS"
+            value={bundleJerseyProperty}
+            onChange={(e) => setBundleJerseyProperty(e.target.value)}
+            disabled={loading}
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Only required for Simple Bundles products. Copy the exact component name from the Simple Bundles app (the text that appears in the customer's size selector).
+          </p>
+        </div>
+
         <div className="flex justify-end">
           <button
             type="submit"
@@ -267,6 +287,7 @@ const ProductClubMapping: React.FC = () => {
                 <th className="px-3 py-2 text-left">Shopify Product ID</th>
                 <th className="px-3 py-2 text-left">Club</th>
                 <th className="px-3 py-2 text-left">Gender</th>
+                <th className="px-3 py-2 text-left">Bundle Property</th>
                 <th className="px-3 py-2 text-left">Updated</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
@@ -289,6 +310,11 @@ const ProductClubMapping: React.FC = () => {
                       {GENDER_LABELS[m.gender] ?? m.gender}
                     </span>
                   </td>
+                  <td className="px-3 py-2 font-mono text-gray-500">
+                    {m.bundle_jersey_property
+                      ? <span className="text-indigo-700 font-semibold">{m.bundle_jersey_property}</span>
+                      : <span className="text-gray-400">—</span>}
+                  </td>
                   <td className="px-3 py-2">{new Date(m.updated_at).toLocaleString()}</td>
                   <td className="px-3 py-2 text-right">
                     <button
@@ -304,7 +330,7 @@ const ProductClubMapping: React.FC = () => {
               ))}
               {mappings.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-gray-500">
+                  <td colSpan={6} className="px-3 py-8 text-center text-gray-500">
                     No mappings yet.
                   </td>
                 </tr>
