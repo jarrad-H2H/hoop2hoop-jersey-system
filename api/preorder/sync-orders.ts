@@ -46,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Parse body
   const body = req.body ?? {};
-  const raw: Array<{ shopifyOrderId: string; shopifyLineItemId: string; jerseyNumber: number; firstName: string; lastName: string; jerseyName?: string | null }> =
+  const raw: Array<{ shopifyOrderId: string; shopifyLineItemId: string; jerseyNumber: number; jerseyNumberDisplay?: string | null; firstName: string; lastName: string; jerseyName?: string | null }> =
     Array.isArray(body.orders) ? body.orders : [];
 
   if (raw.length === 0) {
@@ -54,13 +54,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Group by shopifyOrderId — one PUT per order even when a parent bought for two kids
-  const grouped = new Map<string, Array<{ jerseyNumber: number; firstName: string; lastName: string; jerseyName: string | null }>>();
+  const grouped = new Map<string, Array<{ jerseyNumber: number; jerseyNumberDisplay: string | null; firstName: string; lastName: string; jerseyName: string | null }>>();
   for (const o of raw) {
     const orderId = String(o.shopifyOrderId ?? "").trim();
     if (!orderId) continue;
     if (!grouped.has(orderId)) grouped.set(orderId, []);
     grouped.get(orderId)!.push({
       jerseyNumber: Number(o.jerseyNumber),
+      jerseyNumberDisplay: o.jerseyNumberDisplay ? String(o.jerseyNumberDisplay).trim() : null,
       firstName: String(o.firstName ?? "").trim(),
       lastName: String(o.lastName ?? "").trim(),
       jerseyName: o.jerseyName ? String(o.jerseyName).trim() : null,
@@ -89,7 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const allocationLines = players
         .map(p => {
           const displayName = p.jerseyName ? p.jerseyName : `${p.firstName} ${p.lastName}`;
-          return `${displayName} — Jersey #${p.jerseyNumber}`;
+          return `${displayName} — Jersey #${p.jerseyNumberDisplay ?? p.jerseyNumber}`;
         })
         .join("\n");
       const allocationBlock = `JERSEY ALLOCATIONS:\n${allocationLines}`;

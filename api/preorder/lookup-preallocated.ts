@@ -13,6 +13,7 @@ interface Row {
   first_name: string;
   last_name: string;
   assigned_number: number;
+  jersey_number_display: string | null;
   jersey_name: string | null;
   status: string;
 }
@@ -77,7 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let query = supabase
     .from("preorder_requests")
-    .select("id, first_name, last_name, assigned_number, jersey_name, status, year_of_birth")
+    .select("id, first_name, last_name, assigned_number, jersey_number_display, jersey_name, status, year_of_birth")
     .eq("club_id", clubId)
     .in("status", ["needs_size", "allocated"])
     .not("assigned_number", "is", null);
@@ -113,6 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       firstName: s.row.first_name,
       lastName: s.row.last_name,
       assignedNumber: s.row.assigned_number,
+      assignedNumberDisplay: s.row.jersey_number_display ?? null,
       defaultJerseyName: s.row.jersey_name ?? s.row.last_name,
       alreadyConfirmed: s.row.status === "allocated" && Boolean(s.row.jersey_name),
     }));

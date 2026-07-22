@@ -121,7 +121,7 @@ const PreOrderManager: React.FC = () => {
       const rows = await fetchAllPages<PreorderRequest>((from, to) =>
         supabase
           .from("preorder_requests")
-          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at, jersey_name")
+          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, jersey_number_display, shopify_order_id, order_number, paid_at, status, created_at, jersey_name")
           .eq("club_id", selectedClubId)
           .eq("season", season)
           .order("paid_at", { ascending: true, nullsFirst: false })
@@ -168,7 +168,7 @@ const PreOrderManager: React.FC = () => {
       const fresh = await fetchAllPages<PreorderRequest>((from, to) =>
         supabase
           .from("preorder_requests")
-          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, shopify_order_id, order_number, paid_at, status, created_at, jersey_name")
+          .select("id, club_id, first_name, last_name, year_of_birth, gender, size, age_group, pref_1, pref_2, pref_3, any_number, claimed_current, assigned_number, jersey_number_display, shopify_order_id, order_number, paid_at, status, created_at, jersey_name")
           .eq("club_id", selectedClubId)
           .eq("season", season)
           .order("paid_at", { ascending: true, nullsFirst: false })
@@ -347,7 +347,7 @@ const PreOrderManager: React.FC = () => {
       pref_3: r.pref_3 ?? "",
       any_number: r.any_number ? "TRUE" : "FALSE",
       claimed_current: r.claimed_current ?? "",
-      assigned_number: r.assigned_number ?? "",
+      assigned_number: r.jersey_number_display ?? (r.assigned_number ?? ""),
       status: r.status,
       order_number: r.order_number ?? "",
       paid_at: r.paid_at ? new Date(r.paid_at).toLocaleString() : "",
@@ -472,7 +472,9 @@ const PreOrderManager: React.FC = () => {
         const rowNum = i + 2;
         const firstName = String(row["first_name"] ?? "").trim();
         const lastName = String(row["last_name"] ?? "").trim();
-        const jerseyNumber = Number(row["jersey_number"]);
+        const rawJerseyNumber = String(row["jersey_number"] ?? "").trim();
+        const jerseyNumber = Number(rawJerseyNumber);
+        const jerseyNumberDisplay: string | null = rawJerseyNumber === "00" ? "00" : null;
         const rawYob = row["year_of_birth"];
         const yearOfBirth = rawYob !== undefined && rawYob !== null && rawYob !== ""
           ? Number(rawYob) : null;
@@ -490,6 +492,7 @@ const PreOrderManager: React.FC = () => {
           first_name: firstName,
           last_name: lastName,
           jersey_number: jerseyNumber,
+          jersey_number_display: jerseyNumberDisplay,
           year_of_birth: yearOfBirth,
           gender: String(row["gender"] ?? "").trim() || null,
           age_group: String(row["age_group"] ?? "").trim() || null,
@@ -970,7 +973,7 @@ const PreOrderManager: React.FC = () => {
                   </td>
                   <td className="px-3 py-2">
                     {r.assigned_number != null
-                      ? <span className="font-bold text-brand-700">#{r.assigned_number}</span>
+                      ? <span className="font-bold text-brand-700">#{r.jersey_number_display ?? r.assigned_number}</span>
                       : <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-3 py-2 font-medium text-gray-800">

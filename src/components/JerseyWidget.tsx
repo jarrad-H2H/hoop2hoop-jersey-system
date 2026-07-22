@@ -271,6 +271,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     firstName: string;
     lastName: string;
     assignedNumber: number;
+    assignedNumberDisplay: string | null;
     defaultJerseyName: string;
     alreadyConfirmed: boolean;
   }
@@ -1179,7 +1180,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               <div className="text-3xl mb-2">✅</div>
               <p className="font-semibold text-gray-900">All done!</p>
               <p className="text-sm text-gray-600 mt-2">
-                Your jersey number is <span className="font-bold text-indigo-700">#{paSelected.assignedNumber}</span> and
+                Your jersey number is <span className="font-bold text-indigo-700">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span> and
                 will be printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.
               </p>
               <p className="text-xs text-gray-500 mt-2">Please continue to checkout to complete your order.</p>
@@ -1232,7 +1233,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                           <div key={c.id} className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded p-3">
                             <div>
                               <span className="font-semibold text-gray-900">{c.firstName} {c.lastName}</span>
-                              <span className="ml-2 text-indigo-700 font-bold">#{c.assignedNumber}</span>
+                              <span className="ml-2 text-indigo-700 font-bold">#{c.assignedNumberDisplay ?? c.assignedNumber}</span>
                               {c.alreadyConfirmed && <span className="ml-2 text-xs text-green-700">(size already confirmed)</span>}
                             </div>
                             <button
@@ -1261,7 +1262,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               {paSelected && (
                 <>
                   <div className="bg-indigo-50 border border-indigo-200 rounded p-3">
-                    <p className="text-sm font-semibold text-indigo-900">Your jersey number is <span className="text-2xl font-bold">#{paSelected.assignedNumber}</span></p>
+                    <p className="text-sm font-semibold text-indigo-900">Your jersey number is <span className="text-2xl font-bold">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span></p>
                   </div>
 
                   <div>

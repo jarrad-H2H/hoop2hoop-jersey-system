@@ -18,6 +18,7 @@ export interface PreorderRequest {
   claimed_current: number | null;
   gender: "Male" | "Female" | null;
   assigned_number: number | null;
+  jersey_number_display?: string | null;
   shopify_order_id: string | null;
   order_number: string | null;
   paid_at: string | null;
@@ -168,6 +169,7 @@ interface FinaliseRow {
   size: string | null;
   age_group: string | null;
   assigned_number: number;
+  jersey_number_display: string | null;
   player_id: string | null;
   product_type: string | null;
   shopify_order_id: string | null;
@@ -179,6 +181,7 @@ export interface ShopifyOrderUpdate {
   shopifyOrderId: string;
   shopifyLineItemId: string;
   jerseyNumber: number;
+  jerseyNumberDisplay: string | null;
   firstName: string;
   lastName: string;
   jerseyName: string | null;
@@ -191,7 +194,7 @@ export async function finalisePreorder(
   const requests = await fetchAllPages<FinaliseRow>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, player_id, product_type, shopify_order_id, shopify_line_item_id, jersey_name")
+      .select("id, first_name, last_name, year_of_birth, size, age_group, assigned_number, jersey_number_display, player_id, product_type, shopify_order_id, shopify_line_item_id, jersey_name")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "allocated")
@@ -245,6 +248,7 @@ export async function finalisePreorder(
           shopifyOrderId: req.shopify_order_id,
           shopifyLineItemId: req.shopify_line_item_id,
           jerseyNumber: req.assigned_number,
+          jerseyNumberDisplay: req.jersey_number_display ?? null,
           firstName: req.first_name,
           lastName: req.last_name,
           jerseyName: req.jersey_name ?? null,
@@ -265,10 +269,10 @@ export async function getLockedShopifyUpdates(
   clubId: string,
   season: string
 ): Promise<ShopifyOrderUpdate[]> {
-  const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number; first_name: string; last_name: string; jersey_name: string | null }>((from, to) =>
+  const rows = await fetchAllPages<{ shopify_order_id: string; shopify_line_item_id: string; assigned_number: number; jersey_number_display: string | null; first_name: string; last_name: string; jersey_name: string | null }>((from, to) =>
     supabase
       .from("preorder_requests")
-      .select("shopify_order_id, shopify_line_item_id, assigned_number, first_name, last_name, jersey_name")
+      .select("shopify_order_id, shopify_line_item_id, assigned_number, jersey_number_display, first_name, last_name, jersey_name")
       .eq("club_id", clubId)
       .eq("season", season)
       .eq("status", "locked")
@@ -281,9 +285,10 @@ export async function getLockedShopifyUpdates(
     shopifyOrderId: r.shopify_order_id,
     shopifyLineItemId: r.shopify_line_item_id,
     jerseyNumber: r.assigned_number,
+    jerseyNumberDisplay: r.jersey_number_display ?? null,
     firstName: r.first_name,
     lastName: r.last_name,
-    jerseyName: (r as any).jersey_name ?? null,
+    jerseyName: r.jersey_name ?? null,
   }));
 }
 
@@ -291,6 +296,7 @@ export interface PreallocatedImportRow {
   first_name: string;
   last_name: string;
   jersey_number: number;
+  jersey_number_display?: string | null;
   year_of_birth: number | null;
   gender?: string | null;
   age_group?: string | null;
@@ -349,6 +355,7 @@ export async function importPreallocatedRoster(
       gender: (row.gender ?? null) as "Male" | "Female" | null,
       age_group: row.age_group ?? null,
       assigned_number: row.jersey_number,
+      jersey_number_display: row.jersey_number_display ?? null,
       jersey_name: row.last_name.trim().toUpperCase(),
       status: "needs_size" as const,
       size: null,
@@ -371,6 +378,7 @@ export async function importPreallocatedRoster(
         .from("preorder_requests")
         .update({
           assigned_number: payload.assigned_number,
+          jersey_number_display: payload.jersey_number_display,
           jersey_name: payload.jersey_name,
           gender: payload.gender,
           age_group: payload.age_group,
