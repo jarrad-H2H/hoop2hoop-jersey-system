@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, fetchAllPages } from "../services/supabase";
 import { runFcfsAllocation, validateImportRow, finalisePreorder, getLockedShopifyUpdates, importPreallocatedRoster, type PreorderRequest, type PreallocatedImportRow } from "../services/preorder";
-import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw } from "lucide-react";
+import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw, Trash2 } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
 
@@ -279,6 +279,20 @@ const PreOrderManager: React.FC = () => {
       setRequests([]);
       await loadAvailableSeasons(selectedClubId);
       setActionMsg({ type: "ok", text: `All records for season "${season}" deleted.` });
+    }
+    setActionLoading(false);
+  };
+
+  const handleDeleteRequest = async (id: string, playerName: string) => {
+    if (!window.confirm(`Delete pre-order entry for ${playerName}?\n\nThis cannot be undone.`)) return;
+    setActionLoading(true);
+    setActionMsg(null);
+    const { error } = await supabase.from("preorder_requests").delete().eq("id", id);
+    if (error) {
+      setActionMsg({ type: "err", text: `Delete failed: ${error.message}` });
+    } else {
+      setRequests(prev => prev.filter(r => r.id !== id));
+      setActionMsg({ type: "ok", text: `Deleted entry for ${playerName}.` });
     }
     setActionLoading(false);
   };
@@ -725,16 +739,6 @@ const PreOrderManager: React.FC = () => {
                   <Download size={15} />
                   Download Template
                 </button>
-                {requests.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleClearRoster}
-                    disabled={actionLoading}
-                    className="flex items-center gap-2 px-4 py-2 border border-red-300 text-red-700 bg-red-50 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50"
-                  >
-                    Delete Season
-                  </button>
-                )}
               </>
             )}
 
@@ -815,6 +819,19 @@ const PreOrderManager: React.FC = () => {
               </button>
             )}
 
+            {/* Delete Season — always available when there's data */}
+            {requests.length > 0 && (
+              <button
+                type="button"
+                onClick={handleClearRoster}
+                disabled={actionLoading}
+                className="flex items-center gap-2 px-4 py-2 border border-red-300 text-red-700 bg-red-50 rounded-lg text-sm font-medium hover:bg-red-100 disabled:opacity-50"
+              >
+                <Trash2 size={15} />
+                Delete Season
+              </button>
+            )}
+
           </div>
 
           {/* Action result */}
@@ -882,6 +899,7 @@ const PreOrderManager: React.FC = () => {
                 <th className="px-3 py-2 text-left font-semibold">Jersey Name</th>
                 <th className="px-3 py-2 text-left font-semibold">Status</th>
                 <th className="px-3 py-2 text-left font-semibold">Paid At</th>
+                <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
@@ -925,6 +943,17 @@ const PreOrderManager: React.FC = () => {
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
                     {r.paid_at ? new Date(r.paid_at).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteRequest(r.id, `${r.first_name} ${r.last_name}`)}
+                      disabled={actionLoading}
+                      className="text-red-400 hover:text-red-700 disabled:opacity-40"
+                      title="Delete this entry"
+                    >
+                      <Trash2 size={13} />
+                    </button>
                   </td>
                 </tr>
               ))}
