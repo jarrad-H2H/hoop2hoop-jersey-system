@@ -17,6 +17,7 @@ interface Club {
   name: string;
   preorder_mode: PreorderMode;
   allocation_type: "fcfs" | "pre_allocated";
+  widget_config: { age_group_mode?: string; age_groups?: Array<{ label: string }>; current_window_age_group?: string | null } | null;
 }
 
 const MODE_BADGE: Record<PreorderMode, { label: string; className: string }> = {
@@ -67,6 +68,7 @@ const PreOrderManager: React.FC = () => {
   const [availableSeasons, setAvailableSeasons] = useState<string[]>([]);
   const [addingNewSeason, setAddingNewSeason] = useState(false);
   const [newSeasonInput, setNewSeasonInput] = useState("");
+  const [windowAgeGroup, setWindowAgeGroup] = useState<string>("");
 
   const selectedClub = clubs.find(c => c.id === selectedClubId) ?? null;
 
@@ -90,7 +92,7 @@ const PreOrderManager: React.FC = () => {
     setLoadingClubs(true);
     const { data } = await supabase
       .from("clubs")
-      .select("id, name, preorder_mode, allocation_type")
+      .select("id, name, preorder_mode, allocation_type, widget_config")
       .eq("is_client", true)
       .order("name");
     setClubs(((data ?? []) as any[]).map(c => ({ ...c, allocation_type: c.allocation_type ?? "fcfs" })) as Club[]);
@@ -101,6 +103,9 @@ const PreOrderManager: React.FC = () => {
   }, [selectedClubId]);
 
   useEffect(() => { void loadClubs(); }, []);
+
+  // Reset window age group picker when selected club changes
+  useEffect(() => { setWindowAgeGroup(""); }, [selectedClubId]);
 
   // ── Load requests ───────────────────────────────────────────────────────────
   const loadRequests = useCallback(async () => {
@@ -260,6 +265,31 @@ const PreOrderManager: React.FC = () => {
   const setModeNoConfirm = async (mode: PreorderMode) => {
     await supabase.from("clubs").update({ preorder_mode: mode }).eq("id", selectedClubId);
     setClubs(prev => prev.map(c => c.id === selectedClubId ? { ...c, preorder_mode: mode } : c));
+  };
+
+  const handleOpenWindow = async () => {
+    if (!selectedClubId) return;
+    const wc = selectedClub?.widget_config ?? null;
+    const isWindowSet = wc?.age_group_mode === "window_set";
+    if (isWindowSet && !windowAgeGroup) {
+      setActionMsg({ type: "err", text: "Please select an age group for this window before opening." });
+      return;
+    }
+    setActionLoading(true);
+    setActionMsg(null);
+    const updates: Record<string, unknown> = { preorder_mode: "open" };
+    if (isWindowSet && windowAgeGroup) {
+      updates.widget_config = { ...(wc ?? {}), current_window_age_group: windowAgeGroup };
+    }
+    const { error } = await supabase.from("clubs").update(updates).eq("id", selectedClubId);
+    if (error) {
+      setActionMsg({ type: "err", text: `Failed to open window: ${error.message}` });
+    } else {
+      const updatedWc = isWindowSet && windowAgeGroup ? { ...(wc ?? {}), current_window_age_group: windowAgeGroup } : wc;
+      setClubs(prev => prev.map(c => c.id === selectedClubId ? { ...c, preorder_mode: "open", widget_config: updatedWc as Club["widget_config"] } : c));
+      setActionMsg({ type: "ok", text: `Pre-order window opened${isWindowSet && windowAgeGroup ? ` for ${windowAgeGroup}` : ""}.` });
+    }
+    setActionLoading(false);
   };
 
   const handleClearRoster = async () => {
@@ -630,17 +660,27 @@ const PreOrderManager: React.FC = () => {
                 {MODE_BADGE[mode].label}
               </span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-700">Mode:</span>
-              <select
-                value={selectedClub?.allocation_type ?? "fcfs"}
-                onChange={e => setAllocationType(e.target.value as "fcfs" | "pre_allocated")}
-                className="border rounded px-2 py-1 text-xs"
-              >
-                <option value="fcfs">FCFS (players choose)</option>
-                <option value="pre_allocated">Pre-allocated (numbers set by club)</option>
-              </select>
-            </div>
+            {selectedClub?.widget_config?.age_group_mode === "window_set" && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-gray-700">Age Group:</span>
+                {mode === "open" && selectedClub.widget_config?.current_window_age_group ? (
+                  <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-800 rounded-full text-xs font-semibold">
+                    {selectedClub.widget_config.current_window_age_group}
+                  </span>
+                ) : (
+                  <select
+                    value={windowAgeGroup}
+                    onChange={e => setWindowAgeGroup(e.target.value)}
+                    className={`border rounded px-2 py-1 text-xs ${!windowAgeGroup ? "border-amber-400" : ""}`}
+                  >
+                    <option value="">— Select before opening —</option>
+                    {(selectedClub.widget_config?.age_groups ?? []).map(g => (
+                      <option key={g.label} value={g.label}>{g.label}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Count summary */}
@@ -670,7 +710,7 @@ const PreOrderManager: React.FC = () => {
             {(mode === "off" || mode === "closed" || mode === "locked") && (
               <button
                 type="button"
-                onClick={() => setMode("open")}
+                onClick={handleOpenWindow}
                 disabled={actionLoading}
                 className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
               >

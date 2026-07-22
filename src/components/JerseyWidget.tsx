@@ -157,6 +157,22 @@ const YesNoButtons: React.FC<{
   </div>
 );
 
+interface WidgetAgeGroupBracket {
+  label: string;
+  max_age?: number | null;
+}
+
+interface WidgetConfig {
+  order_mode?: string;
+  collect_surname?: boolean;
+  collect_prefs?: boolean;
+  allow_reclaim?: boolean;
+  collect_gender?: boolean;
+  age_group_mode?: "auto_yob" | "customer_select" | "window_set" | null;
+  age_groups?: WidgetAgeGroupBracket[];
+  current_window_age_group?: string | null;
+}
+
 interface JerseyWidgetProps {
   /** Demo mode: bypass postMessage/product-ID detection and use these directly */
   clubId?: string;
@@ -186,6 +202,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   const [preorderMode, setPreorderMode] = useState<"off" | "open" | "closed" | "locked">("off");
   const [allocationTypeState, setAllocationTypeState] = useState<"fcfs" | "pre_allocated">("fcfs");
+  const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
 
   // Player gender — needed to find Gold Coast's girls-only Junior/Open Girls teams,
   // which the standard YOB-derived age ladder (U10/U12/.../U18) can never match on its
@@ -279,6 +296,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [claimedCurrentChecked, setClaimedCurrentChecked] = useState<boolean>(false);
   const [claimedCurrentNum, setClaimedCurrentNum] = useState<string>("");
   const [preorderSubmitted, setPreorderSubmitted] = useState<boolean>(false);
+  // FCFS widget_config-driven state
+  const [fcfsJerseyName, setFcfsJerseyName] = useState<string>("");
+  const [customerSelectedAgeGroup, setCustomerSelectedAgeGroup] = useState<string>("");
+  const [yobOverflowConfirmed, setYobOverflowConfirmed] = useState<boolean | null>(null);
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
@@ -299,6 +320,37 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const remainingSeconds = expiresAt
     ? Math.max(0, Math.floor((expiresAt - tick) / 1000))
     : 0;
+
+  // ── widget_config derived values ──────────────────────────────────────────
+  const wc = widgetConfig;
+
+  const resolvedFcfsAgeGroup: string | null = useMemo(() => {
+    const mode = wc?.age_group_mode;
+    if (!mode) return derivedAgeGroup; // fallback to Seahawks-style YOB derivation
+    if (mode === "window_set") return wc?.current_window_age_group ?? null;
+    if (mode === "customer_select") return customerSelectedAgeGroup || null;
+    if (mode === "auto_yob") {
+      if (!yobValid) return null;
+      const age = SEASON_YEAR - yobNum;
+      const groups = wc?.age_groups ?? [];
+      for (const g of groups) {
+        if (g.max_age == null || age <= g.max_age) return g.label;
+      }
+      return groups.length > 0 ? groups[groups.length - 1].label : derivedAgeGroup;
+    }
+    return derivedAgeGroup;
+  }, [wc, customerSelectedAgeGroup, yobValid, yobNum, SEASON_YEAR, derivedAgeGroup]);
+
+  // Label of the oldest age group if current YOB overflows all brackets (auto_yob only)
+  const fcfsYobOverflowGroupLabel: string | null = useMemo(() => {
+    if (wc?.age_group_mode !== "auto_yob" || !yobValid) return null;
+    const groups = wc?.age_groups ?? [];
+    if (!groups.length) return null;
+    const last = groups[groups.length - 1];
+    if (last.max_age == null) return null; // no upper bound on last group = catch-all
+    return SEASON_YEAR - yobNum > last.max_age ? last.label : null;
+  }, [wc, yobValid, yobNum, SEASON_YEAR]);
+  // ─────────────────────────────────────────────────────────────────────────
 
   const sizeSelected = Boolean((selectedSize || "").trim());
   const teamSelected = Boolean((teamChoice || "").trim());
@@ -428,14 +480,15 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         void (async () => {
           const { data } = await supabase
             .from("clubs")
-            .select("id, preorder_mode, allocation_type, is_client")
+            .select("id, preorder_mode, allocation_type, is_client, widget_config")
             .eq("id", directClubId)
             .limit(1);
-          const club = (data?.[0] as { id: string; preorder_mode: string; allocation_type: string; is_client: boolean } | undefined);
+          const club = (data?.[0] as { id: string; preorder_mode: string; allocation_type: string; is_client: boolean; widget_config: WidgetConfig | null } | undefined);
           if (!club?.is_client) return;
           setSelectedClubId(club.id);
           setPreorderMode((club.preorder_mode as "off" | "open" | "closed" | "locked") ?? "off");
           setAllocationTypeState((club.allocation_type as "fcfs" | "pre_allocated") ?? "fcfs");
+          setWidgetConfig(club.widget_config ?? null);
         })();
       }
     } catch (_) {}
@@ -488,7 +541,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!pid) return;
       const { data, error } = await supabase
         .from("shopify_product_club_map")
-        .select("shopify_product_id, club_id, product_type, bundle_jersey_property, clubs(preorder_mode, allocation_type, is_client)")
+        .select("shopify_product_id, club_id, product_type, bundle_jersey_property, clubs(preorder_mode, allocation_type, is_client, widget_config)")
         .eq("shopify_product_id", pid)
         .limit(1);
       if (error) { setClubDetectError(error.message); return; }
@@ -506,11 +559,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       setSelectedProductType(row.product_type ?? "default");
       setPreorderMode((clubJoin?.preorder_mode as "off" | "open" | "closed" | "locked") ?? "off");
       setAllocationTypeState(((clubJoin as any)?.allocation_type as "fcfs" | "pre_allocated") ?? "fcfs");
+      const resolvedWc = ((clubJoin as any)?.widget_config as WidgetConfig | null) ?? null;
+      setWidgetConfig(resolvedWc);
       try {
         if (window.parent && window.parent !== window) {
           window.parent.postMessage({
             type: "h2h:config",
             bundleJerseyProperty: (row as any).bundle_jersey_property ?? null,
+            currentWindowAgeGroup: resolvedWc?.current_window_age_group ?? null,
           }, "*");
         }
       } catch (_) {}
@@ -539,6 +595,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     }, 1000);
     return () => clearInterval(timer);
   }, [expiresAt]);
+
+  // Auto-populate FCFS jersey name from last name when collect_surname is on
+  useEffect(() => {
+    if (wc?.collect_surname) {
+      setFcfsJerseyName(lastName.trim().toUpperCase());
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastName]);
 
   // Load teams for club
   useEffect(() => {
@@ -971,49 +1035,67 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!namesFilled) { setError("Please enter first name and surname."); return; }
     if (!yobValid) { setError("Please enter a valid year of birth."); return; }
 
+    const collectPrefs = wc?.collect_prefs !== false;
+    const allowReclaim = wc?.allow_reclaim ?? true;
+    const collectGender = wc?.collect_gender ?? true;
+    const collectSurname = wc?.collect_surname === true;
+
+    if (collectSurname) {
+      const jn = fcfsJerseyName.trim();
+      if (!jn) { setError("Please enter your surname for jersey printing."); return; }
+      if (!/^[A-Za-z'\-]+$/.test(jn)) { setError("Surname to be printed may only contain letters, hyphens, and apostrophes."); return; }
+      if (jn.length > 25) { setError("Surname to be printed must be 25 characters or fewer."); return; }
+    }
+    if (wc?.age_group_mode === "customer_select" && !customerSelectedAgeGroup) {
+      setError("Please select your age group."); return;
+    }
+    if (collectGender && !playerGenderAnswer) { setError("Please select a gender."); return; }
+
     const parsePref = (s: string): number | null => {
       if (!s.trim()) return null;
       const n = Number(s.trim());
       return Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= 99 && n !== 69 ? n : null;
     };
-    const p1 = parsePref(pref1);
-    const p2 = parsePref(pref2);
-    const p3 = parsePref(pref3);
-    const claimedCurrent = claimedCurrentChecked ? parsePref(claimedCurrentNum) : null;
+    const p1 = collectPrefs ? parsePref(pref1) : null;
+    const p2 = collectPrefs ? parsePref(pref2) : null;
+    const p3 = collectPrefs ? parsePref(pref3) : null;
+    const claimedCurrent = (collectPrefs && allowReclaim && claimedCurrentChecked) ? parsePref(claimedCurrentNum) : null;
 
-    if (!playerGenderAnswer) { setError("Please select a gender."); return; }
-    if (!anyNumber && p1 === null && p2 === null && p3 === null && !claimedCurrentChecked) {
-      setError("Please enter at least one number preference, or check 'Any number is fine'.");
-      return;
-    }
-    if ([pref1, pref2, pref3].some(s => s.trim() && parsePref(s) === null)) {
-      setError("Preferences must be valid jersey numbers (0–99, not 69).");
-      return;
-    }
-    if (claimedCurrentChecked && !claimedCurrentNum.trim()) {
-      setError("Please enter your current jersey number, or uncheck the keep-my-number option.");
-      return;
-    }
-    if (claimedCurrentChecked && claimedCurrent === null) {
-      setError("Current jersey number must be valid (0–99, not 69).");
-      return;
+    if (collectPrefs) {
+      if (!anyNumber && p1 === null && p2 === null && p3 === null && !claimedCurrentChecked) {
+        setError("Please enter at least one number preference, or check 'Any number is fine'.");
+        return;
+      }
+      if ([pref1, pref2, pref3].some(s => s.trim() && parsePref(s) === null)) {
+        setError("Preferences must be valid jersey numbers (0–99, not 69).");
+        return;
+      }
+      if (allowReclaim && claimedCurrentChecked && !claimedCurrentNum.trim()) {
+        setError("Please enter your current jersey number, or uncheck the keep-my-number option.");
+        return;
+      }
+      if (allowReclaim && claimedCurrentChecked && claimedCurrent === null) {
+        setError("Current jersey number must be valid (0–99, not 69).");
+        return;
+      }
     }
 
+    const payload = {
+      type: "h2h:preorder:ready",
+      pref1: p1, pref2: p2, pref3: p3,
+      anyNumber: collectPrefs ? anyNumber : true,
+      claimedCurrent,
+      firstName: firstName.trim(), lastName: lastName.trim(),
+      jerseyName: collectSurname ? fcfsJerseyName.trim() || null : null,
+      yob: yobNum, ageGroup: resolvedFcfsAgeGroup,
+      clubId: selectedClubId, size: selectedSize,
+      gender: playerGenderAnswer,
+    };
     try {
       if (window.parent && window.parent !== window) {
-        window.parent.postMessage({
-          type: "h2h:preorder:ready",
-          pref1: p1, pref2: p2, pref3: p3,
-          anyNumber, claimedCurrent,
-          firstName: firstName.trim(), lastName: lastName.trim(),
-          yob: yobNum, ageGroup: derivedAgeGroup,
-          clubId: selectedClubId, size: selectedSize,
-          gender: playerGenderAnswer,
-        }, "*");
+        window.parent.postMessage(payload, "*");
       }
-      window.dispatchEvent(new CustomEvent("h2h:preorder:ready", {
-        detail: { pref1: p1, pref2: p2, pref3: p3, anyNumber, claimedCurrent, firstName: firstName.trim(), lastName: lastName.trim(), yob: yobNum, ageGroup: derivedAgeGroup, clubId: selectedClubId, size: selectedSize, gender: playerGenderAnswer },
-      }));
+      window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: payload }));
     } catch (_) {}
     setPreorderSubmitted(true);
   };
@@ -1249,68 +1331,146 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             </div>
           ) : (
             <>
+              {/* First name */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">First Name</label>
                 <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
               </div>
+
+              {/* Surname */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Surname</label>
                 <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="Surname" value={lastName} onChange={(e) => setLastName(e.target.value)} />
               </div>
+
+              {/* Surname to be printed (optional — only when collect_surname is on) */}
+              {wc?.collect_surname && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Surname to be printed</label>
+                  <input
+                    type="text"
+                    className="border rounded px-3 py-2 w-full text-base uppercase"
+                    placeholder="SMITH"
+                    value={fcfsJerseyName}
+                    onChange={(e) => setFcfsJerseyName(e.target.value.replace(/[^A-Za-z'\-]/g, "").toUpperCase())}
+                    maxLength={25}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Will be printed on the back of your jersey. Edit if needed. Letters, hyphens, and apostrophes only.</p>
+                </div>
+              )}
+
+              {/* Year of Birth */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth</label>
-                <input type="number" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2013" value={yearOfBirth} onChange={(e) => setYearOfBirth(e.target.value)} />
+                <input
+                  type="number"
+                  className="border rounded px-3 py-2 w-full text-base"
+                  placeholder="e.g. 2013"
+                  value={yearOfBirth}
+                  onChange={(e) => { setYearOfBirth(e.target.value); setYobOverflowConfirmed(null); }}
+                />
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Gender</label>
-                <div className="flex gap-4">
-                  {(["Male", "Female"] as const).map((g) => (
-                    <label key={g} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                      <input type="radio" name="preorder-gender" checked={playerGenderAnswer === g} onChange={() => setPlayerGenderAnswer(g)} />
-                      {g}
-                    </label>
-                  ))}
+
+              {/* YOB overflow prompt (auto_yob mode — age exceeds all configured brackets) */}
+              {fcfsYobOverflowGroupLabel && yobOverflowConfirmed === null && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-3">
+                  <p className="text-sm text-amber-900">
+                    Is your year of birth <strong>{yearOfBirth}</strong> correct? This would place you above our oldest age group (<strong>{fcfsYobOverflowGroupLabel}</strong>). Would you like to continue?
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setYobOverflowConfirmed(true)}
+                      className="px-4 py-2 rounded border text-sm font-semibold bg-amber-700 border-amber-800 text-white hover:bg-amber-800"
+                    >Yes, continue</button>
+                    <button
+                      type="button"
+                      onClick={() => { setYearOfBirth(""); setYobOverflowConfirmed(null); }}
+                      className="px-4 py-2 rounded border text-sm font-semibold bg-white border-gray-300 text-gray-800 hover:bg-gray-50"
+                    >No, re-enter</button>
+                  </div>
                 </div>
-              </div>
-              <div className="border-t pt-3">
-                <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">Jersey Number Preferences</div>
-                <p className="text-xs text-gray-500 mb-3">Enter up to three choices in order. Numbers are allocated first-come-first-served by payment time — earlier payers get higher priority.</p>
-                {[
-                  { label: "1st choice", val: pref1, set: setPref1 },
-                  { label: "2nd choice", val: pref2, set: setPref2 },
-                  { label: "3rd choice", val: pref3, set: setPref3 },
-                ].map(({ label, val, set }) => (
-                  <div key={label} className="flex items-center gap-2 mb-2">
-                    <label className="text-xs text-gray-600 w-24 flex-shrink-0">{label}</label>
-                    <input
-                      type="number"
-                      className="border rounded px-3 py-1.5 text-sm w-20 disabled:bg-gray-100"
-                      placeholder="0–99"
-                      value={val}
-                      onChange={(e) => set(e.target.value)}
-                      min={0}
-                      max={99}
-                      disabled={anyNumber}
-                    />
+              )}
+
+              {/* Customer selects age group (customer_select mode) */}
+              {wc?.age_group_mode === "customer_select" && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Age Group</label>
+                  <select
+                    className="border rounded px-3 py-2 w-full text-sm"
+                    value={customerSelectedAgeGroup}
+                    onChange={(e) => setCustomerSelectedAgeGroup(e.target.value)}
+                  >
+                    <option value="">Select your age group</option>
+                    {(wc.age_groups ?? []).map((g) => (
+                      <option key={g.label} value={g.label}>{g.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Gender (conditional — collect_gender defaults to true for backwards compat) */}
+              {(wc?.collect_gender ?? true) && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Gender</label>
+                  <div className="flex gap-4">
+                    {(["Male", "Female"] as const).map((g) => (
+                      <label key={g} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                        <input type="radio" name="preorder-gender" checked={playerGenderAnswer === g} onChange={() => setPlayerGenderAnswer(g)} />
+                        {g}
+                      </label>
+                    ))}
                   </div>
-                ))}
-                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer mt-1">
-                  <input type="checkbox" checked={anyNumber} onChange={(e) => { setAnyNumber(e.target.checked); if (e.target.checked) { setPref1(""); setPref2(""); setPref3(""); } }} />
-                  Any number is fine — I have no preference
-                </label>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                  <input type="checkbox" checked={claimedCurrentChecked} onChange={(e) => { setClaimedCurrentChecked(e.target.checked); if (!e.target.checked) setClaimedCurrentNum(""); }} />
-                  I have a current jersey number I'd like to request again (not guaranteed)
-                </label>
-                {claimedCurrentChecked && (
-                  <div className="flex items-center gap-2 mt-2">
-                    <label className="text-xs text-gray-600">My current number:</label>
-                    <input type="number" className="border rounded px-3 py-1.5 text-sm w-20" placeholder="0–99" value={claimedCurrentNum} onChange={(e) => setClaimedCurrentNum(e.target.value)} min={0} max={99} />
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
+
+              {/* Number preferences (conditional — collect_prefs defaults to true) */}
+              {(wc?.collect_prefs !== false) && (
+                <div className="border-t pt-3">
+                  <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">Jersey Number Preferences</div>
+                  <p className="text-xs text-gray-500 mb-3">Enter up to three choices in order. Numbers are allocated first-come-first-served by payment time — earlier payers get higher priority.</p>
+                  {[
+                    { label: "1st choice", val: pref1, set: setPref1 },
+                    { label: "2nd choice", val: pref2, set: setPref2 },
+                    { label: "3rd choice", val: pref3, set: setPref3 },
+                  ].map(({ label, val, set }) => (
+                    <div key={label} className="flex items-center gap-2 mb-2">
+                      <label className="text-xs text-gray-600 w-24 flex-shrink-0">{label}</label>
+                      <input
+                        type="number"
+                        className="border rounded px-3 py-1.5 text-sm w-20 disabled:bg-gray-100"
+                        placeholder="0–99"
+                        value={val}
+                        onChange={(e) => set(e.target.value)}
+                        min={0}
+                        max={99}
+                        disabled={anyNumber}
+                      />
+                    </div>
+                  ))}
+                  <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer mt-1">
+                    <input type="checkbox" checked={anyNumber} onChange={(e) => { setAnyNumber(e.target.checked); if (e.target.checked) { setPref1(""); setPref2(""); setPref3(""); } }} />
+                    Any number is fine — I have no preference
+                  </label>
+                </div>
+              )}
+
+              {/* Reclaim current number (conditional — allow_reclaim defaults to true) */}
+              {(wc?.allow_reclaim ?? true) && (
+                <div>
+                  <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                    <input type="checkbox" checked={claimedCurrentChecked} onChange={(e) => { setClaimedCurrentChecked(e.target.checked); if (!e.target.checked) setClaimedCurrentNum(""); }} />
+                    I have a current jersey number I'd like to request again (not guaranteed)
+                  </label>
+                  {claimedCurrentChecked && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <label className="text-xs text-gray-600">My current number:</label>
+                      <input type="number" className="border rounded px-3 py-1.5 text-sm w-20" placeholder="0–99" value={claimedCurrentNum} onChange={(e) => setClaimedCurrentNum(e.target.value)} min={0} max={99} />
+                    </div>
+                  )}
+                </div>
+              )}
+
               <button type="button" onClick={handlePreorderSubmit} className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
                 Submit Preferences
               </button>

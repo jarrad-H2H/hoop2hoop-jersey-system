@@ -230,6 +230,7 @@
     { id: "h2h_age_group_preorder",     name: "properties[_h2h_age_group_preorder]" },
     { id: "h2h_club_id_preorder",       name: "properties[_h2h_club_id_preorder]" },
     { id: "h2h_size_preorder",          name: "properties[_h2h_size_preorder]" },
+    { id: "h2h_jersey_name_preorder",   name: "properties[_h2h_jersey_name]" },
     // Pre-allocated flow
     { id: "h2h_prealloc_request_id",   name: "properties[_h2h_preorder_request_id]" },
     { id: "h2h_prealloc_jersey_number", name: "properties[_h2h_prealloc_jersey_number]" },
@@ -412,6 +413,7 @@
             "_h2h_club_id": String(snap.clubId || ""),
             "_h2h_size": String(snap.size || ""),
             "_h2h_gender": String(snap.gender || ""),
+            "_h2h_jersey_name": String(snap.jerseyName || ""),
           };
         }
 
@@ -558,6 +560,7 @@
             anyNumber: data.anyNumber,
             claimedCurrent: data.claimedCurrent,
             firstName: data.firstName, lastName: data.lastName,
+            jerseyName: data.jerseyName || null,
             yob: data.yob, ageGroup: data.ageGroup,
             clubId: data.clubId, size: data.size,
             gender: data.gender,
