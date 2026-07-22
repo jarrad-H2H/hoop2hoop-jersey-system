@@ -24,6 +24,51 @@
   var lastSentKey = "";
   var originalAtcLabel = null;
 
+  // Module-level H2H properties: set by mount() when the widget confirms.
+  // Read by the fetch interceptor below, which is installed here (IIFE start)
+  // so it runs before Simple Bundles' script can snapshot window.fetch into
+  // a local variable — after which patching window.fetch would have no effect.
+  var h2hSharedProps = null;
+  var h2hSharedPropsInjected = false; // inject-once guard: only the bundle parent gets properties
+
+  // Patch window.fetch immediately — before any Shopify app script loads.
+  // Injects H2H line-item properties into the first /cart/add POST that fires
+  // after the widget confirms, covering Simple Bundles and any other app
+  // that calls fetch at invocation time (not via a saved reference).
+  (function () {
+    if (!window.fetch) return;
+    var origFetch = window.fetch;
+    window.fetch = function (url, options) {
+      if (
+        h2hSharedProps &&
+        !h2hSharedPropsInjected &&
+        typeof url === "string" &&
+        url.indexOf("/cart/add") !== -1 &&
+        options &&
+        String(options.method || "").toUpperCase() === "POST" &&
+        options.body
+      ) {
+        try {
+          if (typeof options.body === "string") {
+            var body = JSON.parse(options.body);
+            if (body.items && Array.isArray(body.items) && body.items.length > 0) {
+              body.items[0].properties = Object.assign({}, body.items[0].properties || {}, h2hSharedProps);
+            } else if (body.id) {
+              body.properties = Object.assign({}, body.properties || {}, h2hSharedProps);
+            }
+            options = Object.assign({}, options, { body: JSON.stringify(body) });
+          } else if (typeof FormData !== "undefined" && options.body instanceof FormData) {
+            Object.keys(h2hSharedProps).forEach(function (k) { options.body.set("properties[" + k + "]", h2hSharedProps[k]); });
+          } else if (typeof URLSearchParams !== "undefined" && options.body instanceof URLSearchParams) {
+            Object.keys(h2hSharedProps).forEach(function (k) { options.body.set("properties[" + k + "]", h2hSharedProps[k]); });
+          }
+          h2hSharedPropsInjected = true;
+        } catch (_) {}
+      }
+      return origFetch.apply(this, arguments);
+    };
+  })();
+
   // ── Utilities ────────────────────────────────────────────────────────────────
   function $(sel, root) {
     try { return (root || document).querySelector(sel); } catch (_) { return null; }
@@ -403,54 +448,6 @@
       return null;
     }
 
-    // On Simple Bundles pages the ATC click opens a component-size modal that we must
-    // not block. Instead we monkey-patch fetch to inject H2H properties into whichever
-    // /cart/add.js call Simple Bundles makes, matching by the currently selected variant.
-    var bundleFetchPatched = false;
-    function installBundleFetchInterceptor() {
-      if (bundleFetchPatched) return;
-      bundleFetchPatched = true;
-      var originalFetch = window.fetch;
-      window.fetch = function(url, options) {
-        if (
-          typeof url === "string" &&
-          url.indexOf("/cart/add") !== -1 &&
-          options &&
-          String(options.method || "").toUpperCase() === "POST" &&
-          options.body &&
-          typeof options.body === "string"
-        ) {
-          var h2hProps = buildH2hProperties();
-          if (h2hProps) {
-            try {
-              var body = JSON.parse(options.body);
-              var currentVid = String(findSelectedVariantId(scope) || "");
-              if (body.items && Array.isArray(body.items)) {
-                // Multi-item format: inject into the item matching the widget's variant.
-                var matched = false;
-                for (var bi = 0; bi < body.items.length; bi++) {
-                  if (String(body.items[bi].id) === currentVid) {
-                    body.items[bi].properties = Object.assign({}, body.items[bi].properties || {}, h2hProps);
-                    matched = true;
-                    break;
-                  }
-                }
-                // Fallback: if variant changed in the DOM since confirmation, inject into first item.
-                if (!matched && body.items.length > 0) {
-                  body.items[0].properties = Object.assign({}, body.items[0].properties || {}, h2hProps);
-                }
-              } else if (body.id) {
-                // Single-item format.
-                body.properties = Object.assign({}, body.properties || {}, h2hProps);
-              }
-              options = Object.assign({}, options, { body: JSON.stringify(body) });
-            } catch (_) {}
-          }
-        }
-        return originalFetch.apply(this, arguments);
-      };
-    }
-
     // Intercepts the Add-to-Cart button click to write reservation properties
     // directly into a /cart/add.js JSON request. This bypasses Dawn's FormData
     // form-submit path entirely — the hidden-inputs approach is unreliable when
@@ -585,6 +582,8 @@
             pendingId: pendingId,
             reservedAt: new Date().toISOString(),
           };
+          h2hSharedProps = { "Jersey Number": String(jerseyNum), "_h2h_pending_allocation_id": String(pendingId), "_h2h_reserved_at": lastReservation.reservedAt };
+          h2hSharedPropsInjected = false;
 
           // Re-inject if form was recreated by Dawn section rendering before this message arrived
           ensureInputsInCurrentForm();
@@ -606,6 +605,7 @@
 
         if (data.type === "h2h:reservation:cleared") {
           lastReservation = null;
+          h2hSharedProps = null;
 
           window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
 
@@ -629,6 +629,8 @@
             clubId: data.clubId, size: data.size,
             gender: data.gender,
           };
+          h2hSharedProps = buildH2hProperties();
+          h2hSharedPropsInjected = false;
           window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
@@ -642,10 +644,25 @@
             jerseyNumber: data.jerseyNumber,
             jerseyName: data.jerseyName || "",
           };
+          h2hSharedProps = {
+            "_h2h_preorder_request_id": String(data.preorderRequestId),
+            "_h2h_prealloc_jersey_number": String(data.jerseyNumber),
+            "_h2h_prealloc_jersey_name": String(data.jerseyName || ""),
+          };
+          h2hSharedPropsInjected = false;
           ensureInputsInCurrentForm();
           setHiddenInputValue("h2h_prealloc_request_id", String(data.preorderRequestId));
           setHiddenInputValue("h2h_prealloc_jersey_number", String(data.jerseyNumber));
           setHiddenInputValue("h2h_prealloc_jersey_name", String(data.jerseyName || ""));
+          // Belt-and-suspenders: also write to Shopify cart attributes so the webhook
+          // can find them in note_attributes if Simple Bundles uses a saved fetch reference.
+          try {
+            fetch("/cart/update.js", {
+              method: "POST", credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ attributes: h2hSharedProps }),
+            }).catch(function () {});
+          } catch (_) {}
           window.dispatchEvent(new CustomEvent("h2h:preallocated:ready", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
@@ -657,10 +674,23 @@
             preorderRequestId: data.preorderRequestId,
             lastName: data.lastName || "",
           };
+          h2hSharedProps = {
+            "_h2h_preorder_request_id": String(data.preorderRequestId),
+            "_h2h_prealloc_jersey_number": "TBC",
+            "_h2h_prealloc_jersey_name": String(data.lastName || ""),
+          };
+          h2hSharedPropsInjected = false;
           ensureInputsInCurrentForm();
           setHiddenInputValue("h2h_prealloc_request_id", String(data.preorderRequestId));
           setHiddenInputValue("h2h_prealloc_jersey_number", "TBC");
           setHiddenInputValue("h2h_prealloc_jersey_name", String(data.lastName || ""));
+          try {
+            fetch("/cart/update.js", {
+              method: "POST", credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ attributes: h2hSharedProps }),
+            }).catch(function () {});
+          } catch (_) {}
           window.dispatchEvent(new CustomEvent("h2h:preorder:unmatched", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
@@ -670,7 +700,6 @@
         // Re-send variant state immediately so the widget gets the correct size.
         if (data.type === "h2h:config") {
           bundleJerseyProperty = data.bundleJerseyProperty || null;
-          if (bundleJerseyProperty) installBundleFetchInterceptor();
           sendVariantState(true);
         }
 

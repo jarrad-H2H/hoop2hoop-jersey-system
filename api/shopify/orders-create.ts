@@ -40,6 +40,7 @@ type ShopifyOrderPayload = {
   order_number?: number | string;
   line_items?: ShopifyLineItem[];
   customer?: ShopifyCustomer;
+  note_attributes?: Array<{ name?: string; value?: string }>;
 };
 
 function readRawBody(req: VercelRequest): Promise<string> {
@@ -692,6 +693,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         level: "error", message: "Unhandled exception processing reservation",
         meta: { detail: e?.message ?? String(e) },
       });
+    }
+  }
+
+  // Belt-and-suspenders: if no pre-alloc was resolved from line-item properties above,
+  // check Shopify cart note_attributes. widget.js writes these via /cart/update.js
+  // when the widget confirms on Simple Bundles pages, where the bundle app may use a
+  // saved fetch reference that bypasses our window.fetch patch.
+  if (processed === 0 && Array.isArray(payload?.note_attributes) && payload!.note_attributes!.length > 0) {
+    const noteAttrs: Record<string, string> = {};
+    for (const attr of payload!.note_attributes!) {
+      const name = normalizeKey(attr?.name);
+      if (name) noteAttrs[name] = String(attr?.value ?? "").trim();
+    }
+    const paRequestId = noteAttrs[normalizeKey("_h2h_preorder_request_id")] || "";
+    const paJerseyNumber = noteAttrs[normalizeKey("_h2h_prealloc_jersey_number")] || "";
+    const paJerseyName = noteAttrs[normalizeKey("_h2h_prealloc_jersey_name")] || "";
+    if (paRequestId) {
+      try {
+        const { error: paErr } = await supabase
+          .from("preorder_requests")
+          .update({
+            shopify_order_id: orderId,
+            order_number: orderNumber || null,
+            paid_at: nowIso,
+          })
+          .eq("id", paRequestId);
+        if (paErr) {
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, level: "error",
+            message: "Failed to update pre-allocated request (cart-attrs fallback)",
+            meta: { detail: paErr.message, preorderRequestId: paRequestId },
+          });
+        } else {
+          processed += 1;
+          await writeOrderNotePreallocated(orderId, paJerseyNumber, paJerseyName);
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, level: "info",
+            message: "Pre-allocated order note written (cart-attrs fallback)",
+            meta: { preorderRequestId: paRequestId, jerseyNumber: paJerseyNumber, jerseyName: paJerseyName },
+          });
+        }
+      } catch (e: any) {
+        await logEvent(supabase, {
+          order_id: orderId, order_number: orderNumber, level: "error",
+          message: "Exception processing pre-allocated order (cart-attrs fallback)",
+          meta: { detail: e?.message ?? String(e), preorderRequestId: paRequestId },
+        });
+      }
     }
   }
 
