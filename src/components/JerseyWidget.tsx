@@ -1337,13 +1337,22 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                             </button>
                           </div>
                         ))}
-                        <button
-                          type="button"
-                          onClick={() => { setPaLookupDone(false); setPaCandidates([]); }}
-                          className="text-xs text-gray-500 underline"
-                        >
-                          None of these are me — try again
-                        </button>
+                        <div className="flex flex-col gap-1 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => { setPaLookupDone(false); setPaCandidates([]); }}
+                            className="text-xs text-gray-500 underline text-left"
+                          >
+                            Try a different spelling
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setPaCandidates([]); setPaFallback(true); }}
+                            className="text-xs text-gray-500 underline text-left"
+                          >
+                            My name isn't here — proceed, club will confirm my number
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
