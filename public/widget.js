@@ -346,6 +346,7 @@
     var lastReservation = null;
     var lastPreorder = null;
     var lastPreallocated = null;
+    var lastUnmatched = null;
     var bundleJerseyProperty = null;
 
     // Re-injects hidden inputs into the CURRENT form if they were destroyed
@@ -369,7 +370,7 @@
       atcBtn.setAttribute("data-h2h-atc-click", "true");
 
       atcBtn.addEventListener("click", function (e) {
-        if (!lastReservation && !lastPreorder && !lastPreallocated) return; // nothing set → let Dawn handle normally
+        if (!lastReservation && !lastPreorder && !lastPreallocated && !lastUnmatched) return; // nothing set → let Dawn handle normally
 
         var variantId = findSelectedVariantId(scope);
         if (!variantId) return; // no variant selected → let Dawn handle
@@ -396,6 +397,13 @@
             "_h2h_preorder_request_id": String(snap.preorderRequestId),
             "_h2h_prealloc_jersey_number": String(snap.jerseyNumber),
             "_h2h_prealloc_jersey_name": String(snap.jerseyName || ""),
+          };
+        } else if (lastUnmatched) {
+          var snap = lastUnmatched; // freeze at click time
+          properties = {
+            "_h2h_preorder_request_id": String(snap.preorderRequestId),
+            "_h2h_prealloc_jersey_number": "TBC",
+            "_h2h_prealloc_jersey_name": String(snap.lastName || ""),
           };
         } else {
           var snap = lastPreorder; // freeze at click time
@@ -579,6 +587,17 @@
             jerseyName: data.jerseyName || "",
           };
           window.dispatchEvent(new CustomEvent("h2h:preallocated:ready", { detail: data }));
+          forceAtcLabel(scope, "Add to cart");
+          setupAtcClickHandler();
+        }
+
+        // Pre-allocated fallback: player not found — order placed, club confirms number.
+        if (data.type === "h2h:preorder:unmatched") {
+          lastUnmatched = {
+            preorderRequestId: data.preorderRequestId,
+            lastName: data.lastName || "",
+          };
+          window.dispatchEvent(new CustomEvent("h2h:preorder:unmatched", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
         }

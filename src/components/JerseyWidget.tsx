@@ -286,6 +286,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [paJerseyName, setPaJerseyName] = useState<string>("");
   const [paSize, setPaSize] = useState<string>("");
   const [paSubmitting, setPaSubmitting] = useState<boolean>(false);
+  const [paFallback, setPaFallback] = useState<boolean>(false);
   const [paSubmitted, setPaSubmitted] = useState<boolean>(false);
   const [paError, setPaError] = useState<string | null>(null);
 
@@ -399,7 +400,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     !loadingSuggest;
 
   const notifyShopify = (
-    type: "h2h:reservation:ready" | "h2h:reservation:cleared" | "h2h:preallocated:ready",
+    type: "h2h:reservation:ready" | "h2h:reservation:cleared" | "h2h:preallocated:ready" | "h2h:preorder:unmatched",
     payload?: any
   ) => {
     try {
@@ -997,6 +998,41 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   const JERSEY_NAME_RE = /^[A-Za-z'\-]+$/;
 
+  const handlePreAllocFallbackSubmit = async () => {
+    setPaError(null);
+    const size = selectedSize || paSize.trim();
+    if (!size) { setPaError("Please enter your jersey size."); return; }
+    if (!paFirstName.trim() || !paLastName.trim()) { setPaError("Please enter the player's first name and surname."); return; }
+    setPaSubmitting(true);
+    try {
+      const yob = paYob.trim() ? Number(paYob.trim()) : undefined;
+      const res = await fetch("/api/preorder/submit-unmatched", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clubId: selectedClubId,
+          season: paSeasonParam || undefined,
+          productType: selectedProductType || undefined,
+          firstName: paFirstName.trim(),
+          lastName: paLastName.trim(),
+          yearOfBirth: yob,
+          size,
+        }),
+      });
+      const json = await res.json();
+      if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
+      setPaSubmitted(true);
+      notifyShopify("h2h:preorder:unmatched", {
+        preorderRequestId: json.preorderRequestId,
+        lastName: paLastName.trim(),
+      });
+    } catch {
+      setPaError("Could not reach the server. Please try again.");
+    } finally {
+      setPaSubmitting(false);
+    }
+  };
+
   const handlePreAllocConfirm = async () => {
     setPaError(null);
     if (!paSelected) return;
@@ -1175,7 +1211,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
         {/* Pre-allocated: window open — player confirms size + jersey name */}
         {preorderMode === "open" && allocationTypeState === "pre_allocated" && (
-          paSubmitted && paSelected ? (
+          (paSubmitted && paSelected) ? (
             <div className="py-6 text-center">
               <div className="text-3xl mb-2">✅</div>
               <p className="font-semibold text-gray-900">All done!</p>
@@ -1184,6 +1220,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 will be printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.
               </p>
               <p className="text-xs text-gray-500 mt-2">Please continue to checkout to complete your order.</p>
+            </div>
+          ) : (paSubmitted && paFallback) ? (
+            <div className="py-6 text-center">
+              <div className="text-3xl mb-2">✅</div>
+              <p className="font-semibold text-gray-900">Order placed!</p>
+              <p className="text-sm text-gray-600 mt-2">
+                Your club will confirm your jersey number before jerseys are printed. Please continue to checkout.
+              </p>
             </div>
           ) : (
             <>
@@ -1221,8 +1265,56 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
                   {/* Lookup results */}
                   {paLookupDone && paCandidates.length === 0 && (
-                    <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
-                      We couldn't find a match in our records. Please check the spelling, or make sure you're entering the <strong>player's</strong> name (not a parent's name).
+                    <div className="space-y-3">
+                      <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
+                        We couldn't find a match in our records. Please check the spelling, or make sure you're entering the <strong>player's</strong> name (not a parent's name).
+                      </div>
+                      {!paFallback ? (
+                        <div className="bg-gray-50 border border-gray-200 rounded p-3 space-y-2">
+                          <p className="text-sm font-semibold text-gray-800">Not on the list? No problem.</p>
+                          <p className="text-sm text-gray-600">Place your order now and your club will confirm your jersey number before jerseys are printed.</p>
+                          <button
+                            type="button"
+                            onClick={() => setPaFallback(true)}
+                            className="w-full px-4 py-2 rounded font-semibold text-sm bg-gray-700 text-white hover:bg-gray-800 transition-colors"
+                          >
+                            Continue — club will confirm my number
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <p className="text-xs text-gray-500">We'll pass your details to the club and they'll confirm your number before printing.</p>
+                          {!selectedSize && (
+                            <div>
+                              <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Size</label>
+                              <input
+                                type="text"
+                                className="border rounded px-3 py-2 w-full text-base"
+                                placeholder="e.g. S, M, L, XL, 2XL"
+                                value={paSize}
+                                onChange={e => setPaSize(e.target.value)}
+                              />
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setPaFallback(false)}
+                              className="px-4 py-2 border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50"
+                            >
+                              Back
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handlePreAllocFallbackSubmit}
+                              disabled={paSubmitting}
+                              className="flex-1 px-4 py-2 bg-gray-700 text-white rounded text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                            >
+                              {paSubmitting ? "Saving…" : "Place Order — Club Will Confirm"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   {paLookupDone && paCandidates.length > 0 && (

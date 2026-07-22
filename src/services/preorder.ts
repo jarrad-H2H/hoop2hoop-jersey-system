@@ -22,7 +22,7 @@ export interface PreorderRequest {
   shopify_order_id: string | null;
   order_number: string | null;
   paid_at: string | null;
-  status: "pending" | "allocated" | "overflow" | "locked";
+  status: "pending" | "allocated" | "overflow" | "locked" | "unmatched";
   created_at: string;
 }
 
