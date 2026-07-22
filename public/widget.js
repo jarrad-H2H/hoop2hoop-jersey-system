@@ -359,6 +359,98 @@
       if (cur) injectHiddenInputs(cur);
     }
 
+    // Builds the H2H properties object from whichever last* state is active.
+    function buildH2hProperties() {
+      if (lastReservation) {
+        return {
+          "Jersey Number": String(lastReservation.jerseyNumber),
+          "_h2h_pending_allocation_id": String(lastReservation.pendingId),
+          "_h2h_reserved_at": lastReservation.reservedAt,
+        };
+      }
+      if (lastPreallocated) {
+        return {
+          "_h2h_preorder_request_id": String(lastPreallocated.preorderRequestId),
+          "_h2h_prealloc_jersey_number": String(lastPreallocated.jerseyNumber),
+          "_h2h_prealloc_jersey_name": String(lastPreallocated.jerseyName || ""),
+        };
+      }
+      if (lastUnmatched) {
+        return {
+          "_h2h_preorder_request_id": String(lastUnmatched.preorderRequestId),
+          "_h2h_prealloc_jersey_number": "TBC",
+          "_h2h_prealloc_jersey_name": String(lastUnmatched.lastName || ""),
+        };
+      }
+      if (lastPreorder) {
+        return {
+          "_h2h_preorder_mode": "true",
+          "_h2h_pref_1": lastPreorder.pref1 != null ? String(lastPreorder.pref1) : "",
+          "_h2h_pref_2": lastPreorder.pref2 != null ? String(lastPreorder.pref2) : "",
+          "_h2h_pref_3": lastPreorder.pref3 != null ? String(lastPreorder.pref3) : "",
+          "_h2h_any_number": lastPreorder.anyNumber ? "true" : "false",
+          "_h2h_claimed_current": lastPreorder.claimedCurrent != null ? String(lastPreorder.claimedCurrent) : "",
+          "_h2h_first_name": String(lastPreorder.firstName || ""),
+          "_h2h_last_name": String(lastPreorder.lastName || ""),
+          "_h2h_yob": lastPreorder.yob != null ? String(lastPreorder.yob) : "",
+          "_h2h_age_group": String(lastPreorder.ageGroup || ""),
+          "_h2h_club_id": String(lastPreorder.clubId || ""),
+          "_h2h_size": String(lastPreorder.size || ""),
+          "_h2h_gender": String(lastPreorder.gender || ""),
+          "_h2h_jersey_name": String(lastPreorder.jerseyName || ""),
+        };
+      }
+      return null;
+    }
+
+    // On Simple Bundles pages the ATC click opens a component-size modal that we must
+    // not block. Instead we monkey-patch fetch to inject H2H properties into whichever
+    // /cart/add.js call Simple Bundles makes, matching by the currently selected variant.
+    var bundleFetchPatched = false;
+    function installBundleFetchInterceptor() {
+      if (bundleFetchPatched) return;
+      bundleFetchPatched = true;
+      var originalFetch = window.fetch;
+      window.fetch = function(url, options) {
+        if (
+          typeof url === "string" &&
+          url.indexOf("/cart/add") !== -1 &&
+          options &&
+          String(options.method || "").toUpperCase() === "POST" &&
+          options.body &&
+          typeof options.body === "string"
+        ) {
+          var h2hProps = buildH2hProperties();
+          if (h2hProps) {
+            try {
+              var body = JSON.parse(options.body);
+              var currentVid = String(findSelectedVariantId(scope) || "");
+              if (body.items && Array.isArray(body.items)) {
+                // Multi-item format: inject into the item matching the widget's variant.
+                var matched = false;
+                for (var bi = 0; bi < body.items.length; bi++) {
+                  if (String(body.items[bi].id) === currentVid) {
+                    body.items[bi].properties = Object.assign({}, body.items[bi].properties || {}, h2hProps);
+                    matched = true;
+                    break;
+                  }
+                }
+                // Fallback: if variant changed in the DOM since confirmation, inject into first item.
+                if (!matched && body.items.length > 0) {
+                  body.items[0].properties = Object.assign({}, body.items[0].properties || {}, h2hProps);
+                }
+              } else if (body.id) {
+                // Single-item format.
+                body.properties = Object.assign({}, body.properties || {}, h2hProps);
+              }
+              options = Object.assign({}, options, { body: JSON.stringify(body) });
+            } catch (_) {}
+          }
+        }
+        return originalFetch.apply(this, arguments);
+      };
+    }
+
     // Intercepts the Add-to-Cart button click to write reservation properties
     // directly into a /cart/add.js JSON request. This bypasses Dawn's FormData
     // form-submit path entirely — the hidden-inputs approach is unreliable when
@@ -372,6 +464,10 @@
       atcBtn.addEventListener("click", function (e) {
         if (!lastReservation && !lastPreorder && !lastPreallocated && !lastUnmatched) return; // nothing set → let Dawn handle normally
 
+        // Simple Bundles pages: the fetch interceptor handles property injection.
+        // Let the click propagate so Simple Bundles' own modal opens normally.
+        if (bundleJerseyProperty) return;
+
         var variantId = findSelectedVariantId(scope);
         if (!variantId) return; // no variant selected → let Dawn handle
 
@@ -383,61 +479,7 @@
         var savedLabel = labelNode ? (labelNode.textContent || "").trim() : "";
         if (labelNode) labelNode.textContent = "Adding…";
 
-        var properties;
-        if (lastReservation) {
-          var snap = lastReservation; // freeze at click time
-          properties = {
-            "Jersey Number": String(snap.jerseyNumber),
-            "_h2h_pending_allocation_id": String(snap.pendingId),
-            "_h2h_reserved_at": snap.reservedAt,
-          };
-        } else if (lastPreallocated) {
-          var snap = lastPreallocated; // freeze at click time
-          properties = {
-            "_h2h_preorder_request_id": String(snap.preorderRequestId),
-            "_h2h_prealloc_jersey_number": String(snap.jerseyNumber),
-            "_h2h_prealloc_jersey_name": String(snap.jerseyName || ""),
-          };
-        } else if (lastUnmatched) {
-          var snap = lastUnmatched; // freeze at click time
-          properties = {
-            "_h2h_preorder_request_id": String(snap.preorderRequestId),
-            "_h2h_prealloc_jersey_number": "TBC",
-            "_h2h_prealloc_jersey_name": String(snap.lastName || ""),
-          };
-        } else {
-          var snap = lastPreorder; // freeze at click time
-          properties = {
-            "_h2h_preorder_mode": "true",
-            "_h2h_pref_1": snap.pref1 != null ? String(snap.pref1) : "",
-            "_h2h_pref_2": snap.pref2 != null ? String(snap.pref2) : "",
-            "_h2h_pref_3": snap.pref3 != null ? String(snap.pref3) : "",
-            "_h2h_any_number": snap.anyNumber ? "true" : "false",
-            "_h2h_claimed_current": snap.claimedCurrent != null ? String(snap.claimedCurrent) : "",
-            "_h2h_first_name": String(snap.firstName || ""),
-            "_h2h_last_name": String(snap.lastName || ""),
-            "_h2h_yob": snap.yob != null ? String(snap.yob) : "",
-            "_h2h_age_group": String(snap.ageGroup || ""),
-            "_h2h_club_id": String(snap.clubId || ""),
-            "_h2h_size": String(snap.size || ""),
-            "_h2h_gender": String(snap.gender || ""),
-            "_h2h_jersey_name": String(snap.jerseyName || ""),
-          };
-        }
-
-        // Collect any existing properties[…] fields from the page (e.g. Simple Bundles
-        // component-size selects). Merge them so they ride along in the same cart item.
-        // Our H2H properties override any conflicts.
-        var mergedProperties = {};
-        try {
-          var propEls = $all('[name^="properties["]', scope);
-          for (var pi = 0; pi < propEls.length; pi++) {
-            var pel = propEls[pi];
-            var pm = pel.name.match(/^properties\[(.+)\]$/);
-            if (pm && pm[1] && pel.value) mergedProperties[pm[1]] = pel.value;
-          }
-        } catch (_) {}
-        Object.assign(mergedProperties, properties); // H2H wins on conflict
+        var properties = buildH2hProperties() || {};
 
         fetch("/cart/add.js", {
           method: "POST",
@@ -446,7 +488,7 @@
           body: JSON.stringify({
             id: Number(variantId),
             quantity: 1,
-            properties: mergedProperties,
+            properties: properties,
           }),
         })
           .then(function (r) { return r.json(); })
@@ -628,6 +670,7 @@
         // Re-send variant state immediately so the widget gets the correct size.
         if (data.type === "h2h:config") {
           bundleJerseyProperty = data.bundleJerseyProperty || null;
+          if (bundleJerseyProperty) installBundleFetchInterceptor();
           sendVariantState(true);
         }
 
