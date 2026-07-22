@@ -425,6 +425,20 @@
           };
         }
 
+        // Collect any existing properties[…] fields from the page (e.g. Simple Bundles
+        // component-size selects). Merge them so they ride along in the same cart item.
+        // Our H2H properties override any conflicts.
+        var mergedProperties = {};
+        try {
+          var propEls = $all('[name^="properties["]', scope);
+          for (var pi = 0; pi < propEls.length; pi++) {
+            var pel = propEls[pi];
+            var pm = pel.name.match(/^properties\[(.+)\]$/);
+            if (pm && pm[1] && pel.value) mergedProperties[pm[1]] = pel.value;
+          }
+        } catch (_) {}
+        Object.assign(mergedProperties, properties); // H2H wins on conflict
+
         fetch("/cart/add.js", {
           method: "POST",
           credentials: "same-origin",
@@ -432,7 +446,7 @@
           body: JSON.stringify({
             id: Number(variantId),
             quantity: 1,
-            properties: properties,
+            properties: mergedProperties,
           }),
         })
           .then(function (r) { return r.json(); })
@@ -586,6 +600,10 @@
             jerseyNumber: data.jerseyNumber,
             jerseyName: data.jerseyName || "",
           };
+          ensureInputsInCurrentForm();
+          setHiddenInputValue("h2h_prealloc_request_id", String(data.preorderRequestId));
+          setHiddenInputValue("h2h_prealloc_jersey_number", String(data.jerseyNumber));
+          setHiddenInputValue("h2h_prealloc_jersey_name", String(data.jerseyName || ""));
           window.dispatchEvent(new CustomEvent("h2h:preallocated:ready", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
@@ -597,6 +615,10 @@
             preorderRequestId: data.preorderRequestId,
             lastName: data.lastName || "",
           };
+          ensureInputsInCurrentForm();
+          setHiddenInputValue("h2h_prealloc_request_id", String(data.preorderRequestId));
+          setHiddenInputValue("h2h_prealloc_jersey_number", "TBC");
+          setHiddenInputValue("h2h_prealloc_jersey_name", String(data.lastName || ""));
           window.dispatchEvent(new CustomEvent("h2h:preorder:unmatched", { detail: data }));
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
@@ -633,16 +655,26 @@
     // Capture-phase submit listener: fires before Dawn's submit handler reads FormData.
     // Last-chance enforcement — ensures values are correct at the exact moment of
     // form submission even if the form was recreated or values were cleared.
+    // Covers Simple Bundles pages where the bundle form is submitted normally.
     document.addEventListener("submit", function (e) {
       try {
-        if (!lastReservation) return;
         var t = e && e.target;
         if (!t || !t.action) return;
         if (String(t.action).indexOf("/cart/add") === -1) return;
         ensureInputsInCurrentForm();
-        setHiddenInputValue("h2h_jersey_number", String(lastReservation.jerseyNumber));
-        setHiddenInputValue("h2h_pending_allocation_id", String(lastReservation.pendingId));
-        setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+        if (lastReservation) {
+          setHiddenInputValue("h2h_jersey_number", String(lastReservation.jerseyNumber));
+          setHiddenInputValue("h2h_pending_allocation_id", String(lastReservation.pendingId));
+          setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+        } else if (lastPreallocated) {
+          setHiddenInputValue("h2h_prealloc_request_id", String(lastPreallocated.preorderRequestId));
+          setHiddenInputValue("h2h_prealloc_jersey_number", String(lastPreallocated.jerseyNumber));
+          setHiddenInputValue("h2h_prealloc_jersey_name", String(lastPreallocated.jerseyName || ""));
+        } else if (lastUnmatched) {
+          setHiddenInputValue("h2h_prealloc_request_id", String(lastUnmatched.preorderRequestId));
+          setHiddenInputValue("h2h_prealloc_jersey_number", "TBC");
+          setHiddenInputValue("h2h_prealloc_jersey_name", String(lastUnmatched.lastName || ""));
+        }
       } catch (_) {}
     }, true); // capture phase: fires before event reaches form or Dawn's listener
   }
