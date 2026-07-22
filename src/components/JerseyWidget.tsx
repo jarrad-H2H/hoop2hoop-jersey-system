@@ -1224,9 +1224,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           ) : (paSubmitted && paFallback) ? (
             <div className="py-6 text-center">
               <div className="text-3xl mb-2">✅</div>
-              <p className="font-semibold text-gray-900">Order placed!</p>
+              <p className="font-semibold text-gray-900">Details saved — now add to cart!</p>
               <p className="text-sm text-gray-600 mt-2">
-                Your club will confirm your jersey number before jerseys are printed. Please continue to checkout.
+                Your club will confirm your jersey number before jerseys are printed. Click <strong>Add to cart</strong> below, then complete checkout.
               </p>
             </div>
           ) : (
