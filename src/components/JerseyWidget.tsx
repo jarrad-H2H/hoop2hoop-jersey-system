@@ -1265,23 +1265,25 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                     <p className="text-sm font-semibold text-indigo-900">Your jersey number is <span className="text-2xl font-bold">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span></p>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-                      Name on Jersey <span className="font-normal text-gray-400 normal-case">(last name only)</span>
-                    </label>
-                    <input
-                      type="text"
-                      className="border rounded px-3 py-2 w-full text-base uppercase"
-                      value={paJerseyName}
-                      onChange={e => {
-                        const v = e.target.value.replace(/[^A-Za-z'\-]/g, "");
-                        setPaJerseyName(v.toUpperCase());
-                      }}
-                      maxLength={25}
-                      placeholder="SMITH"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Correct the spelling if needed. Letters, hyphens, and apostrophes only.</p>
-                  </div>
+                  {wc?.collect_surname && (
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+                        Name on Jersey <span className="font-normal text-gray-400 normal-case">(last name only)</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="border rounded px-3 py-2 w-full text-base uppercase"
+                        value={paJerseyName}
+                        onChange={e => {
+                          const v = e.target.value.replace(/[^A-Za-z'\-]/g, "");
+                          setPaJerseyName(v.toUpperCase());
+                        }}
+                        maxLength={25}
+                        placeholder="SMITH"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Correct the spelling if needed. Letters, hyphens, and apostrophes only.</p>
+                    </div>
+                  )}
 
                   {/* Size: use Shopify variant if available, otherwise show input */}
                   {!selectedSize && (
