@@ -30,6 +30,7 @@
   // a local variable — after which patching window.fetch would have no effect.
   var h2hSharedProps = null;
   var h2hSharedPropsInjected = false; // inject-once guard: only the bundle parent gets properties
+  var h2hBundlePage = false; // true when widget is on a Simple Bundles product page
 
   // Patch window.fetch immediately — before any Shopify app script loads.
   // Injects H2H line-item properties into the first /cart/add POST that fires
@@ -66,6 +67,45 @@
         } catch (_) {}
       }
       return origFetch.apply(this, arguments);
+    };
+  })();
+
+  // XHR prototype patch — patches XMLHttpRequest.prototype so it applies even
+  // when Simple Bundles captured `var XHR = XMLHttpRequest` before this script
+  // ran. Prototype mutations propagate to all instances regardless of when the
+  // constructor reference was saved. Two intercept points:
+  // 1. /cart/add.js POST: inject H2H line-item properties into the first item.
+  // 2. /cart/update.js POST: merge H2H data into Simple Bundles' T&Cs attribute
+  //    write — without this, SB's call REPLACES all cart attributes, wiping ours.
+  (function () {
+    var origOpen = XMLHttpRequest.prototype.open;
+    var origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this._h2hXhrMethod = String(method || "");
+      this._h2hXhrUrl = String(url || "");
+      return origOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function (body) {
+      if (this._h2hXhrMethod.toUpperCase() === "POST" && typeof body === "string" && body) {
+        var url = this._h2hXhrUrl;
+        try {
+          var parsed = JSON.parse(body);
+          if (h2hSharedProps && !h2hSharedPropsInjected && url.indexOf("/cart/add") !== -1) {
+            if (parsed.items && Array.isArray(parsed.items) && parsed.items.length > 0) {
+              parsed.items[0].properties = Object.assign({}, parsed.items[0].properties || {}, h2hSharedProps);
+            } else if (parsed.id) {
+              parsed.properties = Object.assign({}, parsed.properties || {}, h2hSharedProps);
+            }
+            h2hSharedPropsInjected = true;
+            body = JSON.stringify(parsed);
+          }
+          if (h2hSharedProps && h2hBundlePage && url.indexOf("/cart/update") !== -1 && parsed.attributes) {
+            parsed.attributes = Object.assign({}, parsed.attributes, h2hSharedProps);
+            body = JSON.stringify(parsed);
+          }
+        } catch (_) {}
+      }
+      return origSend.call(this, body);
     };
   })();
 
@@ -393,6 +433,7 @@
     var lastPreallocated = null;
     var lastUnmatched = null;
     var bundleJerseyProperty = null;
+    var cartSnapshotKeys = null; // cart item keys at the moment H2H data was confirmed
 
     // Re-injects hidden inputs into the CURRENT form if they were destroyed
     // (e.g. Dawn section rendering replaces product-form innerHTML on variant change).
@@ -448,6 +489,48 @@
       return null;
     }
 
+    // After the customer clicks ATC on a Simple Bundles page, polls /cart.js
+    // until the bundle parent appears (new item with non-empty properties), then
+    // merges H2H data into its existing line-item properties via /cart/change.js.
+    // Runs entirely after Simple Bundles has finished all its own cart operations,
+    // so it can't be overwritten. Belt-and-suspenders alongside the XHR/fetch patches.
+    function startBundlePostAddWatcher() {
+      var snapshot = cartSnapshotKeys || {};
+      var start = Date.now();
+      (function poll() {
+        if (Date.now() - start > 25000) return;
+        setTimeout(function () {
+          fetch("/cart.js", { credentials: "same-origin" })
+            .then(function (r) { return r.json(); })
+            .then(function (cart) {
+              var items = (cart && cart.items) || [];
+              var bundleParent = null;
+              for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                if (!snapshot[item.key] && Object.keys(item.properties || {}).length > 0) {
+                  bundleParent = item;
+                  break;
+                }
+              }
+              if (bundleParent && h2hSharedProps) {
+                fetch("/cart/change.js", {
+                  method: "POST", credentials: "same-origin",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    id: bundleParent.key,
+                    quantity: bundleParent.quantity,
+                    properties: Object.assign({}, bundleParent.properties, h2hSharedProps),
+                  }),
+                }).catch(function () {});
+              } else {
+                poll();
+              }
+            })
+            .catch(function () { poll(); });
+        }, 100);
+      })();
+    }
+
     // Intercepts the Add-to-Cart button click to write reservation properties
     // directly into a /cart/add.js JSON request. This bypasses Dawn's FormData
     // form-submit path entirely — the hidden-inputs approach is unreliable when
@@ -461,9 +544,12 @@
       atcBtn.addEventListener("click", function (e) {
         if (!lastReservation && !lastPreorder && !lastPreallocated && !lastUnmatched) return; // nothing set → let Dawn handle normally
 
-        // Simple Bundles pages: the fetch interceptor handles property injection.
-        // Let the click propagate so Simple Bundles' own modal opens normally.
-        if (bundleJerseyProperty) return;
+        // Simple Bundles pages: let the click propagate so their modal opens,
+        // then start the post-add watcher to merge H2H props after the bundle lands.
+        if (bundleJerseyProperty) {
+          if (h2hSharedProps) startBundlePostAddWatcher();
+          return;
+        }
 
         var variantId = findSelectedVariantId(scope);
         if (!variantId) return; // no variant selected → let Dawn handle
@@ -650,6 +736,16 @@
             "_h2h_prealloc_jersey_name": String(data.jerseyName || ""),
           };
           h2hSharedPropsInjected = false;
+          // Snapshot cart NOW (before ATC click) so the bundle post-add watcher
+          // can reliably identify which items are newly added by Simple Bundles.
+          try {
+            fetch("/cart.js", { credentials: "same-origin" })
+              .then(function (r) { return r.json(); })
+              .then(function (c) {
+                cartSnapshotKeys = {};
+                ((c && c.items) || []).forEach(function (item) { cartSnapshotKeys[item.key] = true; });
+              }).catch(function () { cartSnapshotKeys = {}; });
+          } catch (_) {}
           ensureInputsInCurrentForm();
           setHiddenInputValue("h2h_prealloc_request_id", String(data.preorderRequestId));
           setHiddenInputValue("h2h_prealloc_jersey_number", String(data.jerseyNumber));
@@ -680,6 +776,14 @@
             "_h2h_prealloc_jersey_name": String(data.lastName || ""),
           };
           h2hSharedPropsInjected = false;
+          try {
+            fetch("/cart.js", { credentials: "same-origin" })
+              .then(function (r) { return r.json(); })
+              .then(function (c) {
+                cartSnapshotKeys = {};
+                ((c && c.items) || []).forEach(function (item) { cartSnapshotKeys[item.key] = true; });
+              }).catch(function () { cartSnapshotKeys = {}; });
+          } catch (_) {}
           ensureInputsInCurrentForm();
           setHiddenInputValue("h2h_prealloc_request_id", String(data.preorderRequestId));
           setHiddenInputValue("h2h_prealloc_jersey_number", "TBC");
@@ -700,6 +804,7 @@
         // Re-send variant state immediately so the widget gets the correct size.
         if (data.type === "h2h:config") {
           bundleJerseyProperty = data.bundleJerseyProperty || null;
+          h2hBundlePage = !!bundleJerseyProperty;
           sendVariantState(true);
         }
 
