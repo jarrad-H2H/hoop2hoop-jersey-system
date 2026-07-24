@@ -283,6 +283,22 @@
     forceAtcLabel(scope, originalAtcLabel);
   }
 
+  // Disable the ATC button so the customer must complete the widget before
+  // proceeding. Works for both standard and Simple Bundles pages: a `disabled`
+  // button fires no click events at all, so Simple Bundles' modal cannot open.
+  function lockAtcButton(scope) {
+    var btn = findAtcButton(scope);
+    if (!btn) return;
+    btn.disabled = true;
+    forceAtcLabel(scope, "Select jersey number first");
+  }
+
+  function unlockAtcButton(scope) {
+    var btn = findAtcButton(scope);
+    if (!btn) return;
+    btn.disabled = false;
+  }
+
   // ── Hidden input helpers ─────────────────────────────────────────────────────
   function setHiddenInputValue(id, value) {
     var input = document.getElementById(id);
@@ -646,6 +662,8 @@
           }
           // Re-attach click handler if ATC button was recreated by Section Rendering
           setupAtcClickHandler();
+          // Re-apply lock if the new button appeared before the customer confirmed
+          if (!h2hSharedProps) lockAtcButton(scope);
         }, 0);
       });
       mo.observe(scope, { subtree: true, attributes: true, childList: true });
@@ -684,6 +702,7 @@
 
           // Ensure the click-interception handler is attached to the current ATC button.
           // (The button could have been recreated since mount() ran.)
+          unlockAtcButton(scope);
           setupAtcClickHandler();
 
           forceAtcLabel(scope, "Add to cart");
@@ -699,7 +718,7 @@
           setHiddenInputValue("h2h_pending_allocation_id", "");
           setHiddenInputValue("h2h_reserved_at", "");
 
-          restoreAtcLabel(scope);
+          lockAtcButton(scope);
         }
 
         // Pre-order: customer submitted preferences — store in lastPreorder so the
@@ -718,6 +737,7 @@
           h2hSharedProps = buildH2hProperties();
           h2hSharedPropsInjected = false;
           window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: data }));
+          unlockAtcButton(scope);
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
         }
@@ -760,6 +780,7 @@
             }).catch(function () {});
           } catch (_) {}
           window.dispatchEvent(new CustomEvent("h2h:preallocated:ready", { detail: data }));
+          unlockAtcButton(scope);
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
         }
@@ -796,6 +817,7 @@
             }).catch(function () {});
           } catch (_) {}
           window.dispatchEvent(new CustomEvent("h2h:preorder:unmatched", { detail: data }));
+          unlockAtcButton(scope);
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
         }
@@ -805,6 +827,7 @@
         if (data.type === "h2h:config") {
           bundleJerseyProperty = data.bundleJerseyProperty || null;
           h2hBundlePage = !!bundleJerseyProperty;
+          lockAtcButton(scope);
           sendVariantState(true);
         }
 
