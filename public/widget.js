@@ -663,7 +663,7 @@
           // Re-attach click handler if ATC button was recreated by Section Rendering
           setupAtcClickHandler();
           // Re-apply lock if the new button appeared before the customer confirmed
-          if (!h2hSharedProps) lockAtcButton(scope);
+          if (!h2hSharedProps && h2hBundlePage) lockAtcButton(scope);
         }, 0);
       });
       mo.observe(scope, { subtree: true, attributes: true, childList: true });
@@ -718,7 +718,7 @@
           setHiddenInputValue("h2h_pending_allocation_id", "");
           setHiddenInputValue("h2h_reserved_at", "");
 
-          lockAtcButton(scope);
+          if (h2hBundlePage) { lockAtcButton(scope); } else { restoreAtcLabel(scope); }
         }
 
         // Pre-order: customer submitted preferences — store in lastPreorder so the
@@ -827,7 +827,7 @@
         if (data.type === "h2h:config") {
           bundleJerseyProperty = data.bundleJerseyProperty || null;
           h2hBundlePage = !!bundleJerseyProperty;
-          lockAtcButton(scope);
+          if (h2hBundlePage) lockAtcButton(scope);
           sendVariantState(true);
         }
 
