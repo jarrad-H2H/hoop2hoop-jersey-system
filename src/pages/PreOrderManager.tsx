@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, fetchAllPages } from "../services/supabase";
 import { runFcfsAllocation, validateImportRow, finalisePreorder, getLockedShopifyUpdates, importPreallocatedRoster, type PreorderRequest, type PreallocatedImportRow } from "../services/preorder";
-import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw, Trash2 } from "lucide-react";
+import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw, Trash2, Pencil, Plus, Check, X } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
 
@@ -70,6 +70,15 @@ const PreOrderManager: React.FC = () => {
   const [addingNewSeason, setAddingNewSeason] = useState(false);
   const [newSeasonInput, setNewSeasonInput] = useState("");
   const [windowAgeGroup, setWindowAgeGroup] = useState<string>("");
+
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<Record<string, any>>({});
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [addingRow, setAddingRow] = useState(false);
+  const [newRowDraft, setNewRowDraft] = useState<Record<string, any>>({});
+  const [newRowSaving, setNewRowSaving] = useState(false);
+  const [newRowError, setNewRowError] = useState<string | null>(null);
 
   const selectedClub = clubs.find(c => c.id === selectedClubId) ?? null;
 
@@ -533,6 +542,95 @@ const PreOrderManager: React.FC = () => {
     XLSX.writeFile(wb, "preallocated_roster_template.xlsx");
   };
 
+  // ── Inline edit handlers ────────────────────────────────────────────────────
+  const handleStartEdit = (r: PreorderRequest) => {
+    setEditingRowId(r.id);
+    setEditDraft({
+      first_name: r.first_name ?? "",
+      last_name: r.last_name ?? "",
+      year_of_birth: r.year_of_birth ?? "",
+      gender: r.gender ?? "",
+      age_group: r.age_group ?? "",
+      size: r.size ?? "",
+      assigned_number: r.assigned_number ?? "",
+      jersey_name: (r as any).jersey_name ?? "",
+      status: r.status ?? "pending",
+    });
+    setEditError(null);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingRowId(null);
+    setEditDraft({});
+    setEditError(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingRowId) return;
+    setEditSaving(true);
+    setEditError(null);
+    const patch: Record<string, any> = {
+      first_name: editDraft.first_name || null,
+      last_name: editDraft.last_name || null,
+      year_of_birth: editDraft.year_of_birth !== "" ? Number(editDraft.year_of_birth) : null,
+      gender: editDraft.gender || null,
+      age_group: editDraft.age_group || null,
+      size: editDraft.size || null,
+      assigned_number: editDraft.assigned_number !== "" && editDraft.assigned_number != null ? Number(editDraft.assigned_number) : null,
+      jersey_name: editDraft.jersey_name || null,
+      status: editDraft.status || "pending",
+    };
+    const { error } = await supabase.from("preorder_requests").update(patch).eq("id", editingRowId);
+    setEditSaving(false);
+    if (error) { setEditError(error.message); return; }
+    setEditingRowId(null);
+    await loadRequests();
+  };
+
+  // ── Add row handlers ─────────────────────────────────────────────────────────
+  const handleStartAddRow = () => {
+    setAddingRow(true);
+    setNewRowDraft({ first_name: "", last_name: "", year_of_birth: "", gender: "", age_group: "", size: "", assigned_number: "", jersey_name: "", status: "pending" });
+    setNewRowError(null);
+    setEditingRowId(null);
+  };
+
+  const handleCancelAddRow = () => {
+    setAddingRow(false);
+    setNewRowDraft({});
+    setNewRowError(null);
+  };
+
+  const handleSaveNewRow = async () => {
+    if (!selectedClubId) return;
+    if (!newRowDraft.first_name?.trim() || !newRowDraft.last_name?.trim()) {
+      setNewRowError("First name and last name are required.");
+      return;
+    }
+    setNewRowSaving(true);
+    setNewRowError(null);
+    const hasNumber = newRowDraft.assigned_number !== "" && newRowDraft.assigned_number != null;
+    const row: Record<string, any> = {
+      club_id: selectedClubId,
+      season,
+      first_name: newRowDraft.first_name.trim(),
+      last_name: newRowDraft.last_name.trim(),
+      year_of_birth: newRowDraft.year_of_birth !== "" ? Number(newRowDraft.year_of_birth) : null,
+      gender: newRowDraft.gender || null,
+      age_group: newRowDraft.age_group || null,
+      size: newRowDraft.size || null,
+      assigned_number: hasNumber ? Number(newRowDraft.assigned_number) : null,
+      jersey_name: newRowDraft.jersey_name || null,
+      status: newRowDraft.status || (hasNumber ? "allocated" : "pending"),
+    };
+    const { error } = await supabase.from("preorder_requests").insert(row);
+    setNewRowSaving(false);
+    if (error) { setNewRowError(error.message); return; }
+    setAddingRow(false);
+    setNewRowDraft({});
+    await loadRequests();
+  };
+
   // ── Counts ──────────────────────────────────────────────────────────────────
   const counts = {
     pending: requests.filter(r => r.status === "pending").length,
@@ -865,6 +963,17 @@ const PreOrderManager: React.FC = () => {
               </button>
             )}
 
+            {/* Add Player — manual entry for players added after initial import */}
+            <button
+              type="button"
+              onClick={handleStartAddRow}
+              disabled={addingRow || !!editingRowId}
+              className="flex items-center gap-2 px-4 py-2 border border-indigo-300 text-indigo-700 bg-indigo-50 rounded-lg text-sm font-medium hover:bg-indigo-100 disabled:opacity-50"
+            >
+              <Plus size={15} />
+              Add Player
+            </button>
+
             {/* Delete Season — always available when there's data */}
             {requests.length > 0 && (
               <button
@@ -926,7 +1035,7 @@ const PreOrderManager: React.FC = () => {
         />
       )}
 
-      {!loadingRequests && requests.length > 0 && (
+      {!loadingRequests && (requests.length > 0 || addingRow) && (
         <div className="overflow-x-auto bg-white rounded-xl shadow-sm border border-gray-200">
           <div className="px-4 py-2 text-xs text-gray-500 border-b">
             {requests.length} request{requests.length !== 1 ? "s" : ""} · sorted by payment time (earliest = highest FCFS priority)
@@ -950,16 +1059,45 @@ const PreOrderManager: React.FC = () => {
             </thead>
             <tbody>
               {requests.map((r, idx) => (
-                <tr key={r.id} className="border-t border-gray-100 odd:bg-white even:bg-gray-50">
+                <tr key={r.id} className={`border-t border-gray-100 ${editingRowId === r.id ? "bg-amber-50" : "odd:bg-white even:bg-gray-50"}`}>
                   <td className="px-3 py-2 text-gray-400">{idx + 1}</td>
                   <td className="px-3 py-2 font-medium">
-                    {r.first_name} {r.last_name}
-                    {r.order_number && <span className="ml-1 text-gray-400">#{r.order_number}</span>}
+                    {editingRowId === r.id ? (
+                      <div className="flex flex-col gap-0.5">
+                        <input type="text" value={editDraft.first_name ?? ""} onChange={e => setEditDraft(d => ({ ...d, first_name: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-28" placeholder="First name" />
+                        <input type="text" value={editDraft.last_name ?? ""} onChange={e => setEditDraft(d => ({ ...d, last_name: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-28" placeholder="Last name" />
+                      </div>
+                    ) : (
+                      <>
+                        {r.first_name} {r.last_name}
+                        {r.order_number && <span className="ml-1 text-gray-400">#{r.order_number}</span>}
+                      </>
+                    )}
                   </td>
-                  <td className="px-3 py-2">{r.year_of_birth}</td>
-                  <td className="px-3 py-2">{r.gender ?? "—"}</td>
-                  <td className="px-3 py-2">{r.age_group ?? "—"}</td>
-                  <td className="px-3 py-2">{r.size}</td>
+                  <td className="px-3 py-2">
+                    {editingRowId === r.id ? (
+                      <input type="number" value={editDraft.year_of_birth ?? ""} onChange={e => setEditDraft(d => ({ ...d, year_of_birth: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-16" placeholder="YOB" />
+                    ) : r.year_of_birth}
+                  </td>
+                  <td className="px-3 py-2">
+                    {editingRowId === r.id ? (
+                      <select value={editDraft.gender ?? ""} onChange={e => setEditDraft(d => ({ ...d, gender: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
+                        <option value="">—</option>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                      </select>
+                    ) : (r.gender ?? "—")}
+                  </td>
+                  <td className="px-3 py-2">
+                    {editingRowId === r.id ? (
+                      <input type="text" value={editDraft.age_group ?? ""} onChange={e => setEditDraft(d => ({ ...d, age_group: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-16" placeholder="U14" />
+                    ) : (r.age_group ?? "—")}
+                  </td>
+                  <td className="px-3 py-2">
+                    {editingRowId === r.id ? (
+                      <input type="text" value={editDraft.size ?? ""} onChange={e => setEditDraft(d => ({ ...d, size: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-14" placeholder="M" />
+                    ) : r.size}
+                  </td>
                   <td className="px-3 py-2">
                     {r.any_number ? (
                       <span className="italic text-gray-500">Any</span>
@@ -975,37 +1113,124 @@ const PreOrderManager: React.FC = () => {
                     )}
                   </td>
                   <td className="px-3 py-2">
-                    {r.assigned_number != null
-                      ? <span className="font-bold text-brand-700">#{r.jersey_number_display ?? r.assigned_number}</span>
-                      : <span className="text-gray-400">—</span>}
+                    {editingRowId === r.id ? (
+                      <input type="number" value={editDraft.assigned_number ?? ""} onChange={e => setEditDraft(d => ({ ...d, assigned_number: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-14" placeholder="#" />
+                    ) : (
+                      r.assigned_number != null
+                        ? <span className="font-bold text-brand-700">#{r.jersey_number_display ?? r.assigned_number}</span>
+                        : <span className="text-gray-400">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 font-medium text-gray-800">
-                    {(r as any).jersey_name ?? <span className="text-gray-400">—</span>}
+                    {editingRowId === r.id ? (
+                      <input type="text" value={editDraft.jersey_name ?? ""} onChange={e => setEditDraft(d => ({ ...d, jersey_name: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-24" placeholder="Name on jersey" />
+                    ) : ((r as any).jersey_name ?? <span className="text-gray-400">—</span>)}
                   </td>
                   <td className="px-3 py-2">
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_BADGE[r.status] ?? ""}`}>
-                      {r.status === "needs_size" ? "needs size" : r.status === "unmatched" ? "unmatched ⚠" : r.status}
-                    </span>
+                    {editingRowId === r.id ? (
+                      <select value={editDraft.status ?? "pending"} onChange={e => setEditDraft(d => ({ ...d, status: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
+                        <option value="pending">pending</option>
+                        <option value="needs_size">needs size</option>
+                        <option value="allocated">allocated</option>
+                        <option value="overflow">overflow</option>
+                        <option value="locked">locked</option>
+                        <option value="unmatched">unmatched</option>
+                      </select>
+                    ) : (
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${STATUS_BADGE[r.status] ?? ""}`}>
+                        {r.status === "needs_size" ? "needs size" : r.status === "unmatched" ? "unmatched ⚠" : r.status}
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
                     {r.paid_at ? new Date(r.paid_at).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}
                   </td>
                   <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteRequest(r.id, `${r.first_name} ${r.last_name}`)}
-                      disabled={actionLoading}
-                      className="text-red-400 hover:text-red-700 disabled:opacity-40"
-                      title="Delete this entry"
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    {editingRowId === r.id ? (
+                      <div className="flex items-center gap-1">
+                        <button type="button" onClick={handleSaveEdit} disabled={editSaving} className="text-green-600 hover:text-green-800 disabled:opacity-40" title="Save changes">
+                          <Check size={13} />
+                        </button>
+                        <button type="button" onClick={handleCancelEdit} disabled={editSaving} className="text-gray-400 hover:text-gray-600 disabled:opacity-40" title="Cancel edit">
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <button type="button" onClick={() => handleStartEdit(r)} disabled={!!editingRowId || actionLoading} className="text-blue-400 hover:text-blue-700 disabled:opacity-40" title="Edit this entry">
+                          <Pencil size={13} />
+                        </button>
+                        <button type="button" onClick={() => handleDeleteRequest(r.id, `${r.first_name} ${r.last_name}`)} disabled={actionLoading || !!editingRowId} className="text-red-400 hover:text-red-700 disabled:opacity-40" title="Delete this entry">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
+              {addingRow && (
+                <tr className="border-t-2 border-indigo-300 bg-indigo-50">
+                  <td className="px-3 py-2 text-indigo-400 font-medium text-xs">New</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-col gap-0.5">
+                      <input type="text" value={newRowDraft.first_name ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, first_name: e.target.value }))} placeholder="First name" className="border rounded px-1 py-0.5 text-xs w-28" autoFocus />
+                      <input type="text" value={newRowDraft.last_name ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, last_name: e.target.value }))} placeholder="Last name" className="border rounded px-1 py-0.5 text-xs w-28" />
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input type="number" value={newRowDraft.year_of_birth ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, year_of_birth: e.target.value }))} placeholder="YOB" className="border rounded px-1 py-0.5 text-xs w-16" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <select value={newRowDraft.gender ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, gender: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
+                      <option value="">—</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input type="text" value={newRowDraft.age_group ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, age_group: e.target.value }))} placeholder="U14" className="border rounded px-1 py-0.5 text-xs w-16" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input type="text" value={newRowDraft.size ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, size: e.target.value }))} placeholder="M" className="border rounded px-1 py-0.5 text-xs w-14" />
+                  </td>
+                  <td className="px-3 py-2 text-gray-400 text-[11px] italic">—</td>
+                  <td className="px-3 py-2">
+                    <input type="number" value={newRowDraft.assigned_number ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, assigned_number: e.target.value }))} placeholder="#" className="border rounded px-1 py-0.5 text-xs w-14" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input type="text" value={newRowDraft.jersey_name ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, jersey_name: e.target.value }))} placeholder="Name on jersey" className="border rounded px-1 py-0.5 text-xs w-24" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <select value={newRowDraft.status ?? "pending"} onChange={e => setNewRowDraft(d => ({ ...d, status: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
+                      <option value="pending">pending</option>
+                      <option value="needs_size">needs size</option>
+                      <option value="allocated">allocated</option>
+                      <option value="overflow">overflow</option>
+                      <option value="unmatched">unmatched</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2 text-gray-400">—</td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1">
+                      <button type="button" onClick={handleSaveNewRow} disabled={newRowSaving} className="text-green-600 hover:text-green-800 disabled:opacity-40" title="Save new player">
+                        <Check size={13} />
+                      </button>
+                      <button type="button" onClick={handleCancelAddRow} disabled={newRowSaving} className="text-gray-400 hover:text-gray-600 disabled:opacity-40" title="Cancel">
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
+      )}
+      {editError && (
+        <div className="mt-2 p-2 rounded text-xs bg-red-50 text-red-800 border border-red-200">{editError}</div>
+      )}
+      {newRowError && (
+        <div className="mt-2 p-2 rounded text-xs bg-red-50 text-red-800 border border-red-200">{newRowError}</div>
       )}
     </div>
   );
