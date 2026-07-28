@@ -47,6 +47,13 @@ const STATUS_BADGE: Record<string, string> = {
   unmatched: "bg-purple-100 text-purple-800",
 };
 
+const FILTER_OPTIONS: { label: string; status: string; activeClass: string }[] = [
+  { label: "Allocated",     status: "allocated",  activeClass: "bg-green-100 text-green-800 border-green-300" },
+  { label: "Awaiting size", status: "needs_size", activeClass: "bg-amber-100 text-amber-800 border-amber-300" },
+  { label: "Confirmed",     status: "locked",     activeClass: "bg-blue-100 text-blue-700 border-blue-300" },
+  { label: "Unmatched",     status: "unmatched",  activeClass: "bg-purple-100 text-purple-800 border-purple-300" },
+];
+
 const EXPORT_COLUMNS = [
   "request_id", "club_name", "age_group", "first_name", "last_name",
   "year_of_birth", "gender", "size", "jersey_name", "pref_1", "pref_2", "pref_3", "any_number",
@@ -91,6 +98,8 @@ const PreOrderManager: React.FC = () => {
   const [newRowSaving, setNewRowSaving] = useState(false);
   const [newRowError, setNewRowError] = useState<string | null>(null);
 
+  const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
+
   const selectedClub = clubs.find(c => c.id === selectedClubId) ?? null;
 
   // ── Load available seasons for selected club ────────────────────────────────
@@ -125,8 +134,9 @@ const PreOrderManager: React.FC = () => {
 
   useEffect(() => { void loadClubs(); }, []);
 
-  // Reset window age group picker when selected club changes
-  useEffect(() => { setWindowAgeGroup(""); }, [selectedClubId]);
+  // Reset window age group picker and status filters when selected club or season changes
+  useEffect(() => { setWindowAgeGroup(""); setStatusFilters(new Set()); }, [selectedClubId]);
+  useEffect(() => { setStatusFilters(new Set()); }, [season]);
 
   // ── Load requests ───────────────────────────────────────────────────────────
   const loadRequests = useCallback(async () => {
@@ -666,6 +676,19 @@ const PreOrderManager: React.FC = () => {
     total: requests.length,
   };
 
+  const toggleFilter = (status: string) => {
+    setStatusFilters(prev => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  };
+
+  const filteredRequests = statusFilters.size === 0
+    ? requests
+    : requests.filter(r => statusFilters.has(r.status));
+
   const mode = selectedClub?.preorder_mode ?? "off";
   const showJerseyName = selectedClub?.widget_config?.collect_surname === true;
 
@@ -1062,8 +1085,31 @@ const PreOrderManager: React.FC = () => {
 
       {!loadingRequests && (requests.length > 0 || addingRow) && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-          <div className="px-4 py-2 text-xs text-gray-500 border-b">
-            {requests.length} request{requests.length !== 1 ? "s" : ""} · sorted by payment time (earliest = highest FCFS priority)
+          <div className="px-4 py-2 border-b flex flex-wrap items-center gap-x-6 gap-y-2">
+            <span className="text-xs text-gray-500">
+              {statusFilters.size === 0
+                ? <>{requests.length} request{requests.length !== 1 ? "s" : ""} · sorted by payment time (earliest = highest FCFS priority)</>
+                : <><strong>{filteredRequests.length}</strong> of {requests.length} request{requests.length !== 1 ? "s" : ""}</>
+              }
+            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              {FILTER_OPTIONS.map(opt => {
+                const active = statusFilters.has(opt.status);
+                return (
+                  <label key={opt.status} className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={() => toggleFilter(opt.status)}
+                      className="rounded accent-brand-600"
+                    />
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${active ? opt.activeClass : "text-gray-500 border-transparent"}`}>
+                      {opt.label}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
           <div className="overflow-x-auto">
           <table className="min-w-full text-xs">
@@ -1084,7 +1130,16 @@ const PreOrderManager: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {requests.map((r, idx) => (
+              {filteredRequests.length === 0 && !addingRow && (
+                <tr>
+                  <td colSpan={showJerseyName ? 12 : 11} className="px-4 py-6 text-center text-sm text-gray-400">
+                    No rows match the selected filter{statusFilters.size !== 1 ? "s" : ""}.
+                  </td>
+                </tr>
+              )}
+              {filteredRequests.map((r) => {
+                const idx = requests.indexOf(r);
+                return (
                 <tr key={r.id} className={`border-t border-gray-100 ${editingRowId === r.id ? "bg-amber-50" : "odd:bg-white even:bg-gray-50"}`}>
                   <td className="px-3 py-2 text-gray-400">{idx + 1}</td>
                   <td className="px-3 py-2 font-medium">
@@ -1195,7 +1250,8 @@ const PreOrderManager: React.FC = () => {
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {addingRow && (
                 <tr className="border-t-2 border-indigo-300 bg-indigo-50">
                   <td className="px-3 py-2 text-indigo-400 font-medium text-xs">New</td>
