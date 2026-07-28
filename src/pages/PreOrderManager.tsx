@@ -643,6 +643,7 @@ const PreOrderManager: React.FC = () => {
   };
 
   const mode = selectedClub?.preorder_mode ?? "off";
+  const showJerseyName = selectedClub?.widget_config?.collect_surname === true;
 
   return (
     <div>
@@ -1051,7 +1052,7 @@ const PreOrderManager: React.FC = () => {
                 <th className="px-3 py-2 text-left font-semibold">Size</th>
                 <th className="px-3 py-2 text-left font-semibold">Preferences</th>
                 <th className="px-3 py-2 text-left font-semibold">Assigned #</th>
-                <th className="px-3 py-2 text-left font-semibold">Jersey Name</th>
+                {showJerseyName && <th className="px-3 py-2 text-left font-semibold">Jersey Name</th>}
                 <th className="px-3 py-2 text-left font-semibold">Status</th>
                 <th className="px-3 py-2 text-left font-semibold">Paid At</th>
                 <th className="px-3 py-2"></th>
@@ -1121,11 +1122,13 @@ const PreOrderManager: React.FC = () => {
                         : <span className="text-gray-400">—</span>
                     )}
                   </td>
-                  <td className="px-3 py-2 font-medium text-gray-800">
-                    {editingRowId === r.id ? (
-                      <input type="text" value={editDraft.jersey_name ?? ""} onChange={e => setEditDraft(d => ({ ...d, jersey_name: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-24" placeholder="Name on jersey" />
-                    ) : ((r as any).jersey_name ?? <span className="text-gray-400">—</span>)}
-                  </td>
+                  {showJerseyName && (
+                    <td className="px-3 py-2 font-medium text-gray-800">
+                      {editingRowId === r.id ? (
+                        <input type="text" value={editDraft.jersey_name ?? ""} onChange={e => setEditDraft(d => ({ ...d, jersey_name: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-24" placeholder="Name on jersey" />
+                      ) : ((r as any).jersey_name ?? <span className="text-gray-400">—</span>)}
+                    </td>
+                  )}
                   <td className="px-3 py-2">
                     {editingRowId === r.id ? (
                       <select value={editDraft.status ?? "pending"} onChange={e => setEditDraft(d => ({ ...d, status: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
@@ -1197,9 +1200,11 @@ const PreOrderManager: React.FC = () => {
                   <td className="px-3 py-2">
                     <input type="number" value={newRowDraft.assigned_number ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, assigned_number: e.target.value }))} placeholder="#" className="border rounded px-1 py-0.5 text-xs w-14" />
                   </td>
-                  <td className="px-3 py-2">
-                    <input type="text" value={newRowDraft.jersey_name ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, jersey_name: e.target.value }))} placeholder="Name on jersey" className="border rounded px-1 py-0.5 text-xs w-24" />
-                  </td>
+                  {showJerseyName && (
+                    <td className="px-3 py-2">
+                      <input type="text" value={newRowDraft.jersey_name ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, jersey_name: e.target.value }))} placeholder="Name on jersey" className="border rounded px-1 py-0.5 text-xs w-24" />
+                    </td>
+                  )}
                   <td className="px-3 py-2">
                     <select value={newRowDraft.status ?? "pending"} onChange={e => setNewRowDraft(d => ({ ...d, status: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
                       <option value="pending">pending</option>
