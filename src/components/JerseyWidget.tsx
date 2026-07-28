@@ -1052,7 +1052,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
       setPaSubmitted(true);
       notifyShopify("h2h:preallocated:ready", {
-        jerseyNumber: paSelected.assignedNumber,
+        jerseyNumber: paSelected.assignedNumberDisplay ?? paSelected.assignedNumber,
         jerseyName: paJerseyName.trim().toUpperCase(),
         preorderRequestId: json.preorderRequestId ?? paSelected.id,
       });

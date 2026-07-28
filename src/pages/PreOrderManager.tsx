@@ -12,6 +12,17 @@ import EmptyState from "../components/ui/EmptyState";
 
 type PreorderMode = "off" | "open" | "closed" | "locked";
 
+// "00" must round-trip as text — numeric 0 is ambiguous (could be 0 or 00).
+// Returns { assigned_number, jersey_number_display } ready to write to the DB.
+function parseJerseyNumberInput(raw: string): { assigned_number: number | null; jersey_number_display: string | null } {
+  const v = raw.trim();
+  if (!v) return { assigned_number: null, jersey_number_display: null };
+  if (v === "00") return { assigned_number: 0, jersey_number_display: "00" };
+  const n = Number(v);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return { assigned_number: null, jersey_number_display: null };
+  return { assigned_number: n, jersey_number_display: null };
+}
+
 interface Club {
   id: string;
   name: string;
@@ -535,8 +546,17 @@ const PreOrderManager: React.FC = () => {
 
   const handleDownloadRosterTemplate = () => {
     const headers = ["first_name", "last_name", "jersey_number", "year_of_birth", "gender", "age_group", "parent_1_name", "parent_1_email", "parent_1_mobile", "parent_2_name", "parent_2_email", "parent_2_mobile"];
-    const example = { first_name: "Jordan", last_name: "Smith", jersey_number: 6, year_of_birth: 2008, gender: "Female", age_group: "U18", parent_1_name: "Alex Smith", parent_1_email: "alex.smith@email.com", parent_1_mobile: "0400000000", parent_2_name: "", parent_2_email: "", parent_2_mobile: "" };
+    // jersey_number stored as string "6" so Excel keeps it as text — preserves "00" when uploaded back.
+    const example = { first_name: "Jordan", last_name: "Smith", jersey_number: "6", year_of_birth: 2008, gender: "Female", age_group: "U18", parent_1_name: "Alex Smith", parent_1_email: "alex.smith@email.com", parent_1_mobile: "0400000000", parent_2_name: "", parent_2_email: "", parent_2_mobile: "" };
     const ws = XLSX.utils.json_to_sheet([example], { header: headers });
+    // Force jersey_number column (C) to text format so Excel treats the entire column as text,
+    // preventing it from converting "00" to 0 when users enter it.
+    const jerseyNumColIdx = headers.indexOf("jersey_number");
+    const range = XLSX.utils.decode_range(ws["!ref"] ?? "A1:L2");
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const addr = XLSX.utils.encode_cell({ r, c: jerseyNumColIdx });
+      if (ws[addr]) ws[addr].z = "@";
+    }
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Roster");
     XLSX.writeFile(wb, "preallocated_roster_template.xlsx");
@@ -552,7 +572,7 @@ const PreOrderManager: React.FC = () => {
       gender: r.gender ?? "",
       age_group: r.age_group ?? "",
       size: r.size ?? "",
-      assigned_number: r.assigned_number ?? "",
+      assigned_number: (r as any).jersey_number_display ?? (r.assigned_number != null ? String(r.assigned_number) : ""),
       jersey_name: (r as any).jersey_name ?? "",
       status: r.status ?? "pending",
     });
@@ -569,6 +589,7 @@ const PreOrderManager: React.FC = () => {
     if (!editingRowId) return;
     setEditSaving(true);
     setEditError(null);
+    const { assigned_number, jersey_number_display } = parseJerseyNumberInput(String(editDraft.assigned_number ?? ""));
     const patch: Record<string, any> = {
       first_name: editDraft.first_name || null,
       last_name: editDraft.last_name || null,
@@ -576,7 +597,8 @@ const PreOrderManager: React.FC = () => {
       gender: editDraft.gender || null,
       age_group: editDraft.age_group || null,
       size: editDraft.size || null,
-      assigned_number: editDraft.assigned_number !== "" && editDraft.assigned_number != null ? Number(editDraft.assigned_number) : null,
+      assigned_number,
+      jersey_number_display,
       jersey_name: editDraft.jersey_name || null,
       status: editDraft.status || "pending",
     };
@@ -609,7 +631,8 @@ const PreOrderManager: React.FC = () => {
     }
     setNewRowSaving(true);
     setNewRowError(null);
-    const hasNumber = newRowDraft.assigned_number !== "" && newRowDraft.assigned_number != null;
+    const { assigned_number, jersey_number_display } = parseJerseyNumberInput(String(newRowDraft.assigned_number ?? ""));
+    const hasNumber = assigned_number != null;
     const row: Record<string, any> = {
       club_id: selectedClubId,
       season,
@@ -619,7 +642,8 @@ const PreOrderManager: React.FC = () => {
       gender: newRowDraft.gender || null,
       age_group: newRowDraft.age_group || null,
       size: newRowDraft.size || null,
-      assigned_number: hasNumber ? Number(newRowDraft.assigned_number) : null,
+      assigned_number,
+      jersey_number_display,
       jersey_name: newRowDraft.jersey_name || null,
       status: newRowDraft.status || (hasNumber ? "allocated" : "pending"),
     };
@@ -1115,7 +1139,7 @@ const PreOrderManager: React.FC = () => {
                   </td>
                   <td className="px-3 py-2">
                     {editingRowId === r.id ? (
-                      <input type="number" value={editDraft.assigned_number ?? ""} onChange={e => setEditDraft(d => ({ ...d, assigned_number: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-14" placeholder="#" />
+                      <input type="text" value={editDraft.assigned_number ?? ""} onChange={e => setEditDraft(d => ({ ...d, assigned_number: e.target.value }))} className="border rounded px-1 py-0.5 text-xs w-14" placeholder="#" />
                     ) : (
                       r.assigned_number != null
                         ? <span className="font-bold text-brand-700">#{r.jersey_number_display ?? r.assigned_number}</span>
@@ -1198,7 +1222,7 @@ const PreOrderManager: React.FC = () => {
                   </td>
                   <td className="px-3 py-2 text-gray-400 text-[11px] italic">—</td>
                   <td className="px-3 py-2">
-                    <input type="number" value={newRowDraft.assigned_number ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, assigned_number: e.target.value }))} placeholder="#" className="border rounded px-1 py-0.5 text-xs w-14" />
+                    <input type="text" value={newRowDraft.assigned_number ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, assigned_number: e.target.value }))} placeholder="#" className="border rounded px-1 py-0.5 text-xs w-14" />
                   </td>
                   {showJerseyName && (
                     <td className="px-3 py-2">
