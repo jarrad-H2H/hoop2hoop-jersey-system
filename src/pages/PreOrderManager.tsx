@@ -54,6 +54,9 @@ const FILTER_OPTIONS: { label: string; status: string; activeClass: string }[] =
   { label: "Unmatched",     status: "unmatched",  activeClass: "bg-purple-100 text-purple-800 border-purple-300" },
 ];
 
+type SortColumn = "index" | "player" | "yob" | "gender" | "age_group" | "size" | "assigned_number" | "status" | "paid_at";
+type SortDir = "asc" | "desc";
+
 const EXPORT_COLUMNS = [
   "request_id", "club_name", "age_group", "first_name", "last_name",
   "year_of_birth", "gender", "size", "jersey_name", "pref_1", "pref_2", "pref_3", "any_number",
@@ -99,6 +102,8 @@ const PreOrderManager: React.FC = () => {
   const [newRowError, setNewRowError] = useState<string | null>(null);
 
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
+  const [sortColumn, setSortColumn] = useState<SortColumn>("index");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const selectedClub = clubs.find(c => c.id === selectedClubId) ?? null;
 
@@ -134,9 +139,9 @@ const PreOrderManager: React.FC = () => {
 
   useEffect(() => { void loadClubs(); }, []);
 
-  // Reset window age group picker and status filters when selected club or season changes
-  useEffect(() => { setWindowAgeGroup(""); setStatusFilters(new Set()); }, [selectedClubId]);
-  useEffect(() => { setStatusFilters(new Set()); }, [season]);
+  // Reset window age group picker, status filters, and sort when selected club or season changes
+  useEffect(() => { setWindowAgeGroup(""); setStatusFilters(new Set()); setSortColumn("index"); setSortDir("asc"); }, [selectedClubId]);
+  useEffect(() => { setStatusFilters(new Set()); setSortColumn("index"); setSortDir("asc"); }, [season]);
 
   // ── Load requests ───────────────────────────────────────────────────────────
   const loadRequests = useCallback(async () => {
@@ -685,9 +690,46 @@ const PreOrderManager: React.FC = () => {
     });
   };
 
+  const handleSort = (col: SortColumn) => {
+    if (sortColumn === col) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(col);
+      setSortDir("asc");
+    }
+  };
+
   const filteredRequests = statusFilters.size === 0
     ? requests
     : requests.filter(r => statusFilters.has(r.status));
+
+  const displayRequests = React.useMemo(() => {
+    const rows = [...filteredRequests];
+    if (sortColumn === "index") {
+      return rows.sort((a, b) => requests.indexOf(a) - requests.indexOf(b));
+    }
+    const mul = sortDir === "asc" ? 1 : -1;
+    return rows.sort((a, b) => {
+      let av: any, bv: any;
+      switch (sortColumn) {
+        case "player":
+          av = `${a.first_name ?? ""} ${a.last_name ?? ""}`.trim().toLowerCase();
+          bv = `${b.first_name ?? ""} ${b.last_name ?? ""}`.trim().toLowerCase();
+          break;
+        case "yob":      av = a.year_of_birth ?? 9999;          bv = b.year_of_birth ?? 9999;          break;
+        case "gender":   av = a.gender ?? "";                   bv = b.gender ?? "";                   break;
+        case "age_group":av = a.age_group ?? "";                bv = b.age_group ?? "";                break;
+        case "size":     av = a.size ?? "";                     bv = b.size ?? "";                     break;
+        case "assigned_number": av = a.assigned_number ?? -1;  bv = b.assigned_number ?? -1;          break;
+        case "status":   av = a.status ?? "";                   bv = b.status ?? "";                   break;
+        case "paid_at":  av = a.paid_at ?? "";                  bv = b.paid_at ?? "";                  break;
+        default: return 0;
+      }
+      if (av < bv) return -1 * mul;
+      if (av > bv) return  1 * mul;
+      return 0;
+    });
+  }, [filteredRequests, requests, sortColumn, sortDir]);
 
   const mode = selectedClub?.preorder_mode ?? "off";
   const showJerseyName = selectedClub?.widget_config?.collect_surname === true;
@@ -1115,29 +1157,51 @@ const PreOrderManager: React.FC = () => {
           <table className="min-w-full text-xs">
             <thead className="bg-gray-50 sticky top-0 z-10">
               <tr>
-                <th className="px-3 py-2 text-left font-semibold">#</th>
-                <th className="px-3 py-2 text-left font-semibold">Player</th>
-                <th className="px-3 py-2 text-left font-semibold">YOB</th>
-                <th className="px-3 py-2 text-left font-semibold">Gender</th>
-                <th className="px-3 py-2 text-left font-semibold">Age Group</th>
-                <th className="px-3 py-2 text-left font-semibold">Size</th>
-                <th className="px-3 py-2 text-left font-semibold">Preferences</th>
-                <th className="px-3 py-2 text-left font-semibold">Assigned #</th>
-                {showJerseyName && <th className="px-3 py-2 text-left font-semibold">Jersey Name</th>}
-                <th className="px-3 py-2 text-left font-semibold">Status</th>
-                <th className="px-3 py-2 text-left font-semibold">Paid At</th>
-                <th className="px-3 py-2"></th>
+                {(() => {
+                  const Th = ({ col, children }: { col: SortColumn; children: React.ReactNode }) => {
+                    const active = sortColumn === col;
+                    return (
+                      <th
+                        className="px-3 py-2 text-left font-semibold cursor-pointer select-none whitespace-nowrap hover:bg-gray-100 transition-colors"
+                        onClick={() => handleSort(col)}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          {children}
+                          <span className={`text-[10px] leading-none ${active ? "text-brand-600" : "text-gray-300"}`}>
+                            {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
+                          </span>
+                        </span>
+                      </th>
+                    );
+                  };
+                  return (
+                    <>
+                      <Th col="index">#</Th>
+                      <Th col="player">Player</Th>
+                      <Th col="yob">YOB</Th>
+                      <Th col="gender">Gender</Th>
+                      <Th col="age_group">Age Group</Th>
+                      <Th col="size">Size</Th>
+                      <th className="px-3 py-2 text-left font-semibold">Preferences</th>
+                      <Th col="assigned_number">Assigned #</Th>
+                      {showJerseyName && <th className="px-3 py-2 text-left font-semibold">Jersey Name</th>}
+                      <Th col="status">Status</Th>
+                      <Th col="paid_at">Paid At</Th>
+                      <th className="px-3 py-2"></th>
+                    </>
+                  );
+                })()}
               </tr>
             </thead>
             <tbody>
-              {filteredRequests.length === 0 && !addingRow && (
+              {displayRequests.length === 0 && !addingRow && (
                 <tr>
                   <td colSpan={showJerseyName ? 12 : 11} className="px-4 py-6 text-center text-sm text-gray-400">
                     No rows match the selected filter{statusFilters.size !== 1 ? "s" : ""}.
                   </td>
                 </tr>
               )}
-              {filteredRequests.map((r) => {
+              {displayRequests.map((r) => {
                 const idx = requests.indexOf(r);
                 return (
                 <tr key={r.id} className={`border-t border-gray-100 ${editingRowId === r.id ? "bg-amber-50" : "odd:bg-white even:bg-gray-50"}`}>
