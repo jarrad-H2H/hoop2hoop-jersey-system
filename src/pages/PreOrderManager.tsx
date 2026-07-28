@@ -1061,12 +1061,13 @@ const PreOrderManager: React.FC = () => {
       )}
 
       {!loadingRequests && (requests.length > 0 || addingRow) && (
-        <div className="overflow-x-auto bg-white rounded-xl shadow-sm border border-gray-200">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
           <div className="px-4 py-2 text-xs text-gray-500 border-b">
             {requests.length} request{requests.length !== 1 ? "s" : ""} · sorted by payment time (earliest = highest FCFS priority)
           </div>
+          <div className="overflow-auto max-h-[calc(100vh-300px)]">
           <table className="min-w-full text-xs">
-            <thead className="bg-gray-50">
+            <thead className="bg-gray-50 sticky top-0 z-10">
               <tr>
                 <th className="px-3 py-2 text-left font-semibold">#</th>
                 <th className="px-3 py-2 text-left font-semibold">Player</th>
@@ -1253,6 +1254,7 @@ const PreOrderManager: React.FC = () => {
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
       {editError && (
