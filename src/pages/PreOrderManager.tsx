@@ -1065,7 +1065,7 @@ const PreOrderManager: React.FC = () => {
           <div className="px-4 py-2 text-xs text-gray-500 border-b">
             {requests.length} request{requests.length !== 1 ? "s" : ""} · sorted by payment time (earliest = highest FCFS priority)
           </div>
-          <div className="overflow-auto max-h-[calc(100vh-300px)]">
+          <div className="overflow-x-auto">
           <table className="min-w-full text-xs">
             <thead className="bg-gray-50 sticky top-0 z-10">
               <tr>
