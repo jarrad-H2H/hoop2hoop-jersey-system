@@ -16,6 +16,7 @@ interface Row {
   jersey_number_display: string | null;
   jersey_name: string | null;
   status: string;
+  shopify_product_id: string | null;
 }
 
 function normalize(s: string): string {
@@ -66,6 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const clubId = String(body.clubId ?? "").trim();
   const season = String(body.season ?? "").trim();
   const productType = String(body.productType ?? "").trim();
+  const shopifyProductId = String(body.shopifyProductId ?? "").trim() || null;
   const firstName = String(body.firstName ?? "").trim();
   const lastName = String(body.lastName ?? "").trim();
   const yearOfBirth = Number(body.yearOfBirth);
@@ -78,7 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let query = supabase
     .from("preorder_requests")
-    .select("id, first_name, last_name, assigned_number, jersey_number_display, jersey_name, status, year_of_birth")
+    .select("id, first_name, last_name, assigned_number, jersey_number_display, jersey_name, status, year_of_birth, shopify_product_id")
     .eq("club_id", clubId)
     .in("status", ["needs_size", "allocated"])
     .not("assigned_number", "is", null);
@@ -100,7 +102,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const yobBonus = Number.isFinite(yearOfBirth) && yearOfBirth > 0
       ? (row.year_of_birth === yearOfBirth ? 30 : Math.abs((row.year_of_birth ?? 0) - yearOfBirth) <= 1 ? 10 : 0)
       : 0;
-    const total = lastScore * 1.5 + firstScore + yobBonus;
+    // Prefer the row already claimed by this product over rows claimed by another product.
+    // This ensures a player with two rows (e.g. bundle + singlet) gets the right one back
+    // when revisiting the widget, rather than always seeing the first-claimed row.
+    const productBonus = shopifyProductId && row.shopify_product_id === shopifyProductId ? 20 : 0;
+    const total = lastScore * 1.5 + firstScore + yobBonus + productBonus;
     return { row, total };
   });
 

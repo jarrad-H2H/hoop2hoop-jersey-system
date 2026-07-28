@@ -25,6 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const preorderRequestId = String(body.preorderRequestId ?? "").trim();
   const jerseyName = String(body.jerseyName ?? "").trim().toUpperCase();
   const size = String(body.size ?? "").trim();
+  const shopifyProductId = String(body.shopifyProductId ?? "").trim() || null;
 
   if (!preorderRequestId) {
     return res.status(400).json({ ok: false, error: "preorderRequestId is required" });
@@ -47,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Fetch the row to verify it exists and is in a confirmable state
   const { data: existing, error: fetchErr } = await supabase
     .from("preorder_requests")
-    .select("id, status, assigned_number")
+    .select("id, status, assigned_number, jersey_number_display, shopify_product_id, club_id, season, product_type, first_name, last_name, year_of_birth, gender, age_group")
     .eq("id", preorderRequestId)
     .maybeSingle();
 
@@ -64,14 +65,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(409).json({ ok: false, error: `Cannot confirm size for a record with status '${existing.status}'.` });
   }
 
-  const { error: updateErr } = await supabase
-    .from("preorder_requests")
-    .update({ jersey_name: jerseyName, size, status: "allocated" })
-    .eq("id", preorderRequestId);
+  // Detect second-product purchase: same player, different Shopify product.
+  // When a player already has a confirmed row for product A and now orders via
+  // product B (e.g. they bought the bundle and are now buying the standalone
+  // singlet), create a new preorder_requests row rather than overwriting theirs.
+  const isSecondProduct =
+    shopifyProductId !== null &&
+    existing.shopify_product_id !== null &&
+    existing.shopify_product_id !== shopifyProductId;
 
-  if (updateErr) {
-    return res.status(500).json({ ok: false, error: updateErr.message });
+  let confirmedId: string;
+
+  if (isSecondProduct) {
+    const { data: newRow, error: insertErr } = await supabase
+      .from("preorder_requests")
+      .insert({
+        club_id: existing.club_id,
+        season: existing.season,
+        product_type: existing.product_type ?? "default",
+        first_name: existing.first_name,
+        last_name: existing.last_name,
+        year_of_birth: existing.year_of_birth,
+        gender: existing.gender ?? null,
+        age_group: existing.age_group ?? null,
+        assigned_number: existing.assigned_number,
+        jersey_number_display: existing.jersey_number_display ?? null,
+        jersey_name: jerseyName,
+        size,
+        status: "allocated",
+        shopify_product_id: shopifyProductId,
+        any_number: false,
+      })
+      .select("id")
+      .single();
+
+    if (insertErr) {
+      return res.status(500).json({ ok: false, error: insertErr.message });
+    }
+    confirmedId = newRow.id;
+  } else {
+    // Update in place: first confirmation for this product, or re-confirming the same one.
+    const { error: updateErr } = await supabase
+      .from("preorder_requests")
+      .update({
+        jersey_name: jerseyName,
+        size,
+        status: "allocated",
+        shopify_product_id: shopifyProductId ?? existing.shopify_product_id,
+      })
+      .eq("id", preorderRequestId);
+
+    if (updateErr) {
+      return res.status(500).json({ ok: false, error: updateErr.message });
+    }
+    confirmedId = preorderRequestId;
   }
 
-  return res.status(200).json({ ok: true, assignedNumber: existing.assigned_number, jerseyName, size });
+  return res.status(200).json({ ok: true, assignedNumber: existing.assigned_number, jerseyName, size, preorderRequestId: confirmedId });
 }

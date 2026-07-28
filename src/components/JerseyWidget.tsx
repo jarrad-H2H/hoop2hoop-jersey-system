@@ -977,7 +977,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const res = await fetch("/api/preorder/lookup-preallocated", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clubId: selectedClubId, season: paSeasonParam || null, productType: selectedProductType || null, firstName: paFirstName.trim(), lastName: paLastName.trim(), yearOfBirth: yob }),
+        body: JSON.stringify({ clubId: selectedClubId, season: paSeasonParam || null, productType: selectedProductType || null, shopifyProductId: shopifyProductId || undefined, firstName: paFirstName.trim(), lastName: paLastName.trim(), yearOfBirth: yob }),
       });
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Lookup failed."); return; }
@@ -1046,7 +1046,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const res = await fetch("/api/preorder/confirm-size", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ preorderRequestId: paSelected.id, jerseyName: paJerseyName.trim().toUpperCase(), size }),
+        body: JSON.stringify({ preorderRequestId: paSelected.id, jerseyName: paJerseyName.trim().toUpperCase(), size, shopifyProductId: shopifyProductId || undefined }),
       });
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
@@ -1054,7 +1054,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       notifyShopify("h2h:preallocated:ready", {
         jerseyNumber: paSelected.assignedNumber,
         jerseyName: paJerseyName.trim().toUpperCase(),
-        preorderRequestId: paSelected.id,
+        preorderRequestId: json.preorderRequestId ?? paSelected.id,
       });
     } catch {
       setPaError("Could not reach the server. Please try again.");
