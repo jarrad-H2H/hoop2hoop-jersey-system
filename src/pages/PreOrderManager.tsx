@@ -713,8 +713,8 @@ const PreOrderManager: React.FC = () => {
       let av: any, bv: any;
       switch (sortColumn) {
         case "player":
-          av = `${a.first_name ?? ""} ${a.last_name ?? ""}`.trim().toLowerCase();
-          bv = `${b.first_name ?? ""} ${b.last_name ?? ""}`.trim().toLowerCase();
+          av = `${a.last_name ?? ""} ${a.first_name ?? ""}`.trim().toLowerCase();
+          bv = `${b.last_name ?? ""} ${b.first_name ?? ""}`.trim().toLowerCase();
           break;
         case "yob":      av = a.year_of_birth ?? 9999;          bv = b.year_of_birth ?? 9999;          break;
         case "gender":   av = a.gender ?? "";                   bv = b.gender ?? "";                   break;
