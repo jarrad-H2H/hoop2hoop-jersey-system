@@ -165,7 +165,7 @@ interface FinaliseRow {
   id: string;
   first_name: string;
   last_name: string;
-  year_of_birth: number;
+  year_of_birth: number | null;
   size: string | null;
   age_group: string | null;
   assigned_number: number;
@@ -216,13 +216,15 @@ export async function finalisePreorder(
       if (req.player_id) {
         await supabase.from("players").update({ final_shirt: req.assigned_number }).eq("id", req.player_id);
       } else {
-        const { data: existing } = await supabase
+        let lookupQuery = supabase
           .from("players").select("id")
           .eq("club_id", clubId)
           .ilike("first_name", req.first_name)
-          .ilike("last_name", req.last_name)
-          .eq("year_of_birth", req.year_of_birth)
-          .limit(1);
+          .ilike("last_name", req.last_name);
+        if (req.year_of_birth != null) {
+          lookupQuery = lookupQuery.eq("year_of_birth", req.year_of_birth);
+        }
+        const { data: existing } = await lookupQuery.limit(1);
         const player = (existing ?? [])[0] as { id: string } | undefined;
         if (player?.id) {
           await supabase.from("players").update({ final_shirt: req.assigned_number }).eq("id", player.id);
