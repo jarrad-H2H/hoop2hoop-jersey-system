@@ -186,7 +186,7 @@ const Allocation: React.FC = () => {
       const mapped = Array.from(
         new Set((data ?? []).map((r: any) => (r.product_type || "default").trim()))
       );
-      const options = Array.from(new Set(["default", ...mapped]));
+      const options = Array.from(new Set(["default", "mens", "womens", ...mapped]));
       setProductTypeOptions(options);
       setSelectedProductType((prev) => (options.includes(prev) ? prev : "default"));
     };
