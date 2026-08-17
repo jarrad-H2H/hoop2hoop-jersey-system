@@ -414,7 +414,7 @@ const Allocation: React.FC = () => {
     setAllocationMessage("");
 
     try {
-      const results = await suggestNumbersForClub(selectedClubId, selectedSize, 10, deriveTeamContext(), selectedProductType);
+      const results = await suggestNumbersForClub(selectedClubId, selectedSize, 99, deriveTeamContext(), selectedProductType);
       setSuggestions(results);
 
       if (results.length === 0) {
@@ -632,7 +632,7 @@ const Allocation: React.FC = () => {
     setSwapSuggestions([]);
 
     try {
-      const results = await suggestNumbersForClub(selectedClubId, swapSize, 10, deriveTeamContext(), selectedProductType);
+      const results = await suggestNumbersForClub(selectedClubId, swapSize, 99, deriveTeamContext(), selectedProductType);
       setSwapSuggestions(results);
       if (results.length === 0) {
         setAllocationMessage(`No clash-free numbers with stock in size ${swapSize} for this club.`);
