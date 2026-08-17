@@ -1212,22 +1212,24 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* Pre-allocated: window open — player confirms size + jersey name */}
         {preorderMode === "open" && allocationTypeState === "pre_allocated" && (
           (paSubmitted && paSelected) ? (
-            <div className="py-6 text-center">
-              <div className="text-3xl mb-2">✅</div>
-              <p className="font-semibold text-gray-900">All done!</p>
-              <p className="text-sm text-gray-600 mt-2">
-                Your jersey number is <span className="font-bold text-indigo-700">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span> and
-                will be printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.
+            <div className="py-4 text-center space-y-2">
+              <p className="text-base font-bold text-emerald-700">✓ Details confirmed!</p>
+              <p className="text-sm text-gray-700">
+                Jersey <span className="font-bold text-indigo-700">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span> printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.
               </p>
-              <p className="text-xs text-gray-500 mt-2">Please continue to checkout to complete your order.</p>
+              <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3 mt-2">
+                <p className="font-bold text-amber-900 text-sm">⚠️ Your order is NOT complete yet.</p>
+                <p className="text-amber-800 text-sm mt-1">Click <strong>Add to Cart</strong> and <strong>complete checkout</strong> to finalise your order.</p>
+              </div>
             </div>
           ) : (paSubmitted && paFallback) ? (
-            <div className="py-6 text-center">
-              <div className="text-3xl mb-2">✅</div>
-              <p className="font-semibold text-gray-900">Details saved — now add to cart!</p>
-              <p className="text-sm text-gray-600 mt-2">
-                Your club will confirm your jersey number before jerseys are printed. Click <strong>Add to cart</strong> below, then complete checkout.
-              </p>
+            <div className="py-4 text-center space-y-2">
+              <p className="text-base font-bold text-emerald-700">✓ Details saved!</p>
+              <p className="text-sm text-gray-600">Your club will confirm your jersey number before jerseys are printed.</p>
+              <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3 mt-2">
+                <p className="font-bold text-amber-900 text-sm">⚠️ Your order is NOT complete yet.</p>
+                <p className="text-amber-800 text-sm mt-1">Click <strong>Add to Cart</strong> and <strong>complete checkout</strong> to finalise your order.</p>
+              </div>
             </div>
           ) : (
             <>
@@ -1865,7 +1867,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         )}
 
         {/* Confirm & Reserve */}
-        {selectedNumber !== null && (
+        {selectedNumber !== null && !pendingAllocationId && (
           <button
             type="button"
             onClick={handleReserve}
@@ -1876,21 +1878,19 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </button>
         )}
 
-        {/* Status / countdown */}
-        {statusMessage && (
-          <div className="text-sm text-emerald-700 font-medium">{statusMessage}</div>
-        )}
-
-        {expiresAt !== null && remainingSeconds > 0 && (
-          <div className="text-xs text-gray-500">
-            Reservation expires in {Math.floor(remainingSeconds / 60)}:
-            {String(remainingSeconds % 60).padStart(2, "0")}
-          </div>
-        )}
-
+        {/* Post-reservation: prominent checkout prompt */}
         {pendingAllocationId && (
-          <div className="text-[11px] mt-1 text-amber-900/80">
-            Reservation ID saved for checkout.
+          <div className="mt-2 rounded-lg border-2 border-amber-400 bg-amber-50 p-4 text-center space-y-1">
+            <p className="text-base font-bold text-emerald-700">✓ Jersey #{selectedNumber} reserved!</p>
+            <p className="font-bold text-amber-900 text-sm">⚠️ Your order is NOT complete yet.</p>
+            <p className="text-amber-800 text-sm">
+              You must click <strong>Add to Cart</strong> and <strong>complete checkout</strong> to secure your number.
+            </p>
+            {expiresAt !== null && remainingSeconds > 0 && (
+              <p className="text-sm font-bold text-amber-900">
+                ⏱ Reservation expires in {Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, "0")}
+              </p>
+            )}
           </div>
         )}
 
