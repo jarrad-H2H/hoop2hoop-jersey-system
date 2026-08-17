@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../services/supabase";
 import * as XLSX from "xlsx";
-import { Shirt, Upload } from "lucide-react";
+import { Shirt, Upload, Trash2 } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
 
@@ -635,6 +635,56 @@ const BulkStockUpload: React.FC = () => {
     }
   };
 
+  const deleteSize = async (row: ClubSizeRow) => {
+    const stock = stockMap.get(row.size_label);
+    const allocated = stock?.allocated ?? 0;
+    const available = stock?.available ?? 0;
+
+    if (allocated > 0) {
+      setError(
+        `Cannot delete "${row.size_label}" — ${allocated} jersey(s) are already allocated. Release those allocations first.`
+      );
+      return;
+    }
+
+    const confirmMsg =
+      available > 0
+        ? `Delete size "${row.size_label}" and remove its ${available} available stock item(s)? This cannot be undone.`
+        : `Delete size "${row.size_label}"? This cannot be undone.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setSubmitting(true);
+    setError(null);
+    setSuccessMessage("");
+    try {
+      if (available > 0) {
+        const { error: invErr } = await supabase
+          .from("inventory")
+          .delete()
+          .eq("club_id", selectedClubId)
+          .eq("size", row.size_label)
+          .eq("product_type", selectedProductType)
+          .eq("status", "Available");
+        if (invErr) throw invErr;
+      }
+
+      const { error: sizeErr } = await supabase
+        .from("club_sizes")
+        .delete()
+        .eq("id", row.id);
+      if (sizeErr) throw sizeErr;
+
+      setSizeRows((prev) => prev.filter((r) => r.id !== row.id));
+      setSuccessMessage(`Deleted size "${row.size_label}".`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to delete size.";
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   // ----------------------------
   // Re-order sizes (sort_order)
   // ----------------------------
@@ -1109,14 +1159,25 @@ const BulkStockUpload: React.FC = () => {
                     {/* Manage buttons */}
                     <td className="px-3 py-2 align-top">
                       {!row.isEditing ? (
-                        <button
-                          type="button"
-                          onClick={() => startEditSize(row.id)}
-                          className="text-xs px-3 py-1 border rounded hover:bg-gray-50"
-                          disabled={submitting}
-                        >
-                          Rename
-                        </button>
+                        <div className="flex gap-2 items-center">
+                          <button
+                            type="button"
+                            onClick={() => startEditSize(row.id)}
+                            className="text-xs px-3 py-1 border rounded hover:bg-gray-50"
+                            disabled={submitting}
+                          >
+                            Rename
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteSize(row)}
+                            className="text-xs px-2 py-1 border border-red-200 rounded text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            disabled={submitting}
+                            title="Delete this size"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
                       ) : (
                         <div className="flex gap-2">
                           <button
