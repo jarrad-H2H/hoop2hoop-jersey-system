@@ -675,6 +675,7 @@
     window.addEventListener("message", function (event) {
       try {
         if (!event || !event.data) return;
+        if (event.origin !== baseUrl) return;
         var data = event.data;
 
         if (data.type === "h2h:reservation:ready") {
