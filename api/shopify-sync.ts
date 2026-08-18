@@ -2,116 +2,158 @@
 // Syncs available jersey inventory counts from Supabase → Shopify variant stock levels.
 // POST /api/shopify-sync  { clubId: string }
 // A club may have multiple Shopify products (e.g. mens + womens). All are synced in one call.
+// Uses GraphQL Admin API (inventorySetOnHandQuantities mutation).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
-const SHOPIFY_API_VERSION = "2024-01";
+const SHOPIFY_API_VERSION = "2025-07";
 
-function shopifyFetch(
-  path: string,
-  options: RequestInit = {}
+function shopifyGraphQL(
+  query: string,
+  variables: Record<string, unknown> = {}
 ): Promise<Response> {
   const domain = process.env.SHOPIFY_STORE_DOMAIN ?? "";
   const token = process.env.SHOPIFY_ADMIN_TOKEN ?? "";
 
   return fetch(
-    `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/${path}`,
+    `https://${domain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     {
-      ...options,
+      method: "POST",
       headers: {
         "X-Shopify-Access-Token": token,
         "Content-Type": "application/json",
-        ...(options.headers ?? {}),
       },
+      body: JSON.stringify({ query, variables }),
     }
   );
+}
+
+interface VariantNode {
+  id: string;
+  title: string;
+  inventoryItem: { id: string };
+}
+
+interface LocationNode {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
+async function getActiveLocation(): Promise<{ id: string; name: string } | null> {
+  const res = await shopifyGraphQL(`
+    query {
+      locations(first: 10) {
+        nodes { id name isActive }
+      }
+    }
+  `);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { data?: { locations?: { nodes: LocationNode[] } } };
+  const nodes = body.data?.locations?.nodes ?? [];
+  const active = nodes.find((l) => l.isActive) ?? nodes[0] ?? null;
+  return active ? { id: active.id, name: active.name } : null;
+}
+
+async function getProductVariants(productGid: string): Promise<VariantNode[]> {
+  const res = await shopifyGraphQL(
+    `query getVariants($id: ID!) {
+      product(id: $id) {
+        variants(first: 250) {
+          nodes {
+            id
+            title
+            inventoryItem { id }
+          }
+        }
+      }
+    }`,
+    { id: productGid }
+  );
+  if (!res.ok) return [];
+  const body = (await res.json()) as {
+    data?: { product?: { variants?: { nodes: VariantNode[] } } };
+  };
+  return body.data?.product?.variants?.nodes ?? [];
 }
 
 async function syncProduct(
   productId: string,
   gender: string,
   countsBySize: Record<string, number>,
-  locationId: number
+  locationId: string,
+  locationName: string
 ): Promise<{
   productId: string;
   gender: string;
   success: boolean;
-  results: {
-    variantTitle: string;
-    inventoryItemId: number;
-    available: number;
-    matched: boolean;
-    ok: boolean;
-    status?: number;
-  }[];
-  warnings: {
-    unmatchedVariants?: string[];
-    unmatchedSizes?: string[];
-  };
+  results: { variantTitle: string; available: number; matched: boolean; ok: boolean }[];
+  warnings: { unmatchedVariants?: string[]; unmatchedSizes?: string[] };
 }> {
-  // Fetch Shopify variants for this product
-  const variantsRes = await shopifyFetch(
-    `products/${productId}/variants.json?limit=250`
-  );
-  if (!variantsRes.ok) {
-    const text = await variantsRes.text();
-    console.error("shopify-sync: variants fetch error", productId, variantsRes.status, text);
-    return {
-      productId,
-      gender,
-      success: false,
-      results: [],
-      warnings: {},
-    };
+  const productGid = `gid://shopify/Product/${productId}`;
+  const variants = await getProductVariants(productGid);
+
+  if (variants.length === 0) {
+    console.error("shopify-sync: no variants returned for product", productId);
+    return { productId, gender, success: false, results: [], warnings: {} };
   }
-  const { variants } = (await variantsRes.json()) as {
-    variants: { id: number; title: string; inventory_item_id: number }[];
-  };
 
-  const results: {
-    variantTitle: string;
-    inventoryItemId: number;
-    available: number;
-    matched: boolean;
-    ok: boolean;
-    status?: number;
-  }[] = [];
+  // Build the setQuantities payload: one entry per variant
+  const setQuantities = variants.map((v) => ({
+    inventoryItemId: v.inventoryItem.id,
+    locationId,
+    quantity: countsBySize[v.title.trim()] ?? 0,
+  }));
 
-  for (const variant of variants) {
-    const sizeLabel = variant.title.trim();
-    const matched = sizeLabel in countsBySize;
-    const available = countsBySize[sizeLabel] ?? 0;
-
-    const setRes = await shopifyFetch("inventory_levels/set.json", {
-      method: "POST",
-      body: JSON.stringify({
-        location_id: locationId,
-        inventory_item_id: variant.inventory_item_id,
-        available,
-      }),
-    });
-
-    results.push({
-      variantTitle: sizeLabel,
-      inventoryItemId: variant.inventory_item_id,
-      available,
-      matched,
-      ok: setRes.ok,
-      status: setRes.status,
-    });
-
-    if (!setRes.ok) {
-      const text = await setRes.text();
-      console.error(
-        `shopify-sync: set inventory failed for product ${productId} variant "${sizeLabel}"`,
-        setRes.status,
-        text
-      );
+  const mutationRes = await shopifyGraphQL(
+    `mutation setInventory($input: InventorySetOnHandQuantitiesInput!) {
+      inventorySetOnHandQuantities(input: $input) {
+        inventoryAdjustmentGroup { id }
+        userErrors { field message }
+      }
+    }`,
+    {
+      input: {
+        reason: "correction",
+        setQuantities,
+      },
     }
+  );
+
+  const mutationOk = mutationRes.ok;
+  let userErrors: { field: string[]; message: string }[] = [];
+
+  if (mutationOk) {
+    const mutBody = (await mutationRes.json()) as {
+      data?: {
+        inventorySetOnHandQuantities?: {
+          userErrors?: { field: string[]; message: string }[];
+        };
+      };
+      errors?: unknown;
+    };
+    userErrors = mutBody.data?.inventorySetOnHandQuantities?.userErrors ?? [];
+    if (!mutationOk || userErrors.length > 0) {
+      console.error("shopify-sync: mutation userErrors", JSON.stringify(userErrors));
+    }
+  } else {
+    const text = await mutationRes.text();
+    console.error("shopify-sync: mutation HTTP error", mutationRes.status, text);
   }
 
-  const allOk = results.every((r) => r.ok);
+  const overallOk = mutationOk && userErrors.length === 0;
+
+  const results = variants.map((v) => {
+    const sizeLabel = v.title.trim();
+    return {
+      variantTitle: sizeLabel,
+      available: countsBySize[sizeLabel] ?? 0,
+      matched: sizeLabel in countsBySize,
+      ok: overallOk,
+    };
+  });
+
   const unmatchedVariants = results.filter((r) => !r.matched).map((r) => r.variantTitle);
   const unmatchedSizes = Object.keys(countsBySize).filter(
     (s) => !variants.some((v) => v.title.trim() === s)
@@ -120,7 +162,7 @@ async function syncProduct(
   return {
     productId,
     gender,
-    success: allOk,
+    success: overallOk,
     results,
     warnings: {
       unmatchedVariants: unmatchedVariants.length > 0 ? unmatchedVariants : undefined,
@@ -150,7 +192,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // 1. Look up ALL Shopify products mapped to this club (may be multiple — e.g. mens + womens)
+  // 1. Look up ALL Shopify products mapped to this club
   const { data: mappings, error: mapErr } = await supabase
     .from("shopify_product_club_map")
     .select("shopify_product_id, gender, product_type")
@@ -164,10 +206,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(404).json({ error: "No Shopify products mapped for this club" });
   }
 
-  // 2. Count available jerseys per size, PER product_type. A club can have multiple
-  // Shopify products (mens + womens) each with their own separate stock pool -- these
-  // must never be combined, or syncing would push the combined mens+womens count to
-  // BOTH products' Shopify variants.
+  // 2. Count available jerseys per size, per product_type
   const { data: inventory, error: invErr } = await supabase
     .from("inventory")
     .select("size, product_type")
@@ -181,40 +220,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const countsByProductTypeAndSize: Record<string, Record<string, number>> = {};
   for (const row of inventory ?? []) {
-    const size = String((row as any).size ?? "").trim();
-    const productType = String((row as any).product_type ?? "default").trim() || "default";
+    const size = String((row as { size: string }).size ?? "").trim();
+    const productType =
+      String((row as { product_type: string | null }).product_type ?? "default").trim() ||
+      "default";
     if (!size) continue;
     countsByProductTypeAndSize[productType] ??= {};
     countsByProductTypeAndSize[productType][size] =
       (countsByProductTypeAndSize[productType][size] ?? 0) + 1;
   }
 
-  // 3. Fetch Shopify locations (use first active location)
-  const locationsRes = await shopifyFetch("locations.json");
-  if (!locationsRes.ok) {
-    const text = await locationsRes.text();
-    console.error("shopify-sync: locations fetch error", locationsRes.status, text);
-    return res.status(502).json({ error: `Shopify locations fetch failed: ${locationsRes.status}` });
-  }
-  const { locations } = (await locationsRes.json()) as {
-    locations: { id: number; name: string; active: boolean }[];
-  };
-
-  const activeLocation = locations.find((l) => l.active) ?? locations[0];
-  if (!activeLocation) {
-    return res.status(502).json({ error: "No Shopify location found" });
+  // 3. Get active Shopify location (GraphQL)
+  const location = await getActiveLocation();
+  if (!location) {
+    return res.status(502).json({ error: "No active Shopify location found" });
   }
 
-  // 4. Sync each product against its OWN product_type's counts only
+  // 4. Sync each product against its own product_type counts
   const productResults = await Promise.all(
-    (mappings as { shopify_product_id: string; gender: string; product_type: string }[]).map(
-      (m) =>
-        syncProduct(
-          m.shopify_product_id,
-          m.gender,
-          countsByProductTypeAndSize[m.product_type || "default"] ?? {},
-          activeLocation.id
-        )
+    (
+      mappings as {
+        shopify_product_id: string;
+        gender: string;
+        product_type: string;
+      }[]
+    ).map((m) =>
+      syncProduct(
+        m.shopify_product_id,
+        m.gender,
+        countsByProductTypeAndSize[m.product_type || "default"] ?? {},
+        location.id,
+        location.name
+      )
     )
   );
 
@@ -222,7 +259,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   return res.status(200).json({
     success: allOk,
-    location: activeLocation.name,
+    location: location.name,
     products: productResults,
   });
 }
