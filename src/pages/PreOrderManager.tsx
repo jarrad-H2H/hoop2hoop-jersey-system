@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, fetchAllPages } from "../services/supabase";
 import { runFcfsAllocation, validateImportRow, finalisePreorder, getLockedShopifyUpdates, importPreallocatedRoster, type PreorderRequest, type PreallocatedImportRow } from "../services/preorder";
-import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw, Trash2, Pencil, Plus, Check, X } from "lucide-react";
+import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw, Trash2, Pencil, Plus, Check, X, GitMerge } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
 
@@ -104,6 +104,12 @@ const PreOrderManager: React.FC = () => {
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
   const [sortColumn, setSortColumn] = useState<SortColumn>("index");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  // Merge unmatched → needs_size
+  const [mergingRequest, setMergingRequest] = useState<PreorderRequest | null>(null);
+  const [mergeTarget, setMergeTarget] = useState<PreorderRequest | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
 
   const selectedClub = clubs.find(c => c.id === selectedClubId) ?? null;
 
@@ -361,6 +367,54 @@ const PreOrderManager: React.FC = () => {
       setActionMsg({ type: "ok", text: `Deleted entry for ${playerName}.` });
     }
     setActionLoading(false);
+  };
+
+  // ── Merge unmatched order into a needs_size player record ──────────────────
+  const mergeIntoPlayer = async () => {
+    if (!mergingRequest || !mergeTarget) return;
+    setMergeBusy(true);
+    setMergeError(null);
+    try {
+      const patch: Record<string, any> = {
+        size: mergingRequest.size,
+        pref_1: mergingRequest.pref_1,
+        pref_2: mergingRequest.pref_2,
+        pref_3: mergingRequest.pref_3,
+        any_number: mergingRequest.any_number,
+        claimed_current: mergingRequest.claimed_current,
+        shopify_order_id: mergingRequest.shopify_order_id,
+        order_number: mergingRequest.order_number,
+        paid_at: mergingRequest.paid_at,
+        status: "pending",
+      };
+      if (!mergeTarget.year_of_birth && mergingRequest.year_of_birth) {
+        patch.year_of_birth = mergingRequest.year_of_birth;
+      }
+      if (!mergeTarget.gender && mergingRequest.gender) {
+        patch.gender = mergingRequest.gender;
+      }
+
+      const { error: patchErr } = await supabase
+        .from("preorder_requests")
+        .update(patch)
+        .eq("id", mergeTarget.id);
+      if (patchErr) throw patchErr;
+
+      const { error: delErr } = await supabase
+        .from("preorder_requests")
+        .delete()
+        .eq("id", mergingRequest.id);
+      if (delErr) throw delErr;
+
+      setMergingRequest(null);
+      setMergeTarget(null);
+      await loadRequests();
+      setActionMsg({ type: "ok", text: `Merged order into ${mergeTarget.first_name} ${mergeTarget.last_name}'s record.` });
+    } catch (e: unknown) {
+      setMergeError(e instanceof Error ? e.message : "Merge failed.");
+    } finally {
+      setMergeBusy(false);
+    }
   };
 
   // ── Excel export ────────────────────────────────────────────────────────────
@@ -1304,6 +1358,11 @@ const PreOrderManager: React.FC = () => {
                       </div>
                     ) : (
                       <div className="flex items-center gap-1">
+                        {r.status === "unmatched" && (
+                          <button type="button" onClick={() => { setMergingRequest(r); setMergeTarget(null); setMergeError(null); }} disabled={actionLoading || !!editingRowId} className="text-purple-400 hover:text-purple-700 disabled:opacity-40" title="Link this order to a player">
+                            <GitMerge size={13} />
+                          </button>
+                        )}
                         <button type="button" onClick={() => handleStartEdit(r)} disabled={!!editingRowId || actionLoading} className="text-blue-400 hover:text-blue-700 disabled:opacity-40" title="Edit this entry">
                           <Pencil size={13} />
                         </button>
@@ -1382,6 +1441,93 @@ const PreOrderManager: React.FC = () => {
       )}
       {newRowError && (
         <div className="mt-2 p-2 rounded text-xs bg-red-50 text-red-800 border border-red-200">{newRowError}</div>
+      )}
+
+      {/* ── Merge modal ─────────────────────────────────────────────────────── */}
+      {mergingRequest && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center pt-16 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <div className="flex items-center gap-2 font-semibold text-gray-900">
+                <GitMerge size={16} className="text-purple-600" />
+                Link unmatched order to a player
+              </div>
+              <button type="button" onClick={() => { setMergingRequest(null); setMergeTarget(null); }} className="text-gray-400 hover:text-gray-700"><X size={16} /></button>
+            </div>
+
+            {/* Unmatched entry summary */}
+            <div className="px-5 py-3 bg-purple-50 border-b text-sm">
+              <p className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-1">Unmatched order</p>
+              <p className="font-medium text-gray-900">{mergingRequest.first_name} {mergingRequest.last_name}{mergingRequest.year_of_birth ? ` (${mergingRequest.year_of_birth})` : ""}</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-gray-600">
+                {mergingRequest.size && <span>Size: <strong>{mergingRequest.size}</strong></span>}
+                {(mergingRequest.pref_1 ?? mergingRequest.pref_2 ?? mergingRequest.pref_3) && (
+                  <span>Prefs: <strong>{[mergingRequest.pref_1, mergingRequest.pref_2, mergingRequest.pref_3].filter(Boolean).map(n => `#${n}`).join(", ")}</strong></span>
+                )}
+                {mergingRequest.any_number && <span>Any number ✓</span>}
+                {mergingRequest.order_number && <span>Order: <strong>{mergingRequest.order_number}</strong></span>}
+                {mergingRequest.paid_at && <span>Paid: <strong>{new Date(mergingRequest.paid_at).toLocaleDateString()}</strong></span>}
+              </div>
+            </div>
+
+            <div className="px-5 py-4">
+              {!mergeTarget ? (
+                <>
+                  <p className="text-sm text-gray-700 mb-3">Select the player this order belongs to:</p>
+                  {requests.filter(r => r.status === "needs_size").length === 0 ? (
+                    <p className="text-sm text-gray-500 italic">No players awaiting size for this club.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {requests.filter(r => r.status === "needs_size").map(r => (
+                        <div key={r.id} className="flex items-center justify-between border rounded-lg px-3 py-2 hover:bg-gray-50">
+                          <div>
+                            <span className="font-medium text-gray-900 text-sm">{r.first_name} {r.last_name}</span>
+                            {r.year_of_birth && <span className="text-xs text-gray-500 ml-2">({r.year_of_birth})</span>}
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {[r.age_group, r.gender].filter(Boolean).join(" · ")}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setMergeTarget(r)}
+                            className="text-xs px-3 py-1.5 bg-purple-600 text-white rounded hover:bg-purple-700 font-medium"
+                          >
+                            Link to this player
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-gray-900 mb-3">Confirm merge:</p>
+                  <div className="rounded-lg bg-gray-50 border px-4 py-3 text-sm space-y-1">
+                    <p><span className="text-gray-500">Player record updated:</span> <strong>{mergeTarget.first_name} {mergeTarget.last_name}</strong></p>
+                    {mergingRequest.size && <p><span className="text-gray-500">Size set to:</span> <strong>{mergingRequest.size}</strong></p>}
+                    {(mergingRequest.pref_1 ?? mergingRequest.pref_2 ?? mergingRequest.pref_3) && (
+                      <p><span className="text-gray-500">Preferences:</span> <strong>{[mergingRequest.pref_1, mergingRequest.pref_2, mergingRequest.pref_3].filter(Boolean).map(n => `#${n}`).join(", ")}</strong></p>
+                    )}
+                    {mergingRequest.order_number && <p><span className="text-gray-500">Order number:</span> <strong>{mergingRequest.order_number}</strong></p>}
+                    <p className="text-gray-500 pt-1 text-xs">The unmatched entry for <strong>{mergingRequest.first_name} {mergingRequest.last_name}</strong> will be deleted.</p>
+                  </div>
+                  {mergeError && <p className="mt-2 text-xs text-red-700">{mergeError}</p>}
+                  <div className="flex gap-2 mt-4">
+                    <button type="button" onClick={mergeIntoPlayer} disabled={mergeBusy} className="px-4 py-2 bg-purple-600 text-white text-sm rounded font-medium hover:bg-purple-700 disabled:opacity-50">
+                      {mergeBusy ? "Merging…" : "Confirm merge"}
+                    </button>
+                    <button type="button" onClick={() => setMergeTarget(null)} disabled={mergeBusy} className="px-4 py-2 border text-sm rounded hover:bg-gray-50 disabled:opacity-50">
+                      Back
+                    </button>
+                    <button type="button" onClick={() => { setMergingRequest(null); setMergeTarget(null); }} disabled={mergeBusy} className="px-4 py-2 border text-sm rounded hover:bg-gray-50 disabled:opacity-50 text-gray-500">
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
