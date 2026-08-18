@@ -17,7 +17,6 @@ interface InventoryRow {
   size: string;
   jersey_number: number;
   status: string;
-  player_id: string | null;
   product_type: string | null;
 }
 
@@ -109,7 +108,7 @@ const InventoryManager: React.FC = () => {
 
       const { data, error: fetchError } = await supabase
         .from("inventory")
-        .select("id, size, jersey_number, status, player_id, product_type")
+        .select("id, size, jersey_number, status, product_type")
         .eq("club_id", selectedClubId)
         .eq("product_type", selectedProductType)
         .neq("status", "Written Off")
@@ -275,7 +274,7 @@ const InventoryManager: React.FC = () => {
       const { data: inserted, error: insertErr } = await supabase
         .from("inventory")
         .insert(rows)
-        .select("id, size, jersey_number, status, player_id, product_type");
+        .select("id, size, jersey_number, status, product_type");
 
       if (insertErr) {
         setError("Failed to add jerseys: " + insertErr.message);
