@@ -32,7 +32,7 @@ function shopifyGraphQL(
 interface VariantNode {
   id: string;
   title: string;
-  inventoryItem: { id: string };
+  inventoryItem: { id: string; tracked: boolean };
 }
 
 interface LocationNode {
@@ -64,7 +64,7 @@ async function getProductVariants(productGid: string): Promise<VariantNode[]> {
           nodes {
             id
             title
-            inventoryItem { id }
+            inventoryItem { id tracked }
           }
         }
       }
@@ -76,6 +76,29 @@ async function getProductVariants(productGid: string): Promise<VariantNode[]> {
     data?: { product?: { variants?: { nodes: VariantNode[] } } };
   };
   return body.data?.product?.variants?.nodes ?? [];
+}
+
+async function enableTrackingForVariants(variants: VariantNode[]): Promise<number> {
+  const untracked = variants.filter((v) => !v.inventoryItem.tracked);
+  if (untracked.length === 0) return 0;
+
+  // Batch all updates into one GraphQL mutation using aliases
+  const aliases = untracked
+    .map(
+      (v, i) =>
+        `v${i}: inventoryItemUpdate(id: "${v.inventoryItem.id}", input: {tracked: true}) { userErrors { field message } }`
+    )
+    .join("\n");
+
+  const res = await shopifyGraphQL(`mutation { ${aliases} }`);
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("shopify-sync: enableTracking HTTP error", res.status, text);
+    return 0;
+  }
+
+  console.log(`shopify-sync: enabled inventory tracking on ${untracked.length} variant(s)`);
+  return untracked.length;
 }
 
 async function syncProduct(
@@ -98,6 +121,9 @@ async function syncProduct(
     console.error("shopify-sync: no variants returned for product", productId);
     return { productId, gender, success: false, results: [], warnings: {} };
   }
+
+  // Auto-enable inventory tracking on any variants that don't have it
+  await enableTrackingForVariants(variants);
 
   // Build the setQuantities payload: one entry per variant
   const setQuantities = variants.map((v) => ({
