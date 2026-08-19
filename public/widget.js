@@ -443,6 +443,13 @@
     var scope = findProductScope(host);
     snapshotOriginalAtcLabel(scope);
 
+    // Lock the ATC button immediately — before the iframe even loads.
+    // If h2h:clubConfirmed never fires (non-H2H product), unlock after 6 seconds.
+    lockAtcButton(scope);
+    setTimeout(function () {
+      if (!h2hClubConfirmed) unlockAtcButton(scope);
+    }, 6000);
+
     // Tracks the last confirmed reservation so it can be re-applied if Dawn's
     // Section Rendering API recreates the product form (destroying our injected inputs).
     var lastReservation = null;
