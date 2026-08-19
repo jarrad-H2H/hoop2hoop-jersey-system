@@ -31,6 +31,7 @@
   var h2hSharedProps = null;
   var h2hSharedPropsInjected = false; // inject-once guard: only the bundle parent gets properties
   var h2hBundlePage = false; // true when widget is on a Simple Bundles product page
+  var h2hClubConfirmed = false; // true when widget has confirmed a valid H2H club mapping
 
   // Patch window.fetch immediately — before any Shopify app script loads.
   // Injects H2H line-item properties into the first /cart/add POST that fires
@@ -663,7 +664,7 @@
           // Re-attach click handler if ATC button was recreated by Section Rendering
           setupAtcClickHandler();
           // Re-apply lock if the new button appeared before the customer confirmed
-          if (!h2hSharedProps && h2hBundlePage) lockAtcButton(scope);
+          if (!h2hSharedProps && (h2hBundlePage || h2hClubConfirmed)) lockAtcButton(scope);
         }, 0);
       });
       mo.observe(scope, { subtree: true, attributes: true, childList: true });
@@ -719,7 +720,7 @@
           setHiddenInputValue("h2h_pending_allocation_id", "");
           setHiddenInputValue("h2h_reserved_at", "");
 
-          if (h2hBundlePage) { lockAtcButton(scope); } else { restoreAtcLabel(scope); }
+          if (h2hBundlePage || h2hClubConfirmed) { lockAtcButton(scope); } else { restoreAtcLabel(scope); }
         }
 
         // Pre-order: customer submitted preferences — store in lastPreorder so the
@@ -845,6 +846,8 @@
         if (data.type === "h2h:clubConfirmed") {
           iframe.style.opacity = "1";
           host.style.marginTop = "1rem";
+          h2hClubConfirmed = true;
+          lockAtcButton(scope);
         }
 
         if (data.type === "h2h:resize" && typeof data.height === "number") {
@@ -862,6 +865,14 @@
         var t = e && e.target;
         if (!t || !t.action) return;
         if (String(t.action).indexOf("/cart/add") === -1) return;
+        // Hard block: if this is an H2H club product and no reservation/preorder has
+        // been confirmed, prevent the form from submitting regardless of button state.
+        if (h2hClubConfirmed && !lastReservation && !lastPreorder && !lastPreallocated && !lastUnmatched) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          lockAtcButton(scope);
+          return;
+        }
         ensureInputsInCurrentForm();
         if (lastReservation) {
           setHiddenInputValue("h2h_jersey_number", String(lastReservation.jerseyNumber));
