@@ -247,8 +247,9 @@
   function findAtcButton(scope) {
     return (
       $('button[data-h2h-atc="true"]', scope) ||
-      $('button[name="add"][type="submit"]', scope) ||
-      $('form[action^="/cart/add"] button[type="submit"]', scope)
+      $('button[name="add"]', scope) ||
+      $('form[action^="/cart/add"] button[type="submit"]', scope) ||
+      $('form[action^="/cart/add"] button[type="button"]', scope)
     );
   }
 
