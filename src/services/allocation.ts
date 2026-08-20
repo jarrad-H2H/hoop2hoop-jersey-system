@@ -554,19 +554,30 @@ export async function suggestNumbersForClub(
     .map(([jersey_number, total_stock]) => ({ jersey_number, total_stock }))
     .sort((a, b) => a.jersey_number - b.jersey_number);
 
-  const results: NumberSuggestion[] = [];
+  const primaryPool: NumberSuggestion[] = [];   // no same-team clash, no adjacent-age warning
+  const secondaryPool: NumberSuggestion[] = [];  // no same-team clash, but adjacent-age player exists
 
   for (const candidate of candidates) {
-    const { clashes } = await smartCheckNumber(
+    const { clashes, softWarnings } = await smartCheckNumber(
       clubId,
       candidate.jersey_number,
       { ...(teamContext ?? {}), productType }
     );
-    if (clashes.length === 0) results.push(candidate);
-    if (results.length >= limit) break;
+    if (clashes.length > 0) continue;
+    if (softWarnings.length === 0) {
+      primaryPool.push(candidate);
+    } else {
+      secondaryPool.push(candidate);
+    }
   }
 
-  return results;
+  // Primary-only when 3+ clean numbers exist; otherwise append top 3 from secondary.
+  const combined =
+    primaryPool.length >= 3
+      ? primaryPool
+      : [...primaryPool, ...secondaryPool.slice(0, 3)];
+
+  return combined.slice(0, limit);
 }
 
 /**
@@ -813,25 +824,40 @@ export async function suggestNumbersForClubRanked(input: {
 
   // adjCounts is already populated for the widget path above
 
-  const scored: NumberSuggestion[] = [];
+  const primaryPool: NumberSuggestion[] = [];   // no same-team clash, no adjacent-age warning
+  const secondaryPool: NumberSuggestion[] = [];  // no same-team clash, but adjacent-age player exists
+
   for (const n of candidateNums) {
     if (blockedNums.has(n)) continue;
 
     const stockDepth = stockCounts.get(n) ?? 0;
     const adjUse = adjCounts.get(n) ?? 0;
     const score = adjUse * 100 - stockDepth * 2;
+    const suggestion = { jersey_number: n, total_stock: stockDepth, score };
 
-    scored.push({ jersey_number: n, total_stock: stockDepth, score });
+    if (adjUse === 0) {
+      primaryPool.push(suggestion);
+    } else {
+      secondaryPool.push(suggestion);
+    }
   }
 
-  scored.sort((a, b) => {
+  const sortFn = (a: NumberSuggestion, b: NumberSuggestion) => {
     const as = a.score ?? 0;
     const bs = b.score ?? 0;
     if (as !== bs) return as - bs;
     return a.jersey_number - b.jersey_number;
-  });
+  };
+  primaryPool.sort(sortFn);
+  secondaryPool.sort(sortFn);
 
-  return scored.slice(0, limit);
+  // Primary-only when 3+ clean numbers exist; otherwise append top 3 from secondary.
+  const combined =
+    primaryPool.length >= 3
+      ? primaryPool
+      : [...primaryPool, ...secondaryPool.slice(0, 3)];
+
+  return combined.slice(0, limit);
 }
 
 /**
