@@ -1766,11 +1766,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             the player's jersey number on file is stale from a previous season */}
         {showSingleMatchWarning && (
           <div ref={singleMatchWarningRef} className="bg-orange-50 border border-orange-300 rounded p-3">
-            <div className="text-sm font-semibold text-orange-900 mb-1">
-              This is the only <span className="font-bold">{matchedPlayerDisplayName}</span> we have on record at this club.
-            </div>
-            <div className="text-xs text-orange-800 mb-3">
-              Your jersey number on file may be from a previous season — could this still be you?
+            <div className="text-sm font-semibold text-orange-900 mb-3">
+              This is the only <span className="font-bold">{matchedPlayerDisplayName}</span> we have on record at this club — if your jersey number looks out of date, you can still continue as this player.
             </div>
             <div className="flex gap-2">
               <button
