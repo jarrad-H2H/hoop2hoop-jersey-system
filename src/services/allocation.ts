@@ -1055,41 +1055,54 @@ export async function lookupPlayerByName(params: {
   const firstTrimmed = firstName.trim();
   const lastTrimmed = lastName.trim();
 
-  const cohortFilter = ageGroup
-    ? `year_of_birth.eq.${yearOfBirth},age_group.eq.${ageGroup}`
-    : `year_of_birth.eq.${yearOfBirth}`;
-
-  const { data: exact } = await supabase
+  // Search by name first — no cohort filter on the primary query. BC-imported players
+  // have null year_of_birth and an age_group that reflects their last import season,
+  // which may differ from the age group derived from the buyer's entered YOB. Filtering
+  // by cohort in the query causes false negatives for players who've aged up since import.
+  // Cohort data is used only to disambiguate when multiple players share the same name.
+  const { data: exactByName } = await supabase
     .from("players")
-    .select("id, first_name, last_name, final_shirt, year_of_birth, division_code, team_name")
+    .select("id, first_name, last_name, final_shirt, year_of_birth, age_group, division_code, team_name")
     .eq("club_id", clubId)
     .ilike("first_name", firstTrimmed)
     .ilike("last_name", lastTrimmed)
     .is("deleted_at", null)
-    .or(cohortFilter)
-    .limit(1);
+    .limit(10);
 
-  let player = (exact ?? [])[0] as any;
+  let player: any = null;
+  const exactMatches = (exactByName ?? []) as any[];
+
+  if (exactMatches.length === 1) {
+    player = exactMatches[0];
+  } else if (exactMatches.length > 1) {
+    // Disambiguate: prefer cohort match (exact YOB, then age_group), else take first
+    player =
+      exactMatches.find((p) => p.year_of_birth != null && p.year_of_birth === yearOfBirth) ??
+      exactMatches.find((p) => ageGroup && p.age_group === ageGroup) ??
+      exactMatches[0];
+  }
 
   if (!player) {
-    const { data: fuzzy } = await supabase
+    // Fuzzy: last name only, then narrow by first-name prefix; cohort used for disambiguation
+    const { data: fuzzyByLast } = await supabase
       .from("players")
-      .select("id, first_name, last_name, final_shirt, year_of_birth, division_code, team_name")
+      .select("id, first_name, last_name, final_shirt, year_of_birth, age_group, division_code, team_name")
       .eq("club_id", clubId)
       .ilike("last_name", lastTrimmed)
       .is("deleted_at", null)
-      .or(cohortFilter)
-      .limit(5);
+      .limit(10);
 
-    const candidates = (fuzzy ?? []) as any[];
+    const candidates = (fuzzyByLast ?? []) as any[];
     if (candidates.length > 0) {
       const firstLower = firstTrimmed.toLowerCase();
+      const byPrefix = candidates.filter(
+        (p) => firstLower.length >= 3 && (p.first_name ?? "").toLowerCase().startsWith(firstLower.slice(0, 3))
+      );
+      const pool = byPrefix.length > 0 ? byPrefix : candidates;
       player =
-        candidates.find(
-          (p) =>
-            firstLower.length >= 3 &&
-            (p.first_name ?? "").toLowerCase().startsWith(firstLower.slice(0, 3))
-        ) ?? candidates[0];
+        pool.find((p: any) => p.year_of_birth != null && p.year_of_birth === yearOfBirth) ??
+        pool.find((p: any) => ageGroup && p.age_group === ageGroup) ??
+        pool[0];
     }
   }
 
