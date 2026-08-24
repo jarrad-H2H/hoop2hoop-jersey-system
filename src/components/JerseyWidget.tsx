@@ -237,6 +237,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [matchedPlayerTeamName, setMatchedPlayerTeamName] = useState<string | null>(null);
   const [identityConfirmed, setIdentityConfirmed] = useState<boolean | null>(null);
   const [playerCandidates, setPlayerCandidates] = useState<PlayerCandidate[]>([]);
+  const [showSingleMatchWarning, setShowSingleMatchWarning] = useState(false);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -367,7 +368,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // Whether identity confirmation is needed (player found but not yet confirmed)
   const needsIdentityConfirm =
     isNewPlayer === false && matchedPlayerDisplayName !== null && identityConfirmed === null && !lookingUpPlayer &&
-    playerCandidates.length === 0;
+    playerCandidates.length === 0 && !showSingleMatchWarning;
 
   // Whether the "keeping jersey" prompt needs to be answered (only after identity confirmed)
   const needsKeepPrompt =
@@ -668,6 +669,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setMatchedPlayerTeamName(null);
     setIdentityConfirmed(null);
     setPlayerCandidates([]);
+    setShowSingleMatchWarning(false);
     setSuggestions([]);
     setSelectedNumber(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -791,6 +793,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
     // If prompts are still pending, stop — user must answer them first
     if (needsCandidateSelection) return;
+    if (showSingleMatchWarning) return;
     if (needsIdentityConfirm) return;
     if (needsKeepPrompt && keepExistingJersey === null) {
       setError("Please answer whether you're keeping your current jersey number."); return;
@@ -1155,6 +1158,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // relying on them to notice and scroll manually (see useScrollIntoViewOnReveal). ──
   const genderPromptRef = useRef<HTMLDivElement>(null);
   const candidateSelectionRef = useRef<HTMLDivElement>(null);
+  const singleMatchWarningRef = useRef<HTMLDivElement>(null);
   const identityConfirmRef = useRef<HTMLDivElement>(null);
   const keepPromptRef = useRef<HTMLDivElement>(null);
   const playingUpPromptRef = useRef<HTMLDivElement>(null);
@@ -1162,6 +1166,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   useScrollIntoViewOnReveal(genderPromptRef, needsGenderPrompt);
   useScrollIntoViewOnReveal(candidateSelectionRef, needsCandidateSelection);
+  useScrollIntoViewOnReveal(singleMatchWarningRef, showSingleMatchWarning);
   useScrollIntoViewOnReveal(identityConfirmRef, needsIdentityConfirm);
   useScrollIntoViewOnReveal(keepPromptRef, needsKeepPrompt && !lookingUpPlayer);
   useScrollIntoViewOnReveal(playingUpPromptRef, needsPlayingUpPrompt);
@@ -1757,6 +1762,44 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </div>
         )}
 
+        {/* Single-match warning — shown when the only match is rejected, in case
+            the player's jersey number on file is stale from a previous season */}
+        {showSingleMatchWarning && (
+          <div ref={singleMatchWarningRef} className="bg-orange-50 border border-orange-300 rounded p-3">
+            <div className="text-sm font-semibold text-orange-900 mb-1">
+              This is the only <span className="font-bold">{matchedPlayerDisplayName}</span> we have on record at this club.
+            </div>
+            <div className="text-xs text-orange-800 mb-3">
+              Your jersey number on file may be from a previous season — could this still be you?
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowSingleMatchWarning(false)}
+                className="flex-1 py-2 px-3 rounded border border-orange-400 bg-white text-orange-900 text-sm font-medium hover:bg-orange-100 transition-colors"
+              >
+                Go back
+              </button>
+              <button
+                onClick={() => {
+                  // Confirmed not them — clear all matched state and treat as new
+                  setShowSingleMatchWarning(false);
+                  setMatchedPlayerId(null);
+                  setMatchedPlayerDisplayName(null);
+                  setMatchedPlayerDivisionCode(null);
+                  setMatchedPlayerTeamName(null);
+                  setExistingPlayerJersey(null);
+                  setExistingPlayerInventoryId(null);
+                  setKeepExistingJersey(null);
+                  setPlayerCandidates([]);
+                }}
+                className="flex-1 py-2 px-3 rounded border border-orange-400 bg-white text-orange-900 text-sm font-medium hover:bg-orange-100 transition-colors"
+              >
+                Continue as new player
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Identity confirmation — shown when a matching player record is found */}
         {needsIdentityConfirm && (
           <div ref={identityConfirmRef} className="bg-amber-50 border border-amber-200 rounded p-3">
@@ -1772,7 +1815,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               onChange={(v) => {
                 setIdentityConfirmed(v);
                 if (!v) {
-                  // Player said "No" — treat as genuinely new; clear matched state
+                  // Single match: intercept before clearing — show warning in case
+                  // the player rejected because their jersey number on file is stale.
+                  if (matchedPlayerId !== null) {
+                    setIdentityConfirmed(null);
+                    setShowSingleMatchWarning(true);
+                    return;
+                  }
+                  // No matched player — clear everything and treat as new
                   setMatchedPlayerId(null);
                   setMatchedPlayerDivisionCode(null);
                   setMatchedPlayerTeamName(null);
