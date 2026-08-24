@@ -698,16 +698,17 @@ export async function suggestNumbersForClubRanked(input: {
     // clash checking. teams.gender is authoritative (set at BC import time) and covers
     // all girls divisions — not just "Junior"/"Open Girls" but also e.g. "12GC3" U12
     // girls who share the age_group label "U12" with boys but are on separate teams.
+    // Note: BC importer stores gender as 'Female'/'Male'/'Mixed', and teams.name IS
+    // the division code for Gold Coast format (e.g. "12GC3") — no separate column.
     const girlsDivCodes = new Set<string>();
     if (input.productType === "mens") {
       const { data: girlsTeams } = await supabase
         .from("teams")
-        .select("division_code")
+        .select("name")
         .eq("club_id_uuid", input.clubId)
-        .eq("gender", "Girls")
-        .not("division_code", "is", null);
+        .eq("gender", "Female");
       for (const t of girlsTeams ?? []) {
-        if ((t as any).division_code) girlsDivCodes.add(String((t as any).division_code));
+        if ((t as any).name) girlsDivCodes.add(String((t as any).name));
       }
     }
 
