@@ -1718,6 +1718,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             New to this club?
           </label>
           <YesNoButtons value={isNewPlayer} onChange={(v) => setIsNewPlayer(v)} />
+          <p className="text-xs text-gray-500 mt-1">Select "No" if this player has previously been registered with this club.</p>
         </div>
 
         {/* Player lookup spinner */}
@@ -1804,7 +1805,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               We found <span className="font-bold">{matchedPlayerDisplayName}</span> in our records.
             </div>
             {existingPlayerJersey != null && (
-              <div className="text-xs text-amber-800 mb-1">Current jersey: <span className="font-bold">#{existingPlayerJersey}</span></div>
+              <div className="text-xs text-amber-800 mb-1">Jersey on file: <span className="font-bold">#{existingPlayerJersey}</span></div>
             )}
             <div className="text-xs text-amber-800 mb-2">Is that you?</div>
             <YesNoButtons
@@ -1871,7 +1872,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               value={playingUp}
               onChange={(v) => setPlayingUp(v)}
               yesLabel="Yes, playing up"
-              noLabel="No, just need a spare"
+              noLabel="No, just need a spare jersey"
             />
           </div>
         )}
@@ -1910,6 +1911,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             value={preferredNumber}
             onChange={(e) => setPreferredNumber(e.target.value)}
           />
+          <p className="text-xs text-gray-500 mt-1">We'll try to include this in your options — availability not guaranteed.</p>
         </div>
 
         {/* Check & Suggest */}
@@ -1963,7 +1965,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               checked={disclaimerChecked}
               onChange={(e) => setDisclaimerChecked(e.target.checked)}
             />
-            <span>
+            <span className="font-bold text-red-600">
               I accept responsibility for ensuring my playing number won't clash with other players in my team.
             </span>
           </label>
@@ -1991,7 +1993,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             </p>
             {expiresAt !== null && remainingSeconds > 0 && (
               <p className="text-sm font-bold text-amber-900">
-                ⏱ Reservation expires in {Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, "0")}
+                ⏱ Reservation expires in {Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, "0")} — complete checkout before time runs out or your number will be released.
               </p>
             )}
           </div>
