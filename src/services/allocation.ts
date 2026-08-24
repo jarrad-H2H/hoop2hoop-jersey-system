@@ -142,19 +142,21 @@ function yobOverlapsWindow(
   seasonYear: number,
   window: { min: number; max: number }
 ): boolean {
-  // 1. Exact YOB
+  // 1. Exact YOB — inclusive (a player born exactly on the boundary is in the window)
   if (typeof exactYob === "number" && Number.isFinite(exactYob)) {
     return exactYob >= window.min && exactYob <= window.max;
   }
-  // 2. Estimated range
+  // 2. Estimated range — exclusive boundaries. Inclusive caused boundary-touching age groups
+  // (e.g. Junior girls est_yob_max=2014 touching U12 window.min=2014) to be treated as clashes,
+  // blocking every available number for typical U12 buyers at large multi-division clubs.
   if (typeof estMin === "number" && typeof estMax === "number" &&
       Number.isFinite(estMin) && Number.isFinite(estMax)) {
-    return estMin <= window.max && estMax >= window.min;
+    return estMin < window.max && estMax > window.min;
   }
-  // 3. Fallback: derive from age_group (transitional BC imports)
+  // 3. Fallback: derive from age_group (transitional BC imports) — also exclusive
   const fromAg = estimateYobFromAgeGroup(ageGroup, seasonYear);
   if (fromAg) {
-    return fromAg.min <= window.max && fromAg.max >= window.min;
+    return fromAg.min < window.max && fromAg.max > window.min;
   }
   // 4. No data — conservatively count as potential clash
   return true;
@@ -824,40 +826,56 @@ export async function suggestNumbersForClubRanked(input: {
 
   // adjCounts is already populated for the widget path above
 
-  const primaryPool: NumberSuggestion[] = [];   // no same-team clash, no adjacent-age warning
-  const secondaryPool: NumberSuggestion[] = [];  // no same-team clash, but adjacent-age player exists
-
-  for (const n of candidateNums) {
-    if (blockedNums.has(n)) continue;
-
-    const stockDepth = stockCounts.get(n) ?? 0;
-    const adjUse = adjCounts.get(n) ?? 0;
-    const score = adjUse * 100 - stockDepth * 2;
-    const suggestion = { jersey_number: n, total_stock: stockDepth, score };
-
-    if (adjUse === 0) {
-      primaryPool.push(suggestion);
-    } else {
-      secondaryPool.push(suggestion);
-    }
-  }
-
   const sortFn = (a: NumberSuggestion, b: NumberSuggestion) => {
     const as = a.score ?? 0;
     const bs = b.score ?? 0;
     if (as !== bs) return as - bs;
     return a.jersey_number - b.jersey_number;
   };
-  primaryPool.sort(sortFn);
-  secondaryPool.sort(sortFn);
 
-  // Primary-only when 3+ clean numbers exist; otherwise append top 3 from secondary.
-  const combined =
-    primaryPool.length >= 3
-      ? primaryPool
-      : [...primaryPool, ...secondaryPool.slice(0, 3)];
+  if (hasTeamContext) {
+    // Team-aware path: split into primary (no adjacent-age warning) and secondary (has warning).
+    // Primary-only when 3+ clean numbers exist; otherwise append top 3 from secondary.
+    const primaryPool: NumberSuggestion[] = [];
+    const secondaryPool: NumberSuggestion[] = [];
 
-  return combined.slice(0, limit);
+    for (const n of candidateNums) {
+      if (blockedNums.has(n)) continue;
+      const stockDepth = stockCounts.get(n) ?? 0;
+      const adjUse = adjCounts.get(n) ?? 0;
+      const score = adjUse * 100 - stockDepth * 2;
+      const suggestion = { jersey_number: n, total_stock: stockDepth, score };
+      if (adjUse === 0) {
+        primaryPool.push(suggestion);
+      } else {
+        secondaryPool.push(suggestion);
+      }
+    }
+
+    primaryPool.sort(sortFn);
+    secondaryPool.sort(sortFn);
+
+    const combined =
+      primaryPool.length >= 3
+        ? primaryPool
+        : [...primaryPool, ...secondaryPool.slice(0, 3)];
+
+    return combined.slice(0, limit);
+  } else {
+    // YOB-window path (no team context): all non-blocked numbers are equally valid.
+    // The adj window here is much softer than in the team-aware path — show everything
+    // non-blocked, ordered by score so lower-adj-count numbers surface first.
+    const scored: NumberSuggestion[] = [];
+    for (const n of candidateNums) {
+      if (blockedNums.has(n)) continue;
+      const stockDepth = stockCounts.get(n) ?? 0;
+      const adjUse = adjCounts.get(n) ?? 0;
+      const score = adjUse * 100 - stockDepth * 2;
+      scored.push({ jersey_number: n, total_stock: stockDepth, score });
+    }
+    scored.sort(sortFn);
+    return scored.slice(0, limit);
+  }
 }
 
 /**
