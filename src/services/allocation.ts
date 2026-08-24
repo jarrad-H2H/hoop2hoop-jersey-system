@@ -721,6 +721,13 @@ export async function suggestNumbersForClubRanked(input: {
       const estMax    = (p as any).estimated_yob_max ?? null;
       const ageGrp    = (p as any).age_group ?? null;
 
+      // For mens products, skip girls-only age groups. "Junior" and "Open Girls" are
+      // Gold Coast girls-only divisions — they can never share a team with a mens buyer,
+      // so counting them as potential clashes causes false blocks across competitions.
+      if (input.productType === "mens" && (ageGrp === "Junior" || ageGrp === "Open Girls")) {
+        continue;
+      }
+
       if (yobOverlapsWindow(exactYob, estMin, estMax, ageGrp, currentYear, clashWindow)) {
         blockedNums.add(n);
       } else if (yobOverlapsWindow(exactYob, estMin, estMax, ageGrp, currentYear, adjWindow)) {
