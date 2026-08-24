@@ -1467,9 +1467,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
               {/* Year of Birth */}
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth <span className="text-red-500">*</span></label>
                 <input
                   type="number"
+                  required
                   className="border rounded px-3 py-2 w-full text-base"
                   placeholder="e.g. 2013"
                   value={yearOfBirth}
@@ -1643,10 +1644,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* Year of Birth */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-            Year of Birth
+            Year of Birth <span className="text-red-500">*</span>
           </label>
           <input
             type="number"
+            required
             className="border rounded px-3 py-2 w-full text-base"
             placeholder="e.g. 2013"
             value={yearOfBirth}
