@@ -1735,19 +1735,16 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {needsKeepPrompt && !lookingUpPlayer && (
           <div ref={keepPromptRef} className="bg-blue-50 border border-blue-200 rounded p-3">
             <div className="text-sm font-semibold text-blue-900 mb-2">
-              Our records show you already have jersey #{existingPlayerJersey}.
+              Our records show you already have jersey #{existingPlayerJersey}. Will you continue to use this jersey as well?
             </div>
-            <label className="block text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
-              Still keeping #{existingPlayerJersey}?
-            </label>
             <YesNoButtons
               value={keepExistingJersey}
               onChange={(v) => {
                 setKeepExistingJersey(v);
                 if (v === false) setPlayingUp(null);
               }}
-              yesLabel={`Yes, keep #${existingPlayerJersey}`}
-              noLabel="No, replacing it"
+              yesLabel={`Continue to use #${existingPlayerJersey} as well`}
+              noLabel={`Replacing #${existingPlayerJersey}`}
             />
             {keepExistingJersey === false && (
               <div className="text-xs text-blue-800 mt-2">
