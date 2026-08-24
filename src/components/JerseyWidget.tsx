@@ -1710,6 +1710,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             <div className="text-sm font-semibold text-amber-900 mb-1">
               We found <span className="font-bold">{matchedPlayerDisplayName}</span> in our records.
             </div>
+            {existingPlayerJersey != null && (
+              <div className="text-xs text-amber-800 mb-1">Current jersey: <span className="font-bold">#{existingPlayerJersey}</span></div>
+            )}
             <div className="text-xs text-amber-800 mb-2">Is that you?</div>
             <YesNoButtons
               value={identityConfirmed}
