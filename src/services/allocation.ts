@@ -694,11 +694,28 @@ export async function suggestNumbersForClubRanked(input: {
     // Adjacent window: one birth-year step beyond the clash boundary (scoring penalty only)
     const adjWindow = { min: clashWindow.min - 2, max: clashWindow.max + 2 };
 
+    // For mens products, build a set of girls-only team division codes to exclude from
+    // clash checking. teams.gender is authoritative (set at BC import time) and covers
+    // all girls divisions — not just "Junior"/"Open Girls" but also e.g. "12GC3" U12
+    // girls who share the age_group label "U12" with boys but are on separate teams.
+    const girlsDivCodes = new Set<string>();
+    if (input.productType === "mens") {
+      const { data: girlsTeams } = await supabase
+        .from("teams")
+        .select("division_code")
+        .eq("club_id_uuid", input.clubId)
+        .eq("gender", "Girls")
+        .not("division_code", "is", null);
+      for (const t of girlsTeams ?? []) {
+        if ((t as any).division_code) girlsDivCodes.add(String((t as any).division_code));
+      }
+    }
+
     // Single query: all active holders of candidate numbers at this club.
     // "Active" = bc_last_seen_season IS NULL (transitional) OR >= currentYear - 2.
     let allHoldersQuery = supabase
       .from("players")
-      .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group")
+      .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group, division_code")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
       .is("deleted_at", null)
@@ -720,12 +737,13 @@ export async function suggestNumbersForClubRanked(input: {
       const estMin    = (p as any).estimated_yob_min ?? null;
       const estMax    = (p as any).estimated_yob_max ?? null;
       const ageGrp    = (p as any).age_group ?? null;
+      const divCode   = (p as any).division_code ?? null;
 
-      // For mens products, skip girls-only age groups. "Junior" and "Open Girls" are
-      // girls-only divisions — no male player is ever in them, so they can never share
-      // a team with a mens buyer regardless of which competition the club plays in.
-      if (input.productType === "mens" && (ageGrp === "Junior" || ageGrp === "Open Girls")) {
-        continue;
+      // For mens products, skip players from girls-only teams. Use division_code to
+      // match against the girls team set; fall back to age_group for players without one.
+      if (input.productType === "mens") {
+        if (divCode && girlsDivCodes.has(divCode)) continue;
+        if (!divCode && (ageGrp === "Junior" || ageGrp === "Open Girls")) continue;
       }
 
       if (yobOverlapsWindow(exactYob, estMin, estMax, ageGrp, currentYear, clashWindow)) {
