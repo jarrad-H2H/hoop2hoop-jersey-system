@@ -1655,7 +1655,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             onChange={(e) => setYearOfBirth(e.target.value)}
           />
           {derivedAgeGroup && (
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="text-xs text-gray-500 mt-1" style={{ display: "none" }}>
               Showing teams for <span className="font-semibold">{derivedAgeGroup}</span> when available.
             </div>
           )}
