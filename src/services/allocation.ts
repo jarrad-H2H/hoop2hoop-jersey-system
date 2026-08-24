@@ -722,8 +722,8 @@ export async function suggestNumbersForClubRanked(input: {
       const ageGrp    = (p as any).age_group ?? null;
 
       // For mens products, skip girls-only age groups. "Junior" and "Open Girls" are
-      // Gold Coast girls-only divisions — they can never share a team with a mens buyer,
-      // so counting them as potential clashes causes false blocks across competitions.
+      // girls-only divisions — no male player is ever in them, so they can never share
+      // a team with a mens buyer regardless of which competition the club plays in.
       if (input.productType === "mens" && (ageGrp === "Junior" || ageGrp === "Open Girls")) {
         continue;
       }
