@@ -1032,6 +1032,17 @@ export async function createPendingAllocation(input: {
 /**
  * Look up an existing player by name + YOB within a club.
  */
+export type PlayerCandidate = {
+  playerId: string;
+  firstName: string;
+  lastName: string;
+  currentJerseyNumber: number | null;
+  previousInventoryId: string | null;
+  divisionCode: string | null;
+  teamName: string | null;
+  ageGroup: string | null;
+};
+
 export async function lookupPlayerByName(params: {
   clubId: string;
   firstName: string;
@@ -1042,6 +1053,8 @@ export async function lookupPlayerByName(params: {
   productType?: string;
 }): Promise<{
   found: boolean;
+  /** Present when multiple exact-name matches exist — widget should show a picker. */
+  candidates?: PlayerCandidate[];
   playerId?: string;
   matchedFirstName?: string;
   matchedLastName?: string;
@@ -1054,6 +1067,20 @@ export async function lookupPlayerByName(params: {
   const { clubId, firstName, lastName, yearOfBirth, ageGroup, productType = "default" } = params;
   const firstTrimmed = firstName.trim();
   const lastTrimmed = lastName.trim();
+
+  // Helper: look up the inventory row for a player's current jersey (needed for write-off on exchange).
+  const fetchInventoryId = async (jerseyNumber: number | null): Promise<string | null> => {
+    if (!jerseyNumber) return null;
+    const { data } = await supabase
+      .from("inventory")
+      .select("id")
+      .eq("club_id", clubId)
+      .eq("jersey_number", jerseyNumber)
+      .eq("status", "Allocated")
+      .eq("product_type", productType)
+      .limit(1);
+    return ((data ?? [])[0] as any)?.id ?? null;
+  };
 
   // Search by name first — no cohort filter on the primary query. BC-imported players
   // have null year_of_birth and an age_group that reflects their last import season,
@@ -1075,11 +1102,20 @@ export async function lookupPlayerByName(params: {
   if (exactMatches.length === 1) {
     player = exactMatches[0];
   } else if (exactMatches.length > 1) {
-    // Disambiguate: prefer cohort match (exact YOB, then age_group), else take first
-    player =
-      exactMatches.find((p) => p.year_of_birth != null && p.year_of_birth === yearOfBirth) ??
-      exactMatches.find((p) => ageGroup && p.age_group === ageGroup) ??
-      exactMatches[0];
+    // Multiple exact name matches — surface them all so the customer can pick.
+    const candidates: PlayerCandidate[] = await Promise.all(
+      exactMatches.map(async (p) => ({
+        playerId: p.id,
+        firstName: p.first_name ?? "",
+        lastName: p.last_name ?? "",
+        currentJerseyNumber: p.final_shirt ?? null,
+        previousInventoryId: await fetchInventoryId(p.final_shirt ?? null),
+        divisionCode: p.division_code ?? null,
+        teamName: p.team_name ?? null,
+        ageGroup: p.age_group ?? null,
+      }))
+    );
+    return { found: true, candidates };
   }
 
   if (!player) {
@@ -1092,13 +1128,13 @@ export async function lookupPlayerByName(params: {
       .is("deleted_at", null)
       .limit(10);
 
-    const candidates = (fuzzyByLast ?? []) as any[];
-    if (candidates.length > 0) {
+    const fuzzyCandidates = (fuzzyByLast ?? []) as any[];
+    if (fuzzyCandidates.length > 0) {
       const firstLower = firstTrimmed.toLowerCase();
-      const byPrefix = candidates.filter(
+      const byPrefix = fuzzyCandidates.filter(
         (p) => firstLower.length >= 3 && (p.first_name ?? "").toLowerCase().startsWith(firstLower.slice(0, 3))
       );
-      const pool = byPrefix.length > 0 ? byPrefix : candidates;
+      const pool = byPrefix.length > 0 ? byPrefix : fuzzyCandidates;
       player =
         pool.find((p: any) => p.year_of_birth != null && p.year_of_birth === yearOfBirth) ??
         pool.find((p: any) => ageGroup && p.age_group === ageGroup) ??
@@ -1108,18 +1144,7 @@ export async function lookupPlayerByName(params: {
 
   if (!player) return { found: false };
 
-  let previousInventoryId: string | null = null;
-  if (player.final_shirt) {
-    const { data: invData } = await supabase
-      .from("inventory")
-      .select("id")
-      .eq("club_id", clubId)
-      .eq("jersey_number", player.final_shirt)
-      .eq("status", "Allocated")
-      .eq("product_type", productType)
-      .limit(1);
-    previousInventoryId = ((invData ?? [])[0] as any)?.id ?? null;
-  }
+  const previousInventoryId = await fetchInventoryId(player.final_shirt ?? null);
 
   return {
     found: true,

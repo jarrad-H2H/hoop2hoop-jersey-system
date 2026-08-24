@@ -8,6 +8,7 @@ import {
   lookupPlayerByName,
   isAgeGroupCrossPool,
   ageGroupBucketSiblings,
+  type PlayerCandidate,
 } from "../services/allocation";
 
 interface MappingRow {
@@ -235,6 +236,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [matchedPlayerDivisionCode, setMatchedPlayerDivisionCode] = useState<string | null>(null);
   const [matchedPlayerTeamName, setMatchedPlayerTeamName] = useState<string | null>(null);
   const [identityConfirmed, setIdentityConfirmed] = useState<boolean | null>(null);
+  const [playerCandidates, setPlayerCandidates] = useState<PlayerCandidate[]>([]);
   const [disclaimerChecked, setDisclaimerChecked] = useState(false);
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -358,9 +360,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const teamSelected = Boolean((teamChoice || "").trim());
   const namesFilled = firstName.trim().length > 0 && lastName.trim().length > 0;
 
+  // Whether the customer needs to pick which player they are (multiple same-name matches)
+  const needsCandidateSelection =
+    isNewPlayer === false && playerCandidates.length > 1 && matchedPlayerId === null && !lookingUpPlayer;
+
   // Whether identity confirmation is needed (player found but not yet confirmed)
   const needsIdentityConfirm =
-    isNewPlayer === false && matchedPlayerDisplayName !== null && identityConfirmed === null && !lookingUpPlayer;
+    isNewPlayer === false && matchedPlayerDisplayName !== null && identityConfirmed === null && !lookingUpPlayer &&
+    playerCandidates.length === 0;
 
   // Whether the "keeping jersey" prompt needs to be answered (only after identity confirmed)
   const needsKeepPrompt =
@@ -660,6 +667,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setMatchedPlayerDivisionCode(null);
     setMatchedPlayerTeamName(null);
     setIdentityConfirmed(null);
+    setPlayerCandidates([]);
     setSuggestions([]);
     setSelectedNumber(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -755,6 +763,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           productType: selectedProductType,
         });
         if (result.found) {
+          if (result.candidates && result.candidates.length > 1) {
+            // Multiple players with the same name — show picker before identity confirm
+            setPlayerCandidates(result.candidates);
+            return;
+          }
           setMatchedPlayerId(result.playerId ?? null);
           const displayName = [result.matchedFirstName, result.matchedLastName]
             .filter(Boolean).join(" ");
@@ -777,6 +790,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     }
 
     // If prompts are still pending, stop — user must answer them first
+    if (needsCandidateSelection) return;
     if (needsIdentityConfirm) return;
     if (needsKeepPrompt && keepExistingJersey === null) {
       setError("Please answer whether you're keeping your current jersey number."); return;
@@ -1140,12 +1154,14 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // ── Auto-scroll: nudge the customer to each newly-revealed section instead of
   // relying on them to notice and scroll manually (see useScrollIntoViewOnReveal). ──
   const genderPromptRef = useRef<HTMLDivElement>(null);
+  const candidateSelectionRef = useRef<HTMLDivElement>(null);
   const identityConfirmRef = useRef<HTMLDivElement>(null);
   const keepPromptRef = useRef<HTMLDivElement>(null);
   const playingUpPromptRef = useRef<HTMLDivElement>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
   useScrollIntoViewOnReveal(genderPromptRef, needsGenderPrompt);
+  useScrollIntoViewOnReveal(candidateSelectionRef, needsCandidateSelection);
   useScrollIntoViewOnReveal(identityConfirmRef, needsIdentityConfirm);
   useScrollIntoViewOnReveal(keepPromptRef, needsKeepPrompt && !lookingUpPlayer);
   useScrollIntoViewOnReveal(playingUpPromptRef, needsPlayingUpPrompt);
@@ -1704,6 +1720,43 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           <div className="text-xs text-indigo-600">Looking up player record…</div>
         )}
 
+        {/* Candidate picker — shown when multiple players share the same name */}
+        {needsCandidateSelection && (
+          <div ref={candidateSelectionRef} className="bg-amber-50 border border-amber-200 rounded p-3">
+            <div className="text-sm font-semibold text-amber-900 mb-1">
+              We found multiple players named <span className="font-bold">{firstName.trim()} {lastName.trim()}</span> in our records.
+            </div>
+            <div className="text-xs text-amber-800 mb-3">Which one are you?</div>
+            <div className="flex flex-col gap-2">
+              {playerCandidates.map((c) => (
+                <button
+                  key={c.playerId}
+                  onClick={() => {
+                    setMatchedPlayerId(c.playerId);
+                    setMatchedPlayerDisplayName(`${c.firstName} ${c.lastName}`.trim());
+                    if (c.currentJerseyNumber != null) {
+                      setExistingPlayerJersey(c.currentJerseyNumber);
+                      setExistingPlayerInventoryId(c.previousInventoryId);
+                    }
+                    setMatchedPlayerDivisionCode(c.divisionCode);
+                    setMatchedPlayerTeamName(c.teamName);
+                    setPlayerCandidates([]);
+                  }}
+                  className="text-left border border-amber-300 rounded p-2 bg-white hover:bg-amber-100 transition-colors"
+                >
+                  <div className="text-sm font-semibold text-amber-900">{c.firstName} {c.lastName}</div>
+                  <div className="text-xs text-amber-700">
+                    {c.currentJerseyNumber != null
+                      ? `Current jersey: #${c.currentJerseyNumber}`
+                      : "No jersey assigned yet"}
+                    {c.ageGroup ? ` · ${c.ageGroup}` : ""}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Identity confirmation — shown when a matching player record is found */}
         {needsIdentityConfirm && (
           <div ref={identityConfirmRef} className="bg-amber-50 border border-amber-200 rounded p-3">
@@ -1726,6 +1779,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                   setExistingPlayerJersey(null);
                   setExistingPlayerInventoryId(null);
                   setKeepExistingJersey(null);
+                  setPlayerCandidates([]);
                 }
               }}
               yesLabel="Yes, that's me"
