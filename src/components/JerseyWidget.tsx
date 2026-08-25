@@ -1094,6 +1094,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!sizeSelected) { setError("Please select a size above to continue."); return; }
     if (!namesFilled) { setError("Please enter first name and surname."); return; }
     if (!yobValid) { setError("Please enter a valid year of birth."); return; }
+    if (fcfsYobOverflowGroupLabel && yobOverflowConfirmed === null) { setError("Please confirm your year of birth before continuing."); return; }
 
     const collectPrefs = wc?.collect_prefs !== false;
     const allowReclaim = wc?.allow_reclaim ?? true;
@@ -1681,11 +1682,6 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             value={yearOfBirth}
             onChange={(e) => setYearOfBirth(e.target.value)}
           />
-          {derivedAgeGroup && (
-            <div className="text-xs text-gray-500 mt-1" style={{ display: "none" }}>
-              Showing teams for <span className="font-semibold">{derivedAgeGroup}</span> when available.
-            </div>
-          )}
         </div>
 
         {/* Player gender — only asked for single/unisex-product clubs. Dual-product
@@ -1911,6 +1907,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             type="number"
             className="border rounded px-3 py-2 w-full text-base"
             placeholder="e.g. 23"
+            min={0}
+            max={99}
             value={preferredNumber}
             onChange={(e) => setPreferredNumber(e.target.value)}
           />
