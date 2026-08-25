@@ -28,6 +28,7 @@ interface Club {
   name: string;
   preorder_mode: PreorderMode;
   allocation_type: "fcfs" | "pre_allocated";
+  active_preorder_season: string | null;
   widget_config: { age_group_mode?: string; age_groups?: Array<{ label: string }>; current_window_age_group?: string | null } | null;
 }
 
@@ -90,6 +91,7 @@ const PreOrderManager: React.FC = () => {
   const [availableSeasons, setAvailableSeasons] = useState<string[]>([]);
   const [addingNewSeason, setAddingNewSeason] = useState(false);
   const [newSeasonInput, setNewSeasonInput] = useState("");
+  const [settingActiveSeason, setSettingActiveSeason] = useState(false);
   const [windowAgeGroup, setWindowAgeGroup] = useState<string>("");
 
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
@@ -133,7 +135,7 @@ const PreOrderManager: React.FC = () => {
     setLoadingClubs(true);
     const { data } = await supabase
       .from("clubs")
-      .select("id, name, preorder_mode, allocation_type, widget_config")
+      .select("id, name, preorder_mode, allocation_type, active_preorder_season, widget_config")
       .eq("is_client", true)
       .order("name");
     setClubs(((data ?? []) as any[]).map(c => ({ ...c, allocation_type: c.allocation_type ?? "fcfs" })) as Club[]);
@@ -523,6 +525,20 @@ const PreOrderManager: React.FC = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  // ── Active preorder season ──────────────────────────────────────────────────
+  const handleSetActiveSeason = async () => {
+    if (!selectedClubId || !season) return;
+    setSettingActiveSeason(true);
+    const { error } = await supabase.from("clubs").update({ active_preorder_season: season }).eq("id", selectedClubId);
+    if (error) {
+      setActionMsg({ type: "err", text: `Failed to set active season: ${error.message}` });
+    } else {
+      setClubs(prev => prev.map(c => c.id === selectedClubId ? { ...c, active_preorder_season: season } : c));
+      setActionMsg({ type: "ok", text: `Active season set to "${season}". New orders will be tagged to this season.` });
+    }
+    setSettingActiveSeason(false);
+  };
+
   // ── Allocation type toggle ───────────────────────────────────────────────────
   const setAllocationType = async (type: "fcfs" | "pre_allocated") => {
     if (!selectedClubId) return;
@@ -822,7 +838,7 @@ const PreOrderManager: React.FC = () => {
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Season</label>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {availableSeasons.length > 0 && !addingNewSeason ? (
               <select
                 value={season}
@@ -836,6 +852,17 @@ const PreOrderManager: React.FC = () => {
             ) : !addingNewSeason ? (
               <span className="text-sm text-gray-400 italic">No seasons yet</span>
             ) : null}
+            {selectedClubId && season && !addingNewSeason && (
+              <button
+                type="button"
+                onClick={handleSetActiveSeason}
+                disabled={settingActiveSeason || selectedClub?.active_preorder_season === season}
+                className="px-3 py-2 text-sm rounded border font-medium disabled:opacity-50 disabled:cursor-not-allowed bg-green-50 border-green-400 text-green-700 hover:bg-green-100"
+                title="New orders from Shopify will be tagged to this season"
+              >
+                {selectedClub?.active_preorder_season === season ? "✓ Active season" : settingActiveSeason ? "Setting…" : "Set as active"}
+              </button>
+            )}
             {addingNewSeason ? (
               <div className="flex items-center gap-1">
                 <input

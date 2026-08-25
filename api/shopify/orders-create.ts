@@ -380,6 +380,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           preorderProductType = (mapRow as any)?.jersey_gender ?? null;
         }
 
+        // Look up the club's active preorder season so requests are correctly bucketed.
+        const { data: clubRow } = await supabase
+          .from("clubs")
+          .select("active_preorder_season")
+          .eq("id", preorderProps.clubId)
+          .maybeSingle();
+        const activeSeason = (clubRow as any)?.active_preorder_season ?? null;
+
         const { error: poErr } = await supabase.from("preorder_requests").insert({
           club_id: preorderProps.clubId,
           first_name: preorderProps.firstName,
@@ -395,6 +403,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           gender: preorderProps.gender,
           jersey_name: preorderProps.jerseyName || null,
           product_type: preorderProductType,
+          season: activeSeason,
           shopify_order_id: orderId,
           shopify_line_item_id: li?.id != null ? String(li.id) : null,
           order_number: orderNumber || null,
