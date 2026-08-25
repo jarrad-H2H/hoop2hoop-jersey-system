@@ -1464,7 +1464,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               <div className="text-3xl mb-2">✅</div>
               <p className="font-semibold text-gray-900">Preferences submitted!</p>
               <p className="text-sm text-gray-500 mt-2">
-                Your jersey number preferences have been recorded. The club will allocate numbers and let you know before jerseys are produced.
+                Your jersey number preferences have been recorded.
+              </p>
+              <p className="text-sm font-semibold text-indigo-700 mt-2">
+                You must still add to cart and complete checkout to secure your order. Your jersey will not be produced until payment is received.
               </p>
             </div>
           ) : (
