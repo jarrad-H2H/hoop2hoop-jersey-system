@@ -1466,13 +1466,13 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             <>
               {/* First name */}
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">First Name</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">First Name <span className="text-red-500">*</span></label>
                 <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
               </div>
 
               {/* Surname */}
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Surname</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Surname <span className="text-red-500">*</span></label>
                 <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="Surname" value={lastName} onChange={(e) => setLastName(e.target.value)} />
               </div>
 
@@ -1546,7 +1546,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               {/* Gender (conditional — collect_gender defaults to true for backwards compat) */}
               {(wc?.collect_gender ?? true) && (
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Gender</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Gender <span className="text-red-500">*</span></label>
                   <div className="flex gap-4">
                     {(["Male", "Female"] as const).map((g) => (
                       <label key={g} className="flex items-center gap-1.5 text-sm cursor-pointer">
@@ -1618,7 +1618,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* First Name */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-            First Name
+            First Name <span className="text-red-500">*</span>
           </label>
           <input
             type="text"
@@ -1645,7 +1645,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {/* Surname */}
         <div>
           <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
-            Surname
+            Surname <span className="text-red-500">*</span>
           </label>
           <input
             type="text"
