@@ -444,13 +444,11 @@
 
     var scope = findProductScope(host);
     snapshotOriginalAtcLabel(scope);
-
-    // Lock the ATC button immediately — before the iframe even loads.
-    // If h2h:clubConfirmed never fires (non-H2H product), unlock after 6 seconds.
-    lockAtcButton(scope);
-    setTimeout(function () {
-      if (!h2hClubConfirmed) unlockAtcButton(scope);
-    }, 6000);
+    // Do NOT lock the ATC button here. We don't yet know whether this product
+    // has an H2H club mapping. Locking immediately causes every product page to
+    // show "Select jersey number first" until the iframe confirms otherwise.
+    // The button is locked only after h2h:clubConfirmed fires (see handler below).
+    // The submit event listener provides the hard safety net on H2H products.
 
     // Tracks the last confirmed reservation so it can be re-applied if Dawn's
     // Section Rendering API recreates the product form (destroying our injected inputs).
