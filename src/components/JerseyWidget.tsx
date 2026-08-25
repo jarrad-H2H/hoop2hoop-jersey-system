@@ -306,6 +306,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [fcfsJerseyName, setFcfsJerseyName] = useState<string>("");
   const [customerSelectedAgeGroup, setCustomerSelectedAgeGroup] = useState<string>("");
   const [yobOverflowConfirmed, setYobOverflowConfirmed] = useState<boolean | null>(null);
+  const [fcfsDisclaimerChecked, setFcfsDisclaimerChecked] = useState<boolean>(false);
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
@@ -1095,6 +1096,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!namesFilled) { setError("Please enter first name and surname."); return; }
     if (!yobValid) { setError("Please enter a valid year of birth."); return; }
     if (fcfsYobOverflowGroupLabel && yobOverflowConfirmed === null) { setError("Please confirm your year of birth before continuing."); return; }
+    if (!fcfsDisclaimerChecked) { setError("Please confirm your details are correct before submitting."); return; }
 
     const collectPrefs = wc?.collect_prefs !== false;
     const allowReclaim = wc?.allow_reclaim ?? true;
@@ -1606,7 +1608,19 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 </div>
               )}
 
-              <button type="button" onClick={handlePreorderSubmit} className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
+              <label className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={fcfsDisclaimerChecked}
+                  onChange={(e) => setFcfsDisclaimerChecked(e.target.checked)}
+                />
+                <span className="font-bold text-red-600">
+                  I confirm my size and details are correct and understand that my preferences cannot be changed once submitted.
+                </span>
+              </label>
+
+              <button type="button" onClick={handlePreorderSubmit} disabled={!fcfsDisclaimerChecked} className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors">
                 Submit Preferences
               </button>
             </>
