@@ -320,6 +320,7 @@
     { id: "h2h_jersey_number",          name: "properties[Jersey Number]" },
     { id: "h2h_pending_allocation_id",  name: "properties[_h2h_pending_allocation_id]" },
     { id: "h2h_reserved_at",            name: "properties[_h2h_reserved_at]" },
+    { id: "h2h_player_name",            name: "properties[Player Name]" },
     // Pre-order flow
     { id: "h2h_preorder_mode",          name: "properties[_h2h_preorder_mode]" },
     { id: "h2h_pref_1",                 name: "properties[_h2h_pref_1]" },
@@ -477,6 +478,7 @@
           "Jersey Number": String(lastReservation.jerseyNumber),
           "_h2h_pending_allocation_id": String(lastReservation.pendingId),
           "_h2h_reserved_at": lastReservation.reservedAt,
+          "Player Name": String(lastReservation.playerName || ""),
         };
       }
       if (lastPreallocated) {
@@ -668,6 +670,7 @@
             setHiddenInputValue("h2h_jersey_number", String(lastReservation.jerseyNumber));
             setHiddenInputValue("h2h_pending_allocation_id", String(lastReservation.pendingId));
             setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+            setHiddenInputValue("h2h_player_name", String(lastReservation.playerName || ""));
           }
           // Re-attach click handler if ATC button was recreated by Section Rendering
           setupAtcClickHandler();
@@ -691,12 +694,14 @@
           var jerseyNum = data.jerseyNumber;
           var pendingId = data.pendingAllocationId || "";
 
+          var playerName = data.playerName || "";
           lastReservation = {
             jerseyNumber: jerseyNum,
             pendingId: pendingId,
             reservedAt: new Date().toISOString(),
+            playerName: playerName,
           };
-          h2hSharedProps = { "Jersey Number": String(jerseyNum), "_h2h_pending_allocation_id": String(pendingId), "_h2h_reserved_at": lastReservation.reservedAt };
+          h2hSharedProps = { "Jersey Number": String(jerseyNum), "_h2h_pending_allocation_id": String(pendingId), "_h2h_reserved_at": lastReservation.reservedAt, "Player Name": playerName };
           h2hSharedPropsInjected = false;
 
           // Re-inject if form was recreated by Dawn section rendering before this message arrived
@@ -709,6 +714,7 @@
           setHiddenInputValue("h2h_jersey_number", String(jerseyNum));
           setHiddenInputValue("h2h_pending_allocation_id", String(pendingId));
           setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+          setHiddenInputValue("h2h_player_name", playerName);
 
           // Ensure the click-interception handler is attached to the current ATC button.
           // (The button could have been recreated since mount() ran.)
@@ -727,6 +733,7 @@
           setHiddenInputValue("h2h_jersey_number", "");
           setHiddenInputValue("h2h_pending_allocation_id", "");
           setHiddenInputValue("h2h_reserved_at", "");
+          setHiddenInputValue("h2h_player_name", "");
 
           if (h2hBundlePage || h2hClubConfirmed) { lockAtcButton(scope); } else { restoreAtcLabel(scope); }
         }
@@ -886,6 +893,7 @@
           setHiddenInputValue("h2h_jersey_number", String(lastReservation.jerseyNumber));
           setHiddenInputValue("h2h_pending_allocation_id", String(lastReservation.pendingId));
           setHiddenInputValue("h2h_reserved_at", lastReservation.reservedAt);
+          setHiddenInputValue("h2h_player_name", String(lastReservation.playerName || ""));
         } else if (lastPreallocated) {
           setHiddenInputValue("h2h_prealloc_request_id", String(lastPreallocated.preorderRequestId));
           setHiddenInputValue("h2h_prealloc_jersey_number", String(lastPreallocated.jerseyNumber));

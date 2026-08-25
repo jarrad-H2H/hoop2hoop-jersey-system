@@ -970,6 +970,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       notifyShopify("h2h:reservation:ready", {
         jerseyNumber: selectedNumber,
         pendingAllocationId: pid,
+        playerName: `${firstName.trim()} ${lastName.trim()}`.trim(),
       });
     } catch (e: any) {
       setError(e?.message || "Reservation failed.");
