@@ -1461,13 +1461,13 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {preorderMode === "open" && allocationTypeState === "fcfs" && (
           preorderSubmitted ? (
             <div className="py-6 text-center">
-              <div className="text-3xl mb-2">✅</div>
-              <p className="font-semibold text-gray-900">Preferences submitted!</p>
+              <div className="text-3xl mb-2">🛒</div>
+              <p className="font-semibold text-gray-900">Almost done!</p>
               <p className="text-sm text-gray-500 mt-2">
-                Your jersey number preferences have been recorded.
+                Your size and number preferences are ready.
               </p>
               <p className="text-sm font-semibold text-indigo-700 mt-2">
-                You must still add to cart and complete checkout to secure your order. Your jersey will not be produced until payment is received.
+                Add to cart and complete checkout to lock in your jersey — preferences are not saved until payment is received.
               </p>
             </div>
           ) : (
