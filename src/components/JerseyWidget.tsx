@@ -1693,7 +1693,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {needsGenderPrompt && (
           <div ref={genderPromptRef}>
             <label className="block text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">
-              Player's Gender
+              Player's Gender <span className="text-red-600">*</span>
             </label>
             <div className="flex gap-2">
               {(["Female", "Male"] as const).map((g) => (
@@ -1711,9 +1711,6 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                   {g}
                 </button>
               ))}
-            </div>
-            <div className="text-xs text-gray-500 mt-1">
-              Needed to find the right team — some divisions (e.g. Junior, Open Girls) are girls-only and named differently from the standard age groups.
             </div>
           </div>
         )}
@@ -1917,7 +1914,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             value={preferredNumber}
             onChange={(e) => setPreferredNumber(e.target.value)}
           />
-          <p className="text-xs text-gray-500 mt-1">We'll try to include this in your options — availability not guaranteed.</p>
+          <p className="text-xs text-gray-500 mt-1">Number preferences are not guaranteed.</p>
         </div>
 
         {/* Check & Suggest */}
