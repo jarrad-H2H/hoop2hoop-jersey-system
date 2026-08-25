@@ -172,6 +172,7 @@ interface WidgetConfig {
   age_group_mode?: "auto_yob" | "customer_select" | "window_set" | null;
   age_groups?: WidgetAgeGroupBracket[];
   current_window_age_group?: string | null;
+  clash_detection_mode?: "yob_window" | null;
 }
 
 interface JerseyWidgetProps {
@@ -854,6 +855,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     const effectiveTeamName =
       playingUp === true ? selectedTeamName : planBTeamName ?? selectedTeamName;
 
+    // yob_window mode: strip all team context so clash checking uses the pure
+    // YOB ±1 window rather than team-aware same-team blocking.
+    const yobWindowMode = wc?.clash_detection_mode === "yob_window";
+
     setLoadingSuggest(true);
     setSuggestions([]);
     setSelectedNumber(null);
@@ -864,9 +869,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         size: selectedSize,
         seasonYear: SEASON_YEAR,
         yearOfBirth: yobForSearch,
-        ageGroup: effectiveAgeGroup ?? undefined,
-        divisionCode: effectiveDivisionCode,
-        teamName: effectiveTeamName,
+        ageGroup: yobWindowMode ? undefined : (effectiveAgeGroup ?? undefined),
+        divisionCode: yobWindowMode ? undefined : effectiveDivisionCode,
+        teamName: yobWindowMode ? undefined : effectiveTeamName,
         crossPoolCheck,
         productType: selectedProductType,
         excludePlayerId: matchedPlayerId,
@@ -879,9 +884,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           const check = await smartCheckNumber(selectedClubId, pref, {
             seasonYear: SEASON_YEAR,
             yearOfBirth: yobForSearch,
-            ageGroup: effectiveAgeGroup ?? undefined,
-            divisionCode: effectiveDivisionCode,
-            teamName: effectiveTeamName,
+            ageGroup: yobWindowMode ? undefined : (effectiveAgeGroup ?? undefined),
+            divisionCode: yobWindowMode ? undefined : effectiveDivisionCode,
+            teamName: yobWindowMode ? undefined : effectiveTeamName,
             crossPoolCheck,
             productType: selectedProductType,
             excludePlayerId: matchedPlayerId,
