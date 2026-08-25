@@ -307,6 +307,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [customerSelectedAgeGroup, setCustomerSelectedAgeGroup] = useState<string>("");
   const [yobOverflowConfirmed, setYobOverflowConfirmed] = useState<boolean | null>(null);
   const [fcfsDisclaimerChecked, setFcfsDisclaimerChecked] = useState<boolean>(false);
+  const [fcfsMadeToOrderChecked, setFcfsMadeToOrderChecked] = useState<boolean>(false);
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
@@ -1096,6 +1097,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!namesFilled) { setError("Please enter first name and surname."); return; }
     if (!yobValid) { setError("Please enter a valid year of birth."); return; }
     if (fcfsYobOverflowGroupLabel && yobOverflowConfirmed === null) { setError("Please confirm your year of birth before continuing."); return; }
+    if (!fcfsMadeToOrderChecked) { setError("Please acknowledge the made-to-order policy before submitting."); return; }
     if (!fcfsDisclaimerChecked) { setError("Please confirm your details are correct before submitting."); return; }
 
     const collectPrefs = wc?.collect_prefs !== false;
@@ -1612,6 +1614,18 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 <input
                   type="checkbox"
                   className="mt-0.5"
+                  checked={fcfsMadeToOrderChecked}
+                  onChange={(e) => setFcfsMadeToOrderChecked(e.target.checked)}
+                />
+                <span className="font-bold text-red-600">
+                  I understand this is a made-to-order product and cannot be exchanged or refunded if I select the wrong size.
+                </span>
+              </label>
+
+              <label className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
                   checked={fcfsDisclaimerChecked}
                   onChange={(e) => setFcfsDisclaimerChecked(e.target.checked)}
                 />
@@ -1620,7 +1634,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 </span>
               </label>
 
-              <button type="button" onClick={handlePreorderSubmit} disabled={!fcfsDisclaimerChecked} className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors">
+              <button type="button" onClick={handlePreorderSubmit} disabled={!fcfsDisclaimerChecked || !fcfsMadeToOrderChecked} className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors">
                 Submit Preferences
               </button>
             </>
