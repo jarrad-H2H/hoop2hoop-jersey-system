@@ -15,6 +15,7 @@ interface MappingRow {
   shopify_product_id: string;
   club_id: string;
   product_type: string | null;
+  widget_mode: string | null;
 }
 
 /** Maps the demo-mode "gender" prop to the DB's product_type values. */
@@ -205,6 +206,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [preorderMode, setPreorderMode] = useState<"off" | "open" | "closed" | "locked">("off");
   const [allocationTypeState, setAllocationTypeState] = useState<"fcfs" | "pre_allocated">("fcfs");
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
+  const [widgetMode, setWidgetMode] = useState<"standard" | "retain_only">("standard");
 
   // Player gender — needed to find Gold Coast's girls-only Junior/Open Girls teams,
   // which the standard YOB-derived age ladder (U10/U12/.../U18) can never match on its
@@ -308,6 +310,15 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [yobOverflowConfirmed, setYobOverflowConfirmed] = useState<boolean | null>(null);
   const [fcfsDisclaimerChecked, setFcfsDisclaimerChecked] = useState<boolean>(false);
   const [fcfsMadeToOrderChecked, setFcfsMadeToOrderChecked] = useState<boolean>(false);
+
+  // Retain-only mode state (Celtics "retain my number" product)
+  const [retainLooking, setRetainLooking] = useState(false);
+  const [retainLookupDone, setRetainLookupDone] = useState(false);
+  const [retainFoundNumber, setRetainFoundNumber] = useState<number | null>(null);
+  const [retainLookupError, setRetainLookupError] = useState<string | null>(null);
+  const [retainConfirming, setRetainConfirming] = useState(false);
+  const [retainPendingId, setRetainPendingId] = useState<string>("");
+  const [retainMadeToOrderChecked, setRetainMadeToOrderChecked] = useState(false);
 
   const yobNum = useMemo(() => Number(yearOfBirth), [yearOfBirth]);
   const yobValid = Number.isFinite(yobNum) && yobNum >= 1900 && yobNum <= 2100;
@@ -554,7 +565,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!pid) return;
       const { data, error } = await supabase
         .from("shopify_product_club_map")
-        .select("shopify_product_id, club_id, product_type, bundle_jersey_property, clubs(preorder_mode, allocation_type, is_client, widget_config)")
+        .select("shopify_product_id, club_id, product_type, bundle_jersey_property, widget_mode, clubs(preorder_mode, allocation_type, is_client, widget_config)")
         .eq("shopify_product_id", pid)
         .limit(1);
       if (error) { setClubDetectError(error.message); return; }
@@ -574,6 +585,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       setAllocationTypeState(((clubJoin as any)?.allocation_type as "fcfs" | "pre_allocated") ?? "fcfs");
       const resolvedWc = ((clubJoin as any)?.widget_config as WidgetConfig | null) ?? null;
       setWidgetConfig(resolvedWc);
+      setWidgetMode((row as any).widget_mode === "retain_only" ? "retain_only" : "standard");
       try {
         if (window.parent && window.parent !== window) {
           window.parent.postMessage({
@@ -742,6 +754,79 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setError(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClubId, selectedSize, yobNum]);
+
+  // ── Retain-only mode handlers ─────────────────────────────────────────────
+
+  const handleRetainLookup = async () => {
+    setError(null);
+    setRetainLookupDone(false);
+    setRetainFoundNumber(null);
+    setRetainLookupError(null);
+    if (!sizeSelected) { setError("Please select a size above to continue."); return; }
+    if (!firstName.trim() || !lastName.trim()) { setError("Please enter your first name and surname."); return; }
+    if (!yobValid) { setError("Please enter a valid year of birth."); return; }
+    setRetainLooking(true);
+    try {
+      const ageGroup = yobNum ? deriveAgeGroupFromYob(SEASON_YEAR, yobNum) : null;
+      const result = await lookupPlayerByName({
+        clubId: selectedClubId,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        yearOfBirth: yobNum,
+        ageGroup,
+        productType: selectedProductType,
+      });
+      if (result.found && result.currentJerseyNumber != null) {
+        setRetainFoundNumber(result.currentJerseyNumber);
+      } else if (result.found) {
+        setRetainLookupError("no_number");
+      } else {
+        setRetainLookupError("not_found");
+      }
+    } catch {
+      setError("Lookup failed. Please try again.");
+    } finally {
+      setRetainLooking(false);
+      setRetainLookupDone(true);
+    }
+  };
+
+  const handleRetainConfirm = async () => {
+    if (retainFoundNumber === null) return;
+    if (!retainMadeToOrderChecked) { setError("Please acknowledge the made-to-order policy before confirming."); return; }
+    setRetainConfirming(true);
+    setError(null);
+    try {
+      const result = await reserveNumberForPurchase({
+        clubId: selectedClubId,
+        jerseyNumber: retainFoundNumber,
+        size: selectedSize,
+        seasonYear: SEASON_YEAR,
+        yearOfBirth: yobNum,
+        playerFirstName: firstName.trim(),
+        playerLastName: lastName.trim(),
+        isNewPlayer: false,
+        keepExistingJersey: true,
+        previousInventoryId: null,
+        productType: selectedProductType,
+        madeToOrder: true,
+      });
+      if (!result.success) { setError(result.message || "Could not reserve. Please try again."); return; }
+      const pid = result.pendingAllocationId || "";
+      setRetainPendingId(pid);
+      notifyShopify("h2h:reservation:ready", {
+        jerseyNumber: retainFoundNumber,
+        pendingAllocationId: pid,
+        playerName: `${firstName.trim()} ${lastName.trim()}`.trim(),
+      });
+    } catch (e: any) {
+      setError(e?.message || "Reservation failed.");
+    } finally {
+      setRetainConfirming(false);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   // Triggered by "Find Available Numbers" button.
   // For returning players who haven't been looked up yet, runs lookup first;
@@ -1230,8 +1315,98 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
           </div>
         </div>
 
+        {/* Retain-only mode — "retain my number" made-to-order product */}
+        {widgetMode === "retain_only" && (
+          retainPendingId ? (
+            <div className="mt-2 rounded-lg border-2 border-amber-400 bg-amber-50 p-4 text-center space-y-1">
+              <p className="text-base font-bold text-emerald-700">✓ Jersey #{retainFoundNumber} reserved!</p>
+              <p className="font-bold text-amber-900 text-sm">⚠️ Your order is NOT complete yet.</p>
+              <p className="text-amber-800 text-sm">
+                You must click <strong>Add to Cart</strong> and <strong>complete checkout</strong> to secure your number.
+              </p>
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-gray-500">
+                This product is for existing Celtics players who want to retain their current jersey number in a made-to-order jersey. Enter your details below to find your registered number.
+              </p>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">First Name <span className="text-red-500">*</span></label>
+                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="First name" value={firstName} onChange={(e) => { setFirstName(e.target.value); setRetainLookupDone(false); setRetainFoundNumber(null); setRetainLookupError(null); }} />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Surname <span className="text-red-500">*</span></label>
+                <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="Surname" value={lastName} onChange={(e) => { setLastName(e.target.value); setRetainLookupDone(false); setRetainFoundNumber(null); setRetainLookupError(null); }} />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth <span className="text-red-500">*</span></label>
+                <input type="number" className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2008" value={yearOfBirth} onChange={(e) => { setYearOfBirth(e.target.value); setRetainLookupDone(false); setRetainFoundNumber(null); setRetainLookupError(null); }} />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleRetainLookup()}
+                disabled={retainLooking}
+                className="w-full px-4 py-2 rounded font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                {retainLooking ? "Looking up…" : "Find My Number"}
+              </button>
+
+              {retainLookupDone && retainFoundNumber !== null && (
+                <>
+                  <div className="bg-indigo-50 border border-indigo-200 rounded p-3">
+                    <p className="text-sm font-semibold text-indigo-900">
+                      Your registered jersey number is <span className="text-2xl font-bold">#{retainFoundNumber}</span>
+                    </p>
+                    <p className="text-xs text-indigo-700 mt-1">This will be the number on your new made-to-order jersey.</p>
+                  </div>
+
+                  <label className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={retainMadeToOrderChecked}
+                      onChange={(e) => setRetainMadeToOrderChecked(e.target.checked)}
+                    />
+                    <span className="font-bold text-red-600">
+                      I understand this is a made-to-order product and cannot be exchanged or refunded if I select the wrong size.
+                    </span>
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleRetainConfirm()}
+                    disabled={retainConfirming || !retainMadeToOrderChecked}
+                    className="w-full px-4 py-2 rounded font-semibold text-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300 disabled:text-gray-600 transition-colors"
+                  >
+                    {retainConfirming ? "Reserving…" : `Confirm & Reserve #${retainFoundNumber}`}
+                  </button>
+                </>
+              )}
+
+              {retainLookupDone && retainLookupError === "not_found" && (
+                <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
+                  <p className="font-semibold">We couldn't find your details in our records.</p>
+                  <p className="mt-1">Please check the spelling, or make sure you're entering the <strong>player's</strong> name (not a parent's name). If you need help, contact the club directly.</p>
+                  <p className="mt-2">If you don't yet have a number assigned, please order from the <strong>stock jersey product</strong> instead.</p>
+                </div>
+              )}
+
+              {retainLookupDone && retainLookupError === "no_number" && (
+                <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
+                  <p className="font-semibold">We found your record, but no jersey number is assigned yet.</p>
+                  <p className="mt-1">Please order from the <strong>Celtics Unisex Reversible Jersey</strong> (stock product) to be allocated a number, then return here once a number has been assigned to you.</p>
+                </div>
+              )}
+            </>
+          )
+        )}
+
         {/* Pre-order: window closed or locked */}
-        {(preorderMode === "closed" || preorderMode === "locked") && (
+        {widgetMode !== "retain_only" && (preorderMode === "closed" || preorderMode === "locked") && (
           <div className="py-6 text-center">
             <div className="text-3xl mb-2">🏀</div>
             <p className="font-semibold text-gray-900">Pre-orders are now closed</p>
@@ -1242,7 +1417,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         )}
 
         {/* Pre-allocated: window open — player confirms size + jersey name */}
-        {preorderMode === "open" && allocationTypeState === "pre_allocated" && (
+        {widgetMode !== "retain_only" && preorderMode === "open" && allocationTypeState === "pre_allocated" && (
           (paSubmitted && paSelected) ? (
             <div className="py-4 text-center space-y-2">
               <p className="text-base font-bold text-emerald-700">✓ Details confirmed!</p>
@@ -1458,7 +1633,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         )}
 
         {/* Pre-order FCFS: window open */}
-        {preorderMode === "open" && allocationTypeState === "fcfs" && (
+        {widgetMode !== "retain_only" && preorderMode === "open" && allocationTypeState === "fcfs" && (
           preorderSubmitted ? (
             <div className="py-6 text-center">
               <div className="text-3xl mb-2">🛒</div>
@@ -1645,7 +1820,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         )}
 
         {/* Normal mode — not a pre-order window */}
-        {preorderMode === "off" && <>
+        {widgetMode !== "retain_only" && preorderMode === "off" && <>
 
         {/* First Name */}
         <div>

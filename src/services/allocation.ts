@@ -1175,6 +1175,8 @@ export async function reserveNumberForPurchase(input: {
   previousInventoryId?: string | null;
   /** Shopify product type for dual mens/womens clubs. Defaults to "default". */
   productType?: string;
+  /** Made-to-order: skip inventory stock check; create a placeholder Pending row instead. */
+  madeToOrder?: boolean;
 }): Promise<{
   success: boolean;
   message: string;
@@ -1196,6 +1198,7 @@ export async function reserveNumberForPurchase(input: {
     p_previous_jersey_number: input.previousJerseyNumber ?? null,
     p_previous_inventory_id: input.previousInventoryId ?? null,
     p_product_type: input.productType ?? "default",
+    p_is_made_to_order: input.madeToOrder ?? false,
   });
 
   if (error) {
