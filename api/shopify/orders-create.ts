@@ -203,7 +203,8 @@ async function syncClubToShopify(supabase: any, clubId: string): Promise<void> {
   const { data: mappings } = await supabase
     .from("shopify_product_club_map")
     .select("shopify_product_id, product_type")
-    .eq("club_id", clubId);
+    .eq("club_id", clubId)
+    .or("widget_mode.is.null,widget_mode.neq.retain_only");
   if (!mappings || mappings.length === 0) return;
 
   const { data: inv } = await supabase
@@ -501,6 +502,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             await logEvent(supabase, {
               order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
               level: "error", message: "Could not re-claim expired inventory (taken by someone else). Manual review needed.",
+              meta: { invId },
+            });
+          }
+        } else if (invStatus === "Pending") {
+          // Made-to-order reservation: the RPC created a placeholder 'Pending' row.
+          // Confirming payment means the jersey is now being manufactured — flip to Allocated.
+          const { data: confirmed } = await supabase
+            .from("inventory")
+            .update({ status: "Allocated", allocation_date: nowIso })
+            .eq("id", invId)
+            .eq("status", "Pending")
+            .select("id");
+          if (!confirmed || confirmed.length === 0) {
+            reconciliationNeeded = true;
+            await logEvent(supabase, {
+              order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+              level: "error", message: "Could not confirm made-to-order inventory (Pending row missing or already changed). Manual review needed.",
               meta: { invId },
             });
           }
