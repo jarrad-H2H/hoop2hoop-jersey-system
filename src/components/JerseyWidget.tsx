@@ -1398,7 +1398,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               {retainLookupDone && retainLookupError === "no_number" && (
                 <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
                   <p className="font-semibold">No playing number found for your record.</p>
-                  <p className="mt-1">This product is only available to members with a playing number assigned from the most recent season. Please purchase from our <strong>Jersey Stock product</strong> to receive a number first.</p>
+                  <p className="mt-1">This product is only available to members with a playing number assigned from the most recent season. Please purchase from our <strong>Jersey Stock product</strong>.</p>
                 </div>
               )}
             </>
