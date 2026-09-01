@@ -810,6 +810,31 @@ export async function suggestNumbersForClubRanked(input: {
       const n = Number((p as any).final_shirt);
       if (Number.isFinite(n)) blockedNums.add(n);
     }
+
+    // Inventory-level cross-pool block: mirrors reserve_jersey's Allocated-in-other-pool check.
+    // Blocks numbers that are Allocated in the opposite inventory pool regardless of age group,
+    // so the suggestion engine and reserve_jersey agree on what's actually reservable.
+    if (input.productType === "mens" || input.productType === "womens") {
+      const otherType = input.productType === "mens" ? "womens" : "mens";
+      const unblocked = candidateNums.filter((n) => !blockedNums.has(n));
+      if (unblocked.length > 0) {
+        const { data: otherPoolRows, error: opErr } = await supabase
+          .from("inventory")
+          .select("jersey_number")
+          .eq("club_id", input.clubId)
+          .eq("product_type", otherType)
+          .eq("status", STATUS_ALLOCATED)
+          .in("jersey_number", unblocked);
+        if (opErr) {
+          console.error("cross-pool inventory block query error", opErr);
+          throw new Error("Failed to load cross-pool inventory data.");
+        }
+        for (const r of otherPoolRows ?? []) {
+          const n = Number((r as any).jersey_number);
+          if (Number.isFinite(n)) blockedNums.add(n);
+        }
+      }
+    }
   }
 
   // Team path adjacent penalty (runs when hasTeamContext)
