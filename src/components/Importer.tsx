@@ -605,6 +605,25 @@ const Importer: React.FC = () => {
 
       const teamRows = Array.from(teamMap.values());
 
+      // Apply gender overrides — team_gender_overrides rows take precedence over the BC CSV gender.
+      // Scoped to the clubs actually present in this import; only overridden teams are affected.
+      if (teamRows.length > 0) {
+        const importClubIds = Array.from(new Set(teamRows.map((t) => t.clubId)));
+        const { data: overrides } = await supabase
+          .from("team_gender_overrides")
+          .select("club_id, team_name, gender")
+          .in("club_id", importClubIds);
+        if (overrides && overrides.length > 0) {
+          const overrideMap = new Map<string, string>(
+            (overrides as any[]).map((ov) => [`${ov.club_id}::${ov.team_name}`, ov.gender])
+          );
+          for (const t of teamRows) {
+            const override = overrideMap.get(`${t.clubId}::${t.divisionCode}`);
+            if (override) t.gender = override;
+          }
+        }
+      }
+
       if (teamRows.length > 0 && competitionId) {
         // Clear existing teams for these clubs in this competition (fresh import)
         const affectedClubIds = Array.from(new Set(teamRows.map((t) => t.clubId)));
