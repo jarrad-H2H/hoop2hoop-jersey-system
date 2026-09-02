@@ -455,9 +455,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         continue;
       }
 
-      // Track this club for post-loop Shopify inventory sync (stock mode only)
       const reservationClubId = String((pending as any).club_id ?? "");
-      if (reservationClubId) syncClubIds.add(reservationClubId);
+      let isMadeToOrder = false;
 
       // Idempotency: Shopify retries webhooks — a second delivery is a no-op
       if (pending.status === "purchased" || pending.status === "reconciled") {
@@ -506,21 +505,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             });
           }
         } else if (invStatus === "Pending") {
-          // Made-to-order reservation: the RPC created a placeholder 'Pending' row.
-          // Confirming payment means the jersey is now being manufactured — flip to Allocated.
-          const { data: confirmed } = await supabase
+          // Made-to-order reservation: delete the placeholder inventory row.
+          // The order is recorded in preorder_requests (written below) so it appears
+          // in the Pre-Order Manager, not the inventory section.
+          const { error: delInvErr } = await supabase
             .from("inventory")
-            .update({ status: "Allocated", allocation_date: nowIso })
+            .delete()
             .eq("id", invId)
-            .eq("status", "Pending")
-            .select("id");
-          if (!confirmed || confirmed.length === 0) {
+            .eq("status", "Pending");
+          if (delInvErr) {
             reconciliationNeeded = true;
             await logEvent(supabase, {
               order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
-              level: "error", message: "Could not confirm made-to-order inventory (Pending row missing or already changed). Manual review needed.",
-              meta: { invId },
+              level: "error", message: "Could not delete made-to-order placeholder inventory row. Manual review needed.",
+              meta: { invId, detail: delInvErr.message },
             });
+          } else {
+            isMadeToOrder = true;
           }
         } else if (invStatus !== "Allocated") {
           reconciliationNeeded = true;
@@ -712,6 +713,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             level: "error", message: "Exception writing to orders table",
             meta: { detail: salesErr?.message ?? String(salesErr) },
           });
+        }
+
+        // Made-to-order: write to preorder_requests so it appears in the Pre-Order Manager.
+        // The placeholder inventory row was already deleted above.
+        if (isMadeToOrder) {
+          try {
+            const p = pending as any;
+            const jerseyNum = Number(p.jersey_number) || null;
+            const { error: poErr } = await supabase.from("preorder_requests").insert({
+              club_id: String(p.club_id ?? ""),
+              first_name: p.player_first_name ?? "",
+              last_name: p.player_last_name ?? "",
+              year_of_birth: p.year_of_birth ? Number(p.year_of_birth) : null,
+              size: p.size ?? "Unknown",
+              pref_1: jerseyNum,
+              any_number: false,
+              claimed_current: jerseyNum,
+              assigned_number: jerseyNum,
+              status: "allocated",
+              season: String(p.season_year ?? new Date().getFullYear()),
+              shopify_order_id: orderId,
+              shopify_line_item_id: lineItemId,
+              order_number: orderNumber || null,
+              paid_at: nowIso,
+              shopify_product_id: li.product_id != null ? String(li.product_id) : null,
+            });
+            if (poErr) {
+              await logEvent(supabase, {
+                order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+                level: "error", message: "Failed to write MTO order to preorder_requests",
+                meta: { detail: poErr.message },
+              });
+            } else {
+              await logEvent(supabase, {
+                order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+                level: "info", message: "MTO order written to Pre-Order Manager",
+                meta: { jerseyNumber: jerseyNum },
+              });
+            }
+          } catch (mtoErr: any) {
+            await logEvent(supabase, {
+              order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+              level: "error", message: "Exception writing MTO order to preorder_requests",
+              meta: { detail: mtoErr?.message ?? String(mtoErr) },
+            });
+          }
+        } else {
+          // Stock-mode order: queue Shopify inventory sync for this club
+          if (reservationClubId) syncClubIds.add(reservationClubId);
         }
       }
     } catch (e: any) {
