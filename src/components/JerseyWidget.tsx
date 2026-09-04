@@ -1028,6 +1028,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 setSuggestions(fallbackRanked);
                 return;
               }
+            } else if (!lookup.found) {
+              setError("Your details weren't found in our player database. Please contact Celtics to be registered before selecting a jersey number.");
+              return;
             }
           } catch (_) {
             // fallback failed silently — fall through to error below
