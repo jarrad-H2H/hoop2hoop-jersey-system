@@ -1002,7 +1002,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         // Fallback: if no specific team context was used, look up the player in the DB
         // to find their team assignment, then re-run with team-only clash detection
         // (only hard-blocking same-team numbers, freeing up numbers from other teams).
-        if (!effectiveDivisionCode && yobValid) {
+        if (!effectiveDivisionCode && yobValid && !yobWindowMode) {
           try {
             const lookup = await lookupPlayerByName({
               clubId: selectedClubId,
