@@ -1038,27 +1038,12 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 setSuggestions(fallbackRanked);
                 return;
               }
-            } else if (!lookup.found) {
-              // Player not in DB — show all available stock with no clash detection
-              // so they can still complete their purchase.
-              const openRanked = await suggestNumbersForClubRanked({
-                clubId: selectedClubId,
-                size: selectedSize,
-                seasonYear: SEASON_YEAR,
-                crossPoolCheck,
-                productType: selectedProductType,
-                limit: 30,
-              });
-              if (openRanked.length > 0) {
-                setSuggestions(openRanked);
-                return;
-              }
             }
           } catch (_) {
             // fallback failed silently — fall through to error below
           }
         }
-        setError("No available numbers found for this size. Try another size or contact the club.");
+        setError("No available numbers found for this size. Please discuss with your club to arrange a loan singlet until new stock arrives.");
       }
     } catch (e: any) {
       setError(e?.message || "Failed to suggest numbers.");
