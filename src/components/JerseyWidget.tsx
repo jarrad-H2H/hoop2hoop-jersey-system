@@ -1029,8 +1029,20 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 return;
               }
             } else if (!lookup.found) {
-              setError("Your details weren't found in our player database. Please contact Celtics to be registered before selecting a jersey number.");
-              return;
+              // Player not in DB — show all available stock with no clash detection
+              // so they can still complete their purchase.
+              const openRanked = await suggestNumbersForClubRanked({
+                clubId: selectedClubId,
+                size: selectedSize,
+                seasonYear: SEASON_YEAR,
+                crossPoolCheck,
+                productType: selectedProductType,
+                limit: 30,
+              });
+              if (openRanked.length > 0) {
+                setSuggestions(openRanked);
+                return;
+              }
             }
           } catch (_) {
             // fallback failed silently — fall through to error below
