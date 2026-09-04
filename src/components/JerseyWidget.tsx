@@ -2045,7 +2045,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         {needsKeepPrompt && !lookingUpPlayer && (
           <div ref={keepPromptRef} className="bg-blue-50 border border-blue-200 rounded p-3">
             <div className="text-sm font-semibold text-blue-900 mb-2">
-              Our records show you already have jersey #{existingPlayerJersey}. Will you continue to use this jersey as well?
+              Will you still be using your jersey #{existingPlayerJersey} this season?
             </div>
             <YesNoButtons
               value={keepExistingJersey}
@@ -2053,8 +2053,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 setKeepExistingJersey(v);
                 if (v === false) setPlayingUp(null);
               }}
-              yesLabel={`Continue to use #${existingPlayerJersey} as well`}
-              noLabel={`Replacing #${existingPlayerJersey}`}
+              yesLabel={`Yes — I am keeping my existing jersey and buying this as an additional one. I understand stock jerseys come with available numbers only — my current number is very unlikely to match.`}
+              noLabel={`No — This will be my only jersey for the season.`}
             />
             {keepExistingJersey === false && (
               <div className="text-xs text-blue-800 mt-2">
