@@ -2053,7 +2053,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 setKeepExistingJersey(v);
                 if (v === false) setPlayingUp(null);
               }}
-              yesLabel={`Yes — I am keeping my existing jersey and buying this as an additional one. I understand stock jerseys come with available numbers only — my current number is very unlikely to match.`}
+              yesLabel={`Yes — I am keeping my existing jersey and purchasing this as an additional spare. I understand this additional jersey is supplied from pre-made stock with limited numbers available, and my current number is very unlikely to be one of them.`}
               noLabel={`No — This will be my only jersey for the season.`}
             />
             {keepExistingJersey === false && (
