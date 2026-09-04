@@ -1010,18 +1010,28 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               lastName: lastName.trim(),
               yearOfBirth: yobNum,
             });
-            if (lookup.found && lookup.divisionCode && lookup.teamName) {
+            // When multiple records share the same name, pick the first with a team assignment.
+            const fallbackDivisionCode = lookup.divisionCode
+              ?? lookup.candidates?.find(c => c.divisionCode)?.divisionCode
+              ?? null;
+            const fallbackTeamName = lookup.teamName
+              ?? lookup.candidates?.find(c => c.divisionCode)?.teamName
+              ?? null;
+            const fallbackPlayerId = lookup.playerId
+              ?? lookup.candidates?.find(c => c.divisionCode)?.playerId
+              ?? null;
+            if (lookup.found && fallbackDivisionCode && fallbackTeamName) {
               const fallbackRanked = await suggestNumbersForClubRanked({
                 clubId: selectedClubId,
                 size: selectedSize,
                 seasonYear: SEASON_YEAR,
                 yearOfBirth: yobForSearch,
                 ageGroup: yobWindowMode ? undefined : (effectiveAgeGroup ?? undefined),
-                divisionCode: lookup.divisionCode,
-                teamName: lookup.teamName,
+                divisionCode: fallbackDivisionCode,
+                teamName: fallbackTeamName,
                 crossPoolCheck,
                 productType: selectedProductType,
-                excludePlayerId: matchedPlayerId ?? lookup.playerId ?? undefined,
+                excludePlayerId: matchedPlayerId ?? fallbackPlayerId ?? undefined,
                 limit: 30,
               });
               if (fallbackRanked.length > 0) {
