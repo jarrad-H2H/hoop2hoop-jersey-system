@@ -999,6 +999,40 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       }
 
       if (!ranked || ranked.length === 0) {
+        // Fallback: if no specific team context was used, look up the player in the DB
+        // to find their team assignment, then re-run with team-only clash detection
+        // (only hard-blocking same-team numbers, freeing up numbers from other teams).
+        if (!effectiveDivisionCode && yobValid) {
+          try {
+            const lookup = await lookupPlayerByName({
+              clubId: selectedClubId,
+              firstName: firstName.trim(),
+              lastName: lastName.trim(),
+              yearOfBirth: yobNum,
+            });
+            if (lookup.found && lookup.divisionCode && lookup.teamName) {
+              const fallbackRanked = await suggestNumbersForClubRanked({
+                clubId: selectedClubId,
+                size: selectedSize,
+                seasonYear: SEASON_YEAR,
+                yearOfBirth: yobForSearch,
+                ageGroup: yobWindowMode ? undefined : (effectiveAgeGroup ?? undefined),
+                divisionCode: lookup.divisionCode,
+                teamName: lookup.teamName,
+                crossPoolCheck,
+                productType: selectedProductType,
+                excludePlayerId: matchedPlayerId ?? lookup.playerId ?? undefined,
+                limit: 30,
+              });
+              if (fallbackRanked.length > 0) {
+                setSuggestions(fallbackRanked);
+                return;
+              }
+            }
+          } catch (_) {
+            // fallback failed silently — fall through to error below
+          }
+        }
         setError("No available numbers found for this size. Try another size or contact the club.");
       }
     } catch (e: any) {
