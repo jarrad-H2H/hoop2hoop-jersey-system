@@ -506,8 +506,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         } else if (invStatus === "Pending") {
           // Made-to-order reservation: delete the placeholder inventory row.
-          // The order is recorded in preorder_requests (written below) so it appears
-          // in the Pre-Order Manager, not the inventory section.
+          // Must null out pending_allocations.inventory_id first — the FK constraint
+          // prevents deleting the inventory row while the pending_allocation references it.
+          await supabase
+            .from("pending_allocations")
+            .update({ inventory_id: null })
+            .eq("id", reservationId);
           const { error: delInvErr } = await supabase
             .from("inventory")
             .delete()
