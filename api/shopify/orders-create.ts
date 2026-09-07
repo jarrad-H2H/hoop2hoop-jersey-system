@@ -306,8 +306,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const orderId = payload?.id != null ? String(payload.id) : "";
   const orderNumber =
-    payload?.order_number != null ? String(payload.order_number)
-    : payload?.name != null ? String(payload.name) : "";
+    payload?.name != null ? String(payload.name).replace(/^#/, "")
+    : payload?.order_number != null ? String(payload.order_number) : "";
   const lineItems = Array.isArray(payload?.line_items) ? payload!.line_items! : [];
 
   // Shopify buyer name — captured for audit trail (fraud/abuse retrospective lookup)
