@@ -79,6 +79,37 @@ export async function runFcfsAllocation(
     }
   }
 
+  // Global cross-pool YOB map: number → set of YOBs that have claimed it (across ALL pools).
+  // Used to enforce the ±1 year clash window across age groups — e.g. a U14 player born 2014
+  // must not share a number with a U12 player born 2015, even though they're in different pools.
+  const globalNumberYobs = new Map<number, Set<number>>();
+
+  const markGlobal = (num: number, yob: number | null) => {
+    if (yob == null) return;
+    if (!globalNumberYobs.has(num)) globalNumberYobs.set(num, new Set());
+    globalNumberYobs.get(num)!.add(yob);
+  };
+
+  // Seed global map from ALL prior allocations across all pools
+  for (const req of priorAllocated) {
+    if (req.assigned_number != null) markGlobal(req.assigned_number, req.year_of_birth);
+  }
+
+  // Returns true if `num` is unavailable for a player with the given YOB.
+  // Blocks on: (a) within-pool same number, (b) cross-pool YOB within ±1 year.
+  const isUnavailable = (num: number, yob: number | null, poolTaken: Set<number>): boolean => {
+    if (poolTaken.has(num)) return true;
+    if (yob != null) {
+      const holders = globalNumberYobs.get(num);
+      if (holders) {
+        for (const h of holders) {
+          if (Math.abs(h - yob) <= 1) return true;
+        }
+      }
+    }
+    return false;
+  };
+
   let totalAllocated = 0;
   let totalOverflow = 0;
   const poolSummary: Record<string, { allocated: number; overflow: number }> = {};
@@ -87,7 +118,7 @@ export async function runFcfsAllocation(
   for (const [pool, { prior, pending: poolPending }] of poolMap) {
     if (poolPending.length === 0) continue;
 
-    // Seed taken set from numbers already assigned in prior allocation rounds
+    // Within-pool taken set (any YOB — no two players in the same pool share a number)
     const taken = new Set<number>(
       prior
         .filter(r => r.assigned_number != null)
@@ -99,29 +130,30 @@ export async function runFcfsAllocation(
 
     for (const req of poolPending) {
       let assigned: number | null = null;
+      const yob = req.year_of_birth;
 
       // 1. Reclaim: try claimed_current first
-      if (req.claimed_current != null && !taken.has(req.claimed_current)) {
+      if (req.claimed_current != null && !isUnavailable(req.claimed_current, yob, taken)) {
         assigned = req.claimed_current;
       }
 
       // 2. Stated preferences in order
       if (assigned == null) {
         for (const pref of [req.pref_1, req.pref_2, req.pref_3]) {
-          if (pref != null && !taken.has(pref)) {
+          if (pref != null && !isUnavailable(pref, yob, taken)) {
             assigned = pref;
             break;
           }
         }
       }
 
-      // 3. Any available number — for any_number=true, or when all stated prefs are taken
+      // 3. Any available number — for any_number=true, or when all stated prefs are unavailable
       if (assigned == null) {
         const prefs = [req.pref_1, req.pref_2, req.pref_3].filter((p): p is number => p != null);
-        const allPrefsTaken = prefs.length > 0 && prefs.every(p => taken.has(p));
-        if (req.any_number || allPrefsTaken || prefs.length === 0) {
+        const allPrefsUnavailable = prefs.length > 0 && prefs.every(p => isUnavailable(p, yob, taken));
+        if (req.any_number || allPrefsUnavailable || prefs.length === 0) {
           for (const n of VALID_NUMBERS) {
-            if (!taken.has(n)) {
+            if (!isUnavailable(n, yob, taken)) {
               assigned = n;
               break;
             }
@@ -131,6 +163,7 @@ export async function runFcfsAllocation(
 
       if (assigned != null) {
         taken.add(assigned);
+        markGlobal(assigned, yob);
         poolAllocated++;
         updates.push({ id: req.id, assigned_number: assigned, status: "allocated" });
       } else {
