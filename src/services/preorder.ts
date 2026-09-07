@@ -27,6 +27,7 @@ export interface PreorderRequest {
 }
 
 const VALID_NUMBERS = Array.from({ length: 100 }, (_, i) => i).filter(n => n !== 69);
+const VALID_NUMBER_SET = new Set(VALID_NUMBERS);
 
 /**
  * Runs the FCFS batch allocation for all pending preorder_requests for a club + season.
@@ -132,15 +133,15 @@ export async function runFcfsAllocation(
       let assigned: number | null = null;
       const yob = req.year_of_birth;
 
-      // 1. Reclaim: try claimed_current first
-      if (req.claimed_current != null && !isUnavailable(req.claimed_current, yob, taken)) {
+      // 1. Reclaim: try claimed_current first (skip if somehow invalid)
+      if (req.claimed_current != null && VALID_NUMBER_SET.has(req.claimed_current) && !isUnavailable(req.claimed_current, yob, taken)) {
         assigned = req.claimed_current;
       }
 
-      // 2. Stated preferences in order
+      // 2. Stated preferences in order (skip invalid numbers like 69)
       if (assigned == null) {
         for (const pref of [req.pref_1, req.pref_2, req.pref_3]) {
-          if (pref != null && !isUnavailable(pref, yob, taken)) {
+          if (pref != null && VALID_NUMBER_SET.has(pref) && !isUnavailable(pref, yob, taken)) {
             assigned = pref;
             break;
           }
