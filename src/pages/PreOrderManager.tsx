@@ -697,7 +697,7 @@ const PreOrderManager: React.FC = () => {
   // ── Add row handlers ─────────────────────────────────────────────────────────
   const handleStartAddRow = () => {
     setAddingRow(true);
-    setNewRowDraft({ first_name: "", last_name: "", year_of_birth: "", gender: "", age_group: "", size: "", assigned_number: "", jersey_name: "", status: "pending" });
+    setNewRowDraft({ first_name: "", last_name: "", year_of_birth: "", gender: "", age_group: windowAgeGroup || selectedClub?.widget_config?.current_window_age_group || "", product_type: rosterProductType || "", size: "", assigned_number: "", jersey_name: "", status: "pending" });
     setNewRowError(null);
     setEditingRowId(null);
   };
@@ -726,6 +726,7 @@ const PreOrderManager: React.FC = () => {
       year_of_birth: newRowDraft.year_of_birth !== "" ? Number(newRowDraft.year_of_birth) : null,
       gender: newRowDraft.gender || null,
       age_group: newRowDraft.age_group || null,
+      product_type: newRowDraft.product_type || null,
       size: newRowDraft.size || null,
       assigned_number,
       jersey_number_display,
@@ -1419,6 +1420,14 @@ const PreOrderManager: React.FC = () => {
                       <option value="">—</option>
                       <option value="Male">Male</option>
                       <option value="Female">Female</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select value={newRowDraft.product_type ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, product_type: e.target.value }))} className={`border rounded px-1 py-0.5 text-xs ${!newRowDraft.product_type ? "border-amber-400" : ""}`}>
+                      <option value="">— type —</option>
+                      <option value="mens">Mens</option>
+                      <option value="womens">Womens</option>
+                      <option value="unisex">Unisex</option>
                     </select>
                   </td>
                   <td className="px-3 py-2">
