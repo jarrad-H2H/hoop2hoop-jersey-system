@@ -359,7 +359,8 @@ export async function importPreallocatedRoster(
   clubId: string,
   season: string,
   rows: PreallocatedImportRow[],
-  productType: "unisex" | "mens" | "womens" = "unisex"
+  productType: "unisex" | "mens" | "womens" = "unisex",
+  ageGroup?: string | null
 ): Promise<ImportPreallocatedResult> {
   const result: ImportPreallocatedResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };
 
@@ -389,7 +390,7 @@ export async function importPreallocatedRoster(
       last_name: row.last_name.trim(),
       year_of_birth: row.year_of_birth ?? null,
       gender: (row.gender ?? null) as "Male" | "Female" | null,
-      age_group: row.age_group ?? null,
+      age_group: row.age_group ?? ageGroup ?? null,
       assigned_number: row.jersey_number,
       jersey_number_display: row.jersey_number_display ?? null,
       jersey_name: row.last_name.trim().toUpperCase(),
