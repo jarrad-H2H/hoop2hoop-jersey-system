@@ -616,7 +616,7 @@ const PreOrderManager: React.FC = () => {
         return;
       }
 
-      const result = await importPreallocatedRoster(selectedClubId, season, parsed, rosterProductType, selectedClub?.widget_config?.current_window_age_group ?? null);
+      const result = await importPreallocatedRoster(selectedClubId, season, parsed, rosterProductType, windowAgeGroup || selectedClub?.widget_config?.current_window_age_group || null);
       await Promise.all([loadRequests(), loadAvailableSeasons(selectedClubId)]);
       const parts = [`Imported ${result.inserted} new + updated ${result.updated} existing records.`];
       if (result.errors.length > 0) parts.push(`${result.errors.length} error(s): ${result.errors.slice(0, 3).join("; ")}`);
