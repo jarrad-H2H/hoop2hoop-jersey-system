@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export const maxDuration = 15;
 
-const JERSEY_NAME_RE = /^[A-Za-z'\-]+$/;
+const JERSEY_NAME_RE = /^[A-Za-z' \-]+$/;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
@@ -34,7 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ ok: false, error: "jerseyName is required" });
   }
   if (!JERSEY_NAME_RE.test(jerseyName)) {
-    return res.status(400).json({ ok: false, error: "Jersey name may only contain letters, hyphens, and apostrophes (no spaces)." });
+    return res.status(400).json({ ok: false, error: "Jersey name may only contain letters, spaces, hyphens, and apostrophes." });
   }
   if (jerseyName.length > 25) {
     return res.status(400).json({ ok: false, error: "Jersey name must be 25 characters or fewer." });
