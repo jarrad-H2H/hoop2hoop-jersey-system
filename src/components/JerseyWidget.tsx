@@ -1150,7 +1150,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setPaError(null);
   };
 
-  const JERSEY_NAME_RE = /^[A-Za-z'\-]+$/;
+  const JERSEY_NAME_RE = /^[A-Za-z' \-]+$/;
 
   const handlePreAllocFallbackSubmit = async () => {
     setPaError(null);
@@ -1191,7 +1191,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setPaError(null);
     if (!paSelected) return;
     if (!paJerseyName.trim()) { setPaError("Jersey name cannot be blank."); return; }
-    if (!JERSEY_NAME_RE.test(paJerseyName.trim())) { setPaError("Jersey name may only contain letters, hyphens, and apostrophes — no spaces."); return; }
+    if (!JERSEY_NAME_RE.test(paJerseyName.trim())) { setPaError("Jersey name may only contain letters, spaces, hyphens, and apostrophes."); return; }
     if (paJerseyName.trim().length > 25) { setPaError("Jersey name must be 25 characters or fewer."); return; }
     const size = selectedSize || paSize.trim();
     if (!size) { setPaError("Please enter your jersey size."); return; }
@@ -1237,7 +1237,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (collectSurname) {
       const jn = fcfsJerseyName.trim();
       if (!jn) { setError("Please enter your surname for jersey printing."); return; }
-      if (!/^[A-Za-z'\-]+$/.test(jn)) { setError("Surname to be printed may only contain letters, hyphens, and apostrophes."); return; }
+      if (!/^[A-Za-z' \-]+$/.test(jn)) { setError("Surname to be printed may only contain letters, spaces, hyphens, and apostrophes."); return; }
       if (jn.length > 25) { setError("Surname to be printed must be 25 characters or fewer."); return; }
     }
     if (wc?.age_group_mode === "customer_select" && !customerSelectedAgeGroup) {
@@ -1635,7 +1635,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                         maxLength={25}
                         placeholder="SMITH"
                       />
-                      <p className="text-xs text-gray-500 mt-1">Correct the spelling if needed. Letters, hyphens, and apostrophes only.</p>
+                      <p className="text-xs text-gray-500 mt-1">Correct the spelling if needed. Letters, spaces, hyphens, and apostrophes only.</p>
                     </div>
                   )}
 
@@ -1712,10 +1712,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                     className="border rounded px-3 py-2 w-full text-base uppercase"
                     placeholder="SMITH"
                     value={fcfsJerseyName}
-                    onChange={(e) => setFcfsJerseyName(e.target.value.replace(/[^A-Za-z'\-]/g, "").toUpperCase())}
+                    onChange={(e) => setFcfsJerseyName(e.target.value.replace(/[^A-Za-z' \-]/g, "").toUpperCase())}
                     maxLength={25}
                   />
-                  <p className="text-xs text-gray-500 mt-1">Will be printed on the back of your jersey. Edit if needed. Letters, hyphens, and apostrophes only.</p>
+                  <p className="text-xs text-gray-500 mt-1">Will be printed on the back of your jersey. Edit if needed. Letters, spaces, hyphens, and apostrophes only.</p>
                 </div>
               )}
 
