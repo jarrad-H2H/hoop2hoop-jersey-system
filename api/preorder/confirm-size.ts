@@ -61,6 +61,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!existing) {
     return res.status(404).json({ ok: false, error: "Record not found." });
   }
+  // Same restriction as the lookup, enforced here too so a record outside the window can't be edited directly.
+  const { data: clubRow } = await supabase.from("clubs").select("widget_config").eq("id", existing.club_id).maybeSingle();
+  const clubCfg = (clubRow as any)?.widget_config ?? {};
+  if (clubCfg.restrict_to_window_age_group === true && clubCfg.current_window_age_group && existing.age_group !== clubCfg.current_window_age_group) {
+    return res.status(409).json({ ok: false, error: "This record isn't part of the current order window." });
+  }
   if (existing.status === "locked") {
     return res.status(409).json({ ok: false, error: "This allocation has already been finalised and cannot be changed." });
   }

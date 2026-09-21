@@ -80,7 +80,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Year of birth is mandatory only for clubs that opt in via widget_config.require_yob.
   const { data: clubRow } = await supabase.from("clubs").select("widget_config").eq("id", clubId).maybeSingle();
-  const requireYob = (clubRow as any)?.widget_config?.require_yob === true;
+  const clubCfg = (clubRow as any)?.widget_config ?? {};
+  const requireYob = clubCfg.require_yob === true;
+  // Clubs with restrict_to_window_age_group only expose records in the current window age group,
+  // so earlier windows (e.g. already-paid U18 rows) can't be found or re-confirmed.
+  const windowAgeGroup: string | null =
+    clubCfg.restrict_to_window_age_group === true && clubCfg.current_window_age_group
+      ? String(clubCfg.current_window_age_group)
+      : null;
   if (requireYob && (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100)) {
     return res.status(400).json({ ok: false, error: "A valid yearOfBirth is required" });
   }
@@ -94,6 +101,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     .in("status", ["needs_size", "allocated"]);
 
   if (season) query = query.eq("season", season);
+  if (windowAgeGroup) query = query.eq("age_group", windowAgeGroup);
   if (productType === "mens" || productType === "womens") query = query.eq("product_type", productType);
 
   const { data, error } = await query;

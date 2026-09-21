@@ -24,6 +24,8 @@ export interface WidgetConfig {
   current_window_age_group: string | null;
   /** Pre-allocated: year of birth mandatory in the widget lookup. Not editable here; set in the DB. */
   require_yob?: boolean;
+  /** Pre-allocated: lookup/confirm only see records in current_window_age_group. Set in the DB. */
+  restrict_to_window_age_group?: boolean;
 }
 
 const DEFAULT_WIDGET_CONFIG: WidgetConfig = {
