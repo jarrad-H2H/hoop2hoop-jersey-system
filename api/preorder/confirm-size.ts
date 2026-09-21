@@ -26,6 +26,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const jerseyName = String(body.jerseyName ?? "").trim().toUpperCase();
   const size = String(body.size ?? "").trim();
   const shopifyProductId = String(body.shopifyProductId ?? "").trim() || null;
+  // Year of birth entered by the player in the widget lookup. Only used to fill a blank on the record.
+  const yobRaw = Number(body.yearOfBirth);
+  const providedYob = Number.isInteger(yobRaw) && yobRaw >= 1900 && yobRaw <= 2100 ? yobRaw : null;
 
   if (!preorderRequestId) {
     return res.status(400).json({ ok: false, error: "preorderRequestId is required" });
@@ -85,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         product_type: existing.product_type ?? "default",
         first_name: existing.first_name,
         last_name: existing.last_name,
-        year_of_birth: existing.year_of_birth,
+        year_of_birth: existing.year_of_birth ?? providedYob,
         gender: existing.gender ?? null,
         age_group: existing.age_group ?? null,
         assigned_number: existing.assigned_number,
@@ -112,6 +115,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         size,
         status: "allocated",
         shopify_product_id: shopifyProductId ?? existing.shopify_product_id,
+        // Never overwrite a year of birth the club already has on file.
+        ...(existing.year_of_birth == null && providedYob != null ? { year_of_birth: providedYob } : {}),
       })
       .eq("id", preorderRequestId);
 

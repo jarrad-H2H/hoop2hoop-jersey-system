@@ -1200,7 +1200,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const res = await fetch("/api/preorder/confirm-size", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ preorderRequestId: paSelected.id, jerseyName: paJerseyName.trim().toUpperCase(), size, shopifyProductId: shopifyProductId || undefined }),
+        body: JSON.stringify({ preorderRequestId: paSelected.id, jerseyName: paJerseyName.trim().toUpperCase(), size, shopifyProductId: shopifyProductId || undefined, yearOfBirth: paYob.trim() ? Number(paYob.trim()) : undefined }),
       });
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
