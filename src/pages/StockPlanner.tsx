@@ -4,6 +4,7 @@ import { supabase } from "../services/supabase";
 import { BarChart3 } from "lucide-react";
 import { SkeletonCards, SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
+import PreorderNumberPlan from "../components/PreorderNumberPlan";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const SEASON_YEAR = new Date().getFullYear();
@@ -29,6 +30,7 @@ const STATUS_COLORS: Record<string, string> = {
 interface Club {
   id: string;
   name: string;
+  widget_config: { new_uniform_stock_plan?: boolean } | null;
 }
 
 interface InventoryRow {
@@ -156,7 +158,7 @@ const StockPlanner: React.FC = () => {
   useEffect(() => {
     supabase
       .from("clubs")
-      .select("id, name")
+      .select("id, name, widget_config")
       .eq("is_client", true)
       .order("name")
       .then(({ data }) => {
@@ -1182,6 +1184,15 @@ const StockPlanner: React.FC = () => {
           {/* Age Group × Size breakdown (collapsible) */}
           <AgeGroupBreakdown planRows={planRows} />
         </>
+      )}
+
+      {/* Only clubs launching a new uniform via pre-order, then rolling to stock (widget_config.new_uniform_stock_plan). */}
+      {selectedClubId && clubs.find((c) => c.id === selectedClubId)?.widget_config?.new_uniform_stock_plan === true && (
+        <PreorderNumberPlan
+          clubId={selectedClubId}
+          clubName={clubName}
+          productType={selectedProductType}
+        />
       )}
 
       {!loading && planRows.length === 0 && selectedClubId && (

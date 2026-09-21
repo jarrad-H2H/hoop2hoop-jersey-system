@@ -239,6 +239,21 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 
 ---
 
+## 14b. Stock Planner — New-Uniform Pre-Order → Stock Roll-Out (Blades, added 2026-09-21)
+
+Applies **only** to clubs with `clubs.widget_config.new_uniform_stock_plan = true` (currently Blades). Other pre-order clubs order an existing design with players who already have numbers, so they don't use it.
+
+- The Stock Planner's "Pre-order Demand & Stock Numbers" section (`PreorderNumberPlan.tsx`, logic in `stockNumberPlan.ts`) reads `preorder_requests` (status `allocated`/`locked`, plus past `orders`) for demand by **size × birth year**.
+- For each birth year it blocks every number worn within that cohort's clash window (Section 3, ±1 year — same `getClashYobWindow` / `yobOverlapsWindow` the widget uses). Holders = active non-deleted `players.final_shirt` + pre-order assigned numbers. Girls-only `Junior`/`Open Girls` rows are ignored (boys-only jersey). Released players (Section 5) are ignored.
+- Stock numbers per size are chosen from numbers free for the birth years that make up ~80% of that size's demand, preferring numbers not already picked for another size. Numbers free for most but not all of a size's buyers are flagged `*`.
+- "Spare Jersey order" pre-order rows (club spares) are excluded from demand and treated as stock already on order (their numbers are not re-suggested for the same size).
+- Stock quantities are entered by the admin per size (or scaled from the pre-order size mix) — the planner does not decide totals.
+- **Replacing old data:** when a club replaces its uniforms and numbers, old BC boys' `players` rows are **soft-deleted** (`deleted_at`), not merged — BC has no YOB, so name matching against new orders is unreliable. Girls' rows keep their existing numbers.
+- **Pre-order lock fix:** `finalisePreorders` writes `inventory.product_type` as `mens`/`womens`/`default` only (the DB check constraint rejects anything else, incl. `"unisex"`), and now aborts the request on any insert error instead of marking it `locked` anyway.
+- Known gap: the lock step matches BC players by name + exact YOB, so BC rows (no YOB) don't match and a duplicate player row is created. Soft-deleting the old rows is the workaround for Blades.
+
+---
+
 ## 15. Things Pending / Not Yet Built
 
 | Item | Status |

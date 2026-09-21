@@ -82,7 +82,7 @@ async function hasU8Division(clubId: string): Promise<boolean> {
  *
  * Returns { min, max } where min ≤ max are birth years (higher = younger).
  */
-function getClashYobWindow(
+export function getClashYobWindow(
   buyerYob: number,
   currentYear: number,
   hasU8: boolean
@@ -134,7 +134,7 @@ function estimateYobFromAgeGroup(
  *  3. Derived from age_group + seasonYear (BC imports before importer fix — transitional)
  *  4. No data at all → conservatively returns true (treat as potential clash)
  */
-function yobOverlapsWindow(
+export function yobOverlapsWindow(
   exactYob: number | null | undefined,
   estMin: number | null | undefined,
   estMax: number | null | undefined,

@@ -270,14 +270,17 @@ export async function finalisePreorder(
           });
         }
       }
-      await supabase.from("inventory").insert({
+      // inventory.product_type only allows default/mens/womens/legacy -- a unisex request is "default".
+      const { error: invErr } = await supabase.from("inventory").insert({
         club_id: clubId,
         jersey_number: req.assigned_number,
         size: req.size,
         status: "Allocated",
-        product_type: req.product_type ?? "unisex",
+        product_type: req.product_type === "mens" || req.product_type === "womens" ? req.product_type : "default",
       });
-      await supabase.from("preorder_requests").update({ status: "locked" }).eq("id", req.id);
+      if (invErr) throw new Error(invErr.message);
+      const { error: lockErr } = await supabase.from("preorder_requests").update({ status: "locked" }).eq("id", req.id);
+      if (lockErr) throw new Error(lockErr.message);
       locked++;
       if (req.shopify_order_id && req.shopify_line_item_id) {
         shopifyUpdates.push({
