@@ -75,6 +75,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!clubId || !firstName || !lastName) {
     return res.status(400).json({ ok: false, error: "clubId, firstName, lastName are required" });
   }
+  if (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100) {
+    return res.status(400).json({ ok: false, error: "A valid yearOfBirth is required" });
+  }
 
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
 
