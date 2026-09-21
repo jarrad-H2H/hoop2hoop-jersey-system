@@ -276,7 +276,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     id: string;
     firstName: string;
     lastName: string;
-    assignedNumber: number;
+    assignedNumber: number | null; // null = number TBC, club will confirm
     assignedNumberDisplay: string | null;
     defaultJerseyName: string;
     alreadyConfirmed: boolean;
@@ -1206,7 +1206,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
       setPaSubmitted(true);
       notifyShopify("h2h:preallocated:ready", {
-        jerseyNumber: paSelected.assignedNumberDisplay ?? paSelected.assignedNumber,
+        jerseyNumber: paSelected.assignedNumberDisplay ?? paSelected.assignedNumber ?? "",
         jerseyName: paJerseyName.trim().toUpperCase(),
         preorderRequestId: json.preorderRequestId ?? paSelected.id,
       });
@@ -1466,7 +1466,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             <div className="py-4 text-center space-y-2">
               <p className="text-base font-bold text-emerald-700">✓ Details confirmed!</p>
               <p className="text-sm text-gray-700">
-                Jersey <span className="font-bold text-indigo-700">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span> printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.
+                {paSelected.assignedNumber == null ? (
+                  <>Jersey printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>. Your club will confirm your jersey number before printing.</>
+                ) : (
+                  <>Jersey <span className="font-bold text-indigo-700">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span> printed as <span className="font-bold">{paJerseyName}</span> in size <span className="font-bold">{selectedSize || paSize}</span>.</>
+                )}
               </p>
               <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3 mt-2">
                 <p className="font-bold text-amber-900 text-sm">⚠️ Your order is NOT complete yet.</p>
@@ -1578,7 +1582,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                           <div key={c.id} className="flex items-center justify-between bg-indigo-50 border border-indigo-200 rounded p-3">
                             <div>
                               <span className="font-semibold text-gray-900">{c.firstName} {c.lastName}</span>
-                              <span className="ml-2 text-indigo-700 font-bold">#{c.assignedNumberDisplay ?? c.assignedNumber}</span>
+                              {c.assignedNumber != null
+                                ? <span className="ml-2 text-indigo-700 font-bold">#{c.assignedNumberDisplay ?? c.assignedNumber}</span>
+                                : <span className="ml-2 text-xs text-gray-500">(number to be confirmed by club)</span>}
                               {c.alreadyConfirmed && <span className="ml-2 text-xs text-green-700">(size already confirmed)</span>}
                             </div>
                             <button
@@ -1616,7 +1622,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               {paSelected && (
                 <>
                   <div className="bg-indigo-50 border border-indigo-200 rounded p-3">
-                    <p className="text-sm font-semibold text-indigo-900">Your jersey number is <span className="text-2xl font-bold">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span></p>
+                    {paSelected.assignedNumber != null
+                      ? <p className="text-sm font-semibold text-indigo-900">Your jersey number is <span className="text-2xl font-bold">#{paSelected.assignedNumberDisplay ?? paSelected.assignedNumber}</span></p>
+                      : <p className="text-sm font-semibold text-indigo-900">Your jersey number will be confirmed by your club before jerseys are printed. Please confirm your size and the name on your jersey below.</p>}
                   </div>
 
                   {wc?.collect_surname && (

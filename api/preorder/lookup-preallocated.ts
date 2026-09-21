@@ -12,7 +12,7 @@ interface Row {
   id: string;
   first_name: string;
   last_name: string;
-  assigned_number: number;
+  assigned_number: number | null;
   jersey_number_display: string | null;
   jersey_name: string | null;
   status: string;
@@ -85,8 +85,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     .from("preorder_requests")
     .select("id, first_name, last_name, assigned_number, jersey_number_display, jersey_name, status, year_of_birth, shopify_product_id")
     .eq("club_id", clubId)
-    .in("status", ["needs_size", "allocated"])
-    .not("assigned_number", "is", null);
+    // assigned_number may be null (number TBC) — those players still confirm size + jersey name.
+    // 'unmatched' rows are excluded by status, so they never appear here.
+    .in("status", ["needs_size", "allocated"]);
 
   if (season) query = query.eq("season", season);
   if (productType === "mens" || productType === "womens") query = query.eq("product_type", productType);

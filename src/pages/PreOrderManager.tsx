@@ -231,6 +231,15 @@ const PreOrderManager: React.FC = () => {
 
   const handleLock = async () => {
     if (!selectedClubId) return;
+    // finalisePreorder skips rows with no number, so refuse rather than lock around them.
+    const missingNumber = requests.filter(r => r.status === "allocated" && r.assigned_number == null);
+    if (missingNumber.length > 0) {
+      setActionMsg({
+        type: "err",
+        text: `Can't finalise yet — ${missingNumber.length} player${missingNumber.length !== 1 ? "s have" : " has"} no jersey number: ${missingNumber.slice(0, 5).map(r => `${r.first_name} ${r.last_name}`).join(", ")}${missingNumber.length > 5 ? "…" : ""}. Add their numbers in the Assigned # column first.`,
+      });
+      return;
+    }
     if (!window.confirm(`Lock & finalise pre-order for ${selectedClub?.name ?? "this club"} — season ${season}?\n\nThis will write assigned numbers to player records and inventory. No further changes can be made via the admin panel after this.`)) return;
     setActionLoading(true);
     setActionMsg(null);
@@ -579,7 +588,9 @@ const PreOrderManager: React.FC = () => {
         const firstName = String(row["first_name"] ?? "").trim();
         const lastName = String(row["last_name"] ?? "").trim();
         const rawJerseyNumber = String(row["jersey_number"] ?? "").trim();
-        const jerseyNumber = Number(rawJerseyNumber);
+        // Blank or "TBC" = number not decided yet; the club assigns it later.
+        const numberTbc = rawJerseyNumber === "" || /^tbc$/i.test(rawJerseyNumber);
+        const jerseyNumber = numberTbc ? null : Number(rawJerseyNumber);
         const jerseyNumberDisplay: string | null = rawJerseyNumber === "00" ? "00" : null;
         const rawYob = row["year_of_birth"];
         const yearOfBirth = rawYob !== undefined && rawYob !== null && rawYob !== ""
@@ -587,7 +598,7 @@ const PreOrderManager: React.FC = () => {
 
         if (!firstName) { errors.push(`Row ${rowNum}: first_name is blank.`); return; }
         if (!lastName) { errors.push(`Row ${rowNum}: last_name is blank.`); return; }
-        if (!Number.isFinite(jerseyNumber) || !Number.isInteger(jerseyNumber) || jerseyNumber < 0 || jerseyNumber > 99 || jerseyNumber === 69) {
+        if (jerseyNumber !== null && (!Number.isFinite(jerseyNumber) || !Number.isInteger(jerseyNumber) || jerseyNumber < 0 || jerseyNumber > 99 || jerseyNumber === 69)) {
           errors.push(`Row ${rowNum}: jersey_number "${row["jersey_number"]}" must be 0–99 and not 69.`); return;
         }
         if (yearOfBirth !== null && (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100)) {

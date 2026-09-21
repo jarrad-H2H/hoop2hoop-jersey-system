@@ -331,7 +331,8 @@ export async function getLockedShopifyUpdates(
 export interface PreallocatedImportRow {
   first_name: string;
   last_name: string;
-  jersey_number: number;
+  /** null = number not yet decided (TBC); the club fills it in later in Pre-Order Manager. */
+  jersey_number: number | null;
   jersey_number_display?: string | null;
   year_of_birth: number | null;
   gender?: string | null;
@@ -352,7 +353,8 @@ export interface ImportPreallocatedResult {
 }
 
 /** Imports pre-allocated roster data into preorder_requests for a club+season.
- *  Each row must have a pre-assigned jersey number.
+ *  A row's jersey number may be null (TBC): the player still confirms size + jersey name
+ *  in the widget and the club assigns the number later.
  *  Creates rows with status='needs_size' (awaiting player size confirmation via widget).
  *  Upserts by matching first_name + last_name + year_of_birth within the club+season. */
 export async function importPreallocatedRoster(
@@ -414,8 +416,10 @@ export async function importPreallocatedRoster(
       const { error } = await supabase
         .from("preorder_requests")
         .update({
-          assigned_number: payload.assigned_number,
-          jersey_number_display: payload.jersey_number_display,
+          // A blank/TBC number in the file must never wipe out a number already set.
+          ...(payload.assigned_number != null
+            ? { assigned_number: payload.assigned_number, jersey_number_display: payload.jersey_number_display }
+            : {}),
           jersey_name: payload.jersey_name,
           gender: payload.gender,
           age_group: payload.age_group,

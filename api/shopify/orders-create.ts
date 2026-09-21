@@ -165,7 +165,7 @@ async function writeOrderNotePreallocated(
 ): Promise<void> {
   if (!process.env.SHOPIFY_ADMIN_TOKEN || !process.env.SHOPIFY_STORE_DOMAIN) return;
   const displayName = jerseyName || "Unknown";
-  const allocationBlock = `JERSEY ALLOCATIONS:\n${displayName} — Jersey #${jerseyNumber}`;
+  const allocationBlock = `JERSEY ALLOCATIONS:\n${displayName} — Jersey #${jerseyNumber || "TBC"}`;
   const getResp = await shopifyAdminFetch(`orders/${orderId}.json?fields=id,note`);
   if (!getResp.ok) return;
   const { order: existingOrder } = await getResp.json() as { order: { id: number; note: string | null } };
