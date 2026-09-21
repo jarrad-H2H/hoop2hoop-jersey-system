@@ -22,6 +22,8 @@ export interface WidgetConfig {
   age_group_mode: "auto_yob" | "customer_select" | "window_set" | null;
   age_groups: WidgetAgeGroup[];
   current_window_age_group: string | null;
+  /** Pre-allocated: year of birth mandatory in the widget lookup. Not editable here; set in the DB. */
+  require_yob?: boolean;
 }
 
 const DEFAULT_WIDGET_CONFIG: WidgetConfig = {
@@ -228,6 +230,8 @@ const ClubManager: React.FC = () => {
     setSaveMsg(null);
 
     const newWidgetConfig: WidgetConfig = {
+      // Preserve keys this form doesn't edit (e.g. require_yob) instead of dropping them on save.
+      ...(club.widget_config ?? {}),
       order_mode: editOrderMode,
       collect_surname: editCollectSurname,
       collect_prefs: editCollectPrefs,

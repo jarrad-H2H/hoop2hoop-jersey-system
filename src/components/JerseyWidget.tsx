@@ -167,6 +167,7 @@ interface WidgetAgeGroupBracket {
 interface WidgetConfig {
   order_mode?: string;
   collect_surname?: boolean;
+  require_yob?: boolean; // pre-allocated: year of birth mandatory in the lookup (Logan Thunder)
   collect_prefs?: boolean;
   allow_reclaim?: boolean;
   collect_gender?: boolean;
@@ -342,6 +343,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   // ── widget_config derived values ──────────────────────────────────────────
   const wc = widgetConfig;
+  const paRequireYob = wc?.require_yob === true;
 
   const resolvedFcfsAgeGroup: string | null = useMemo(() => {
     const mode = wc?.age_group_mode;
@@ -1120,9 +1122,12 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const handlePreAllocLookup = async () => {
     setPaError(null);
     if (!paFirstName.trim() || !paLastName.trim()) { setPaError("Please enter the player's first name and surname."); return; }
-    const yob = Number(paYob.trim());
-    if (!paYob.trim()) { setPaError("Please enter the player's year of birth."); return; }
-    if (!Number.isFinite(yob) || yob < 1900 || yob > 2100) { setPaError("Year of birth doesn't look right — please enter a 4-digit year, e.g. 2008."); return; }
+    // Year of birth is only mandatory for clubs with widget_config.require_yob (Logan Thunder);
+    // other pre-allocated clubs keep it optional.
+    const yobRaw = paYob.trim();
+    const yob = yobRaw ? Number(yobRaw) : null;
+    if (paRequireYob && !yobRaw) { setPaError("Please enter the player's year of birth."); return; }
+    if (yob !== null && (!Number.isFinite(yob) || yob < 1900 || yob > 2100)) { setPaError(paRequireYob ? "Year of birth doesn't look right — please enter a 4-digit year, e.g. 2008." : "Year of birth doesn't look right — leave it blank if you're not sure."); return; }
     setPaLooking(true);
     setPaLookupDone(false);
     setPaCandidates([]);
@@ -1507,8 +1512,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                     <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="Last name" value={paLastName} onChange={e => { setPaLastName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth <span className="text-red-500">*</span></label>
-                    <input type="number" required className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2008" value={paYob} onChange={e => { setPaYob(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                    <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth {paRequireYob ? <span className="text-red-500">*</span> : <span className="normal-case font-normal text-gray-400">(optional)</span>}</label>
+                    <input type="number" required={paRequireYob} className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2008" value={paYob} onChange={e => { setPaYob(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
                   </div>
 
                   <button

@@ -75,11 +75,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!clubId || !firstName || !lastName) {
     return res.status(400).json({ ok: false, error: "clubId, firstName, lastName are required" });
   }
-  if (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100) {
-    return res.status(400).json({ ok: false, error: "A valid yearOfBirth is required" });
-  }
 
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+
+  // Year of birth is mandatory only for clubs that opt in via widget_config.require_yob.
+  const { data: clubRow } = await supabase.from("clubs").select("widget_config").eq("id", clubId).maybeSingle();
+  const requireYob = (clubRow as any)?.widget_config?.require_yob === true;
+  if (requireYob && (!Number.isFinite(yearOfBirth) || yearOfBirth < 1900 || yearOfBirth > 2100)) {
+    return res.status(400).json({ ok: false, error: "A valid yearOfBirth is required" });
+  }
 
   let query = supabase
     .from("preorder_requests")
