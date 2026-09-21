@@ -708,7 +708,7 @@ const PreOrderManager: React.FC = () => {
   // ── Add row handlers ─────────────────────────────────────────────────────────
   const handleStartAddRow = () => {
     setAddingRow(true);
-    setNewRowDraft({ first_name: "", last_name: "", year_of_birth: "", gender: "", age_group: windowAgeGroup || selectedClub?.widget_config?.current_window_age_group || "", product_type: rosterProductType || "", size: "", assigned_number: "", jersey_name: "", status: "pending" });
+    setNewRowDraft({ first_name: "", last_name: "", year_of_birth: "", gender: "", age_group: windowAgeGroup || selectedClub?.widget_config?.current_window_age_group || "", product_type: rosterProductType || "", size: "", assigned_number: "", jersey_name: "", status: "" });
     setNewRowError(null);
     setEditingRowId(null);
   };
@@ -729,6 +729,15 @@ const PreOrderManager: React.FC = () => {
     setNewRowError(null);
     const { assigned_number, jersey_number_display } = parseJerseyNumberInput(String(newRowDraft.assigned_number ?? ""));
     const hasNumber = assigned_number != null;
+    const isPreAllocated = selectedClub?.allocation_type === "pre_allocated";
+    // The widget lookup filters on product_type and only finds needs_size/allocated rows,
+    // so a pre-allocated manual add without either would never be found by the player.
+    if (isPreAllocated && !newRowDraft.product_type) {
+      setNewRowSaving(false);
+      setNewRowError("Choose a product type (Mens/Womens) — the widget lookup matches on it.");
+      return;
+    }
+    const defaultStatus = isPreAllocated ? (newRowDraft.size ? "allocated" : "needs_size") : (hasNumber ? "allocated" : "pending");
     const row: Record<string, any> = {
       club_id: selectedClubId,
       season,
@@ -741,8 +750,8 @@ const PreOrderManager: React.FC = () => {
       size: newRowDraft.size || null,
       assigned_number,
       jersey_number_display,
-      jersey_name: newRowDraft.jersey_name || null,
-      status: newRowDraft.status || (hasNumber ? "allocated" : "pending"),
+      jersey_name: newRowDraft.jersey_name || (isPreAllocated ? newRowDraft.last_name.trim().toUpperCase() : null),
+      status: newRowDraft.status || defaultStatus,
     };
     const { error } = await supabase.from("preorder_requests").insert(row);
     setNewRowSaving(false);
@@ -1457,7 +1466,8 @@ const PreOrderManager: React.FC = () => {
                     </td>
                   )}
                   <td className="px-3 py-2">
-                    <select value={newRowDraft.status ?? "pending"} onChange={e => setNewRowDraft(d => ({ ...d, status: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
+                    <select value={newRowDraft.status ?? ""} onChange={e => setNewRowDraft(d => ({ ...d, status: e.target.value }))} className="border rounded px-1 py-0.5 text-xs">
+                      <option value="">auto</option>
                       <option value="pending">pending</option>
                       <option value="needs_size">needs size</option>
                       <option value="allocated">allocated</option>
