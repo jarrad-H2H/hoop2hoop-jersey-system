@@ -104,6 +104,7 @@ const PreOrderManager: React.FC = () => {
   const [newRowError, setNewRowError] = useState<string | null>(null);
 
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
+  const [ageGroupFilter, setAgeGroupFilter] = useState<string>("");
   const [sortColumn, setSortColumn] = useState<SortColumn>("index");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
@@ -147,9 +148,9 @@ const PreOrderManager: React.FC = () => {
 
   useEffect(() => { void loadClubs(); }, []);
 
-  // Reset window age group picker, status filters, and sort when selected club or season changes
-  useEffect(() => { setWindowAgeGroup(""); setStatusFilters(new Set()); setSortColumn("index"); setSortDir("asc"); }, [selectedClubId]);
-  useEffect(() => { setStatusFilters(new Set()); setSortColumn("index"); setSortDir("asc"); }, [season]);
+  // Reset window age group picker, status filters, age group filter, and sort when selected club or season changes
+  useEffect(() => { setWindowAgeGroup(""); setStatusFilters(new Set()); setAgeGroupFilter(""); setSortColumn("index"); setSortDir("asc"); }, [selectedClubId]);
+  useEffect(() => { setStatusFilters(new Set()); setAgeGroupFilter(""); setSortColumn("index"); setSortDir("asc"); }, [season]);
 
   // ── Load requests ───────────────────────────────────────────────────────────
   const loadRequests = useCallback(async () => {
@@ -790,9 +791,17 @@ const PreOrderManager: React.FC = () => {
     }
   };
 
-  const filteredRequests = statusFilters.size === 0
-    ? requests
-    : requests.filter(r => statusFilters.has(r.status));
+  const ageGroupOptions = React.useMemo(() => {
+    const groups = new Set(requests.map(r => r.age_group).filter(Boolean) as string[]);
+    return Array.from(groups).sort();
+  }, [requests]);
+
+  const filteredRequests = React.useMemo(() => {
+    let rows = requests;
+    if (statusFilters.size > 0) rows = rows.filter(r => statusFilters.has(r.status));
+    if (ageGroupFilter) rows = rows.filter(r => r.age_group === ageGroupFilter);
+    return rows;
+  }, [requests, statusFilters, ageGroupFilter]);
 
   const displayRequests = React.useMemo(() => {
     const rows = [...filteredRequests];
@@ -1231,7 +1240,7 @@ const PreOrderManager: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200">
           <div className="px-4 py-2 border-b flex flex-wrap items-center gap-x-6 gap-y-2">
             <span className="text-xs text-gray-500">
-              {statusFilters.size === 0
+              {statusFilters.size === 0 && !ageGroupFilter
                 ? <>{requests.length} request{requests.length !== 1 ? "s" : ""} · sorted by payment time (earliest = highest FCFS priority)</>
                 : <><strong>{filteredRequests.length}</strong> of {requests.length} request{requests.length !== 1 ? "s" : ""}</>
               }
@@ -1253,6 +1262,18 @@ const PreOrderManager: React.FC = () => {
                   </label>
                 );
               })}
+              {ageGroupOptions.length > 0 && (
+                <select
+                  value={ageGroupFilter}
+                  onChange={e => setAgeGroupFilter(e.target.value)}
+                  className="text-xs border border-gray-300 rounded px-2 py-0.5 text-gray-700 bg-white"
+                >
+                  <option value="">All age groups</option>
+                  {ageGroupOptions.map(ag => (
+                    <option key={ag} value={ag}>{ag}</option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
           <div className="overflow-x-auto">
