@@ -60,6 +60,7 @@ const BulkStockUpload: React.FC = () => {
       success: boolean;
       results: { variantTitle: string; available: number; matched: boolean; ok: boolean }[];
       warnings?: { unmatchedVariants?: string[]; unmatchedSizes?: string[] };
+      error?: string;
     }[];
   } | null>(null);
 
@@ -1307,6 +1308,10 @@ const BulkStockUpload: React.FC = () => {
                   <span className="ml-2 text-red-600 font-semibold">Failed</span>
                 )}
               </h3>
+
+              {product.error && (
+                <p className="mb-2 text-xs text-red-700 break-words">{product.error}</p>
+              )}
 
               <table className="min-w-full text-xs">
                 <thead>

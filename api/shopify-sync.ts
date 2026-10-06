@@ -32,7 +32,11 @@ function shopifyGraphQL(
 interface VariantNode {
   id: string;
   title: string;
-  inventoryItem: { id: string; tracked: boolean };
+  inventoryItem: {
+    id: string;
+    tracked: boolean;
+    inventoryLevel: { quantities: { name: string; quantity: number }[] } | null;
+  };
 }
 
 interface LocationNode {
@@ -56,20 +60,26 @@ async function getActiveLocation(): Promise<{ id: string; name: string } | null>
   return active ? { id: active.id, name: active.name } : null;
 }
 
-async function getProductVariants(productGid: string): Promise<VariantNode[]> {
+async function getProductVariants(productGid: string, locationId: string): Promise<VariantNode[]> {
   const res = await shopifyGraphQL(
-    `query getVariants($id: ID!) {
+    `query getVariants($id: ID!, $locationId: ID!) {
       product(id: $id) {
         variants(first: 250) {
           nodes {
             id
             title
-            inventoryItem { id tracked }
+            inventoryItem {
+              id
+              tracked
+              inventoryLevel(locationId: $locationId) {
+                quantities(names: ["available", "on_hand"]) { name quantity }
+              }
+            }
           }
         }
       }
     }`,
-    { id: productGid }
+    { id: productGid, locationId }
   );
   if (!res.ok) return [];
   const body = (await res.json()) as {
@@ -113,67 +123,85 @@ async function syncProduct(
   success: boolean;
   results: { variantTitle: string; available: number; matched: boolean; ok: boolean }[];
   warnings: { unmatchedVariants?: string[]; unmatchedSizes?: string[] };
+  error?: string;
 }> {
   const productGid = `gid://shopify/Product/${productId}`;
-  const variants = await getProductVariants(productGid);
+  const variants = await getProductVariants(productGid, locationId);
 
   if (variants.length === 0) {
     console.error("shopify-sync: no variants returned for product", productId);
-    return { productId, gender, success: false, results: [], warnings: {} };
+    return {
+      productId,
+      gender,
+      success: false,
+      results: [],
+      warnings: {},
+      error: "No variants returned from Shopify for this product.",
+    };
   }
 
   // Auto-enable inventory tracking on any variants that don't have it
   await enableTrackingForVariants(variants);
 
-  // Build the setQuantities payload: one entry per variant
-  const setQuantities = variants.map((v) => ({
-    inventoryItemId: v.inventoryItem.id,
-    locationId,
-    quantity: countsBySize[v.title.trim()] ?? 0,
-  }));
+  // We want Shopify's *available* quantity to equal our Available count. The mutation below
+  // sets *on-hand*, and Shopify's on_hand = available + committed (units on unfulfilled
+  // orders) + reserved/damaged/etc. Setting on_hand straight to our count would understate
+  // available stock by everything that isn't available. So target on_hand = desired
+  // available + (current on_hand - current available), read live per variant.
+  const setQuantities = variants.map((v) => {
+    const q = v.inventoryItem.inventoryLevel?.quantities ?? [];
+    const available = q.find((x) => x.name === "available")?.quantity;
+    const onHand = q.find((x) => x.name === "on_hand")?.quantity;
+    const nonAvailable = available != null && onHand != null ? onHand - available : 0;
+    return {
+      inventoryItemId: v.inventoryItem.id,
+      locationId,
+      quantity: (countsBySize[v.title.trim()] ?? 0) + Math.max(0, nonAvailable),
+    };
+  });
 
-  // Set the *available* quantity, not on-hand. Shopify's on_hand = available + committed
-  // (units on unfulfilled orders), so setting on_hand to our Available count would
-  // understate stock by the committed amount. changeFromQuantity is omitted (null) because
-  // our inventory table is the source of truth.
   const mutationRes = await shopifyGraphQL(
-    `mutation setAvailable($input: InventorySetQuantitiesInput!) {
-      inventorySetQuantities(input: $input) {
+    `mutation setInventory($input: InventorySetOnHandQuantitiesInput!) {
+      inventorySetOnHandQuantities(input: $input) {
         inventoryAdjustmentGroup { id }
-        userErrors { field message code }
+        userErrors { field message }
       }
     }`,
     {
       input: {
-        name: "available",
         reason: "correction",
-        quantities: setQuantities,
+        setQuantities,
       },
     }
   );
 
   const mutationOk = mutationRes.ok;
   let userErrors: { field: string[]; message: string }[] = [];
+  let errorDetail: string | undefined;
 
   if (mutationOk) {
     const mutBody = (await mutationRes.json()) as {
       data?: {
-        inventorySetQuantities?: {
+        inventorySetOnHandQuantities?: {
           userErrors?: { field: string[]; message: string }[];
         };
       };
       errors?: unknown;
     };
-    userErrors = mutBody.data?.inventorySetQuantities?.userErrors ?? [];
-    if (mutBody.errors) {
-      userErrors = [...userErrors, { field: [], message: JSON.stringify(mutBody.errors) }];
-    }
+    userErrors = mutBody.data?.inventorySetOnHandQuantities?.userErrors ?? [];
     if (userErrors.length > 0) {
       console.error("shopify-sync: mutation userErrors", JSON.stringify(userErrors));
+      errorDetail = userErrors.map((e) => e.message).join("; ");
+    }
+    if (mutBody.errors) {
+      console.error("shopify-sync: mutation GraphQL errors", JSON.stringify(mutBody.errors));
+      errorDetail = `Shopify GraphQL error: ${JSON.stringify(mutBody.errors)}`;
+      userErrors = [...userErrors, { field: [], message: errorDetail }];
     }
   } else {
     const text = await mutationRes.text();
     console.error("shopify-sync: mutation HTTP error", mutationRes.status, text);
+    errorDetail = `Shopify HTTP ${mutationRes.status}: ${text.slice(0, 300)}`;
   }
 
   const overallOk = mutationOk && userErrors.length === 0;
@@ -198,6 +226,7 @@ async function syncProduct(
     gender,
     success: overallOk,
     results,
+    error: errorDetail,
     warnings: {
       unmatchedVariants: unmatchedVariants.length > 0 ? unmatchedVariants : undefined,
       unmatchedSizes: unmatchedSizes.length > 0 ? unmatchedSizes : undefined,
