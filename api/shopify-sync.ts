@@ -132,17 +132,22 @@ async function syncProduct(
     quantity: countsBySize[v.title.trim()] ?? 0,
   }));
 
+  // Set the *available* quantity, not on-hand. Shopify's on_hand = available + committed
+  // (units on unfulfilled orders), so setting on_hand to our Available count would
+  // understate stock by the committed amount. changeFromQuantity is omitted (null) because
+  // our inventory table is the source of truth.
   const mutationRes = await shopifyGraphQL(
-    `mutation setInventory($input: InventorySetOnHandQuantitiesInput!) {
-      inventorySetOnHandQuantities(input: $input) {
+    `mutation setAvailable($input: InventorySetQuantitiesInput!) {
+      inventorySetQuantities(input: $input) {
         inventoryAdjustmentGroup { id }
-        userErrors { field message }
+        userErrors { field message code }
       }
     }`,
     {
       input: {
+        name: "available",
         reason: "correction",
-        setQuantities,
+        quantities: setQuantities,
       },
     }
   );
@@ -153,14 +158,17 @@ async function syncProduct(
   if (mutationOk) {
     const mutBody = (await mutationRes.json()) as {
       data?: {
-        inventorySetOnHandQuantities?: {
+        inventorySetQuantities?: {
           userErrors?: { field: string[]; message: string }[];
         };
       };
       errors?: unknown;
     };
-    userErrors = mutBody.data?.inventorySetOnHandQuantities?.userErrors ?? [];
-    if (!mutationOk || userErrors.length > 0) {
+    userErrors = mutBody.data?.inventorySetQuantities?.userErrors ?? [];
+    if (mutBody.errors) {
+      userErrors = [...userErrors, { field: [], message: JSON.stringify(mutBody.errors) }];
+    }
+    if (userErrors.length > 0) {
       console.error("shopify-sync: mutation userErrors", JSON.stringify(userErrors));
     }
   } else {
@@ -218,11 +226,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // 1. Look up ALL Shopify products mapped to this club
+  // 1. Look up ALL stock-backed Shopify products mapped to this club.
+  // retain_only (made-to-order) products are excluded: they have no stock pool, so syncing
+  // would push meaningless counts onto them (same exclusion as the orders/create webhook).
   const { data: mappings, error: mapErr } = await supabase
     .from("shopify_product_club_map")
     .select("shopify_product_id, gender, product_type")
-    .eq("club_id", clubId);
+    .eq("club_id", clubId)
+    .or("widget_mode.is.null,widget_mode.neq.retain_only");
 
   if (mapErr) {
     console.error("shopify-sync: mapping lookup error", mapErr);
