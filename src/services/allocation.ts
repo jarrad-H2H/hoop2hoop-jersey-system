@@ -1013,6 +1013,119 @@ export async function logAllocationEvent(payload: {
   return { success: true };
 }
 
+export interface ReleasedJersey {
+  id: string;
+  size: string;
+  jersey_number: number;
+}
+
+/**
+ * Frees the jersey a player currently holds back to Available stock.
+ *
+ * Jerseys allocated through the admin page carry inventory.allocated_player_id, but jerseys
+ * bought through the widget/webhook never do -- so releasing by player id alone silently
+ * matches nothing for them and the jersey stays "Allocated" while it is physically back in
+ * the warehouse. When the player-id lookup frees nothing, fall back to the player's purchase
+ * record (pending_allocations.inventory_id) for the number they hold.
+ */
+export async function releasePlayerJersey(params: {
+  clubId: string;
+  playerId: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  yearOfBirth?: number | null;
+  jerseyNumber: number | null;
+  productType?: string;
+}): Promise<{ freed: ReleasedJersey[]; via: "player_link" | "purchase_record" | "none"; error?: string }> {
+  const productType = params.productType ?? "default";
+  const freedPayload = {
+    status: STATUS_AVAILABLE,
+    allocated_player_id: null,
+    allocation_date: null,
+    return_date_due: null,
+  };
+
+  // 1. Jerseys linked directly to the player (admin-page allocations)
+  const { data: linked, error: linkErr } = await supabase
+    .from("inventory")
+    .update(freedPayload)
+    .eq("club_id", params.clubId)
+    .eq("allocated_player_id", params.playerId)
+    .eq("status", STATUS_ALLOCATED)
+    .select("id, size, jersey_number");
+
+  if (linkErr) {
+    console.error("releasePlayerJersey link update error", linkErr);
+    return { freed: [], via: "none", error: linkErr.message };
+  }
+  if (linked && linked.length > 0) {
+    return { freed: linked as ReleasedJersey[], via: "player_link" };
+  }
+
+  // 2. Widget purchases: find the jersey through the player's most recent purchase of this number
+  const first = (params.firstName ?? "").trim();
+  const last = (params.lastName ?? "").trim();
+  if (params.jerseyNumber == null || !first || !last) {
+    return { freed: [], via: "none" };
+  }
+
+  let purchaseQuery = supabase
+    .from("pending_allocations")
+    .select("inventory_id, purchased_at")
+    .eq("club_id", params.clubId)
+    .eq("jersey_number", params.jerseyNumber)
+    .eq("product_type", productType)
+    .eq("status", "purchased")
+    .not("inventory_id", "is", null)
+    .ilike("player_first_name", first)
+    .ilike("player_last_name", last)
+    .order("purchased_at", { ascending: false })
+    .limit(1);
+  if (params.yearOfBirth != null) {
+    purchaseQuery = purchaseQuery.eq("year_of_birth", params.yearOfBirth);
+  }
+
+  const { data: purchases, error: purchaseErr } = await purchaseQuery;
+  if (purchaseErr) {
+    console.error("releasePlayerJersey purchase lookup error", purchaseErr);
+    return { freed: [], via: "none", error: purchaseErr.message };
+  }
+
+  const purchase = (purchases ?? [])[0] as { inventory_id: string; purchased_at: string | null } | undefined;
+  if (!purchase?.inventory_id) return { freed: [], via: "none" };
+
+  // Safety: if the same stock row was reserved or bought again after this purchase, it now
+  // belongs to someone else -- never free it from under them.
+  const { data: newer, error: newerErr } = await supabase
+    .from("pending_allocations")
+    .select("id")
+    .eq("inventory_id", purchase.inventory_id)
+    .in("status", ["reserved", "purchased"])
+    .gt("purchased_at", purchase.purchased_at ?? "1970-01-01")
+    .limit(1);
+  if (newerErr) {
+    console.error("releasePlayerJersey newer-purchase check error", newerErr);
+    return { freed: [], via: "none", error: newerErr.message };
+  }
+  if (newer && newer.length > 0) return { freed: [], via: "none" };
+
+  const { data: freed, error: freeErr } = await supabase
+    .from("inventory")
+    .update(freedPayload)
+    .eq("id", purchase.inventory_id)
+    .eq("status", STATUS_ALLOCATED)
+    .select("id, size, jersey_number");
+
+  if (freeErr) {
+    console.error("releasePlayerJersey purchase-record update error", freeErr);
+    return { freed: [], via: "none", error: freeErr.message };
+  }
+  if (freed && freed.length > 0) {
+    return { freed: freed as ReleasedJersey[], via: "purchase_record" };
+  }
+  return { freed: [], via: "none" };
+}
+
 export async function createPendingAllocation(input: {
   clubId: string;
   inventoryId: string;
@@ -1257,6 +1370,8 @@ export async function returnJerseyToStock(
   size: string,
   productType: string = "default"
 ): Promise<{ success: boolean; message: string }> {
+  // Prefer an Allocated row: when duplicates exist for the same number/size, picking an
+  // already-Available one would "succeed" without freeing anything.
   const { data, error } = await supabase
     .from("inventory")
     .select("id, status")
@@ -1264,7 +1379,7 @@ export async function returnJerseyToStock(
     .eq("jersey_number", jerseyNumber)
     .eq("size", size)
     .eq("product_type", productType)
-    .in("status", [STATUS_ALLOCATED, STATUS_AVAILABLE])
+    .eq("status", STATUS_ALLOCATED)
     .limit(1);
 
   if (error) {
@@ -1274,9 +1389,21 @@ export async function returnJerseyToStock(
 
   const row = (data ?? [])[0];
   if (!row) {
+    const { data: availRows } = await supabase
+      .from("inventory")
+      .select("id")
+      .eq("club_id", clubId)
+      .eq("jersey_number", jerseyNumber)
+      .eq("size", size)
+      .eq("product_type", productType)
+      .eq("status", STATUS_AVAILABLE)
+      .limit(1);
     return {
       success: false,
-      message: "No matching inventory row found. Nothing to return.",
+      message:
+        (availRows ?? []).length > 0
+          ? `Jersey #${jerseyNumber} (${size}) is already Available. Nothing to return.`
+          : "No allocated inventory row found for that number and size. Nothing to return.",
     };
   }
 

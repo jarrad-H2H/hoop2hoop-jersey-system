@@ -10,6 +10,7 @@ import {
   allocateNumberForClub,
   returnJerseyToStock,
   logAllocationEvent,
+  releasePlayerJersey,
 } from "../services/allocation";
 
 interface Club {
@@ -569,19 +570,25 @@ const Allocation: React.FC = () => {
     try {
       const playerId = currentPlayer.id;
 
-      const { error: invError } = await supabase
-        .from("inventory")
-        .update({ status: "Available", allocated_player_id: null, allocation_date: null, return_date_due: null })
-        .eq("club_id", selectedClubId)
-        .eq("allocated_player_id", playerId)
-        .eq("status", "Allocated");
+      // Frees by player link first, then falls back to the player's widget purchase record
+      // (widget jerseys have no allocated_player_id, so the link alone silently freed nothing).
+      const release = await releasePlayerJersey({
+        clubId: selectedClubId,
+        playerId,
+        firstName: currentPlayer.first_name,
+        lastName: currentPlayer.last_name,
+        yearOfBirth: currentPlayer.year_of_birth,
+        jerseyNumber: currentNumber,
+        productType: selectedProductType,
+      });
 
-      if (invError) {
-        console.error("EndAllocation inventory update error", invError);
+      if (release.error) {
+        console.error("EndAllocation inventory update error", release.error);
         setAllocationMessage("Failed to release jersey from inventory. No changes were made to the player.");
         setEndingAllocation(false);
         return;
       }
+      const freedJersey = release.freed[0] ?? null;
 
       const { error: playerError } = await supabase
         .from("players")
@@ -602,8 +609,10 @@ const Allocation: React.FC = () => {
         jersey_number: null,
         size: null,
         previous_jersey_number: currentNumber,
-        previous_size: null,
-        note: `End allocation: freed #${currentNumber}`,
+        previous_size: freedJersey?.size ?? null,
+        note: freedJersey
+          ? `End allocation: freed #${currentNumber} (${freedJersey.size}) back to stock`
+          : `End allocation: cleared #${currentNumber} (no stock jersey linked - stock unchanged)`,
         productType: selectedProductType,
       });
 
@@ -611,9 +620,16 @@ const Allocation: React.FC = () => {
         prev.map((p) => (p.id === playerId ? { ...p, final_shirt: null } : p))
       );
 
-      setAllocationMessage(
-        `Ended allocation: jersey #${currentNumber} freed from this player and returned to available stock.`
-      );
+      if (freedJersey) {
+        setAllocationMessage(
+          `Ended allocation: jersey #${currentNumber} (${freedJersey.size}) freed from this player and returned to available stock.`
+        );
+      } else {
+        setAllocationMessage(
+          `Number #${currentNumber} was cleared from this player, but no stock jersey could be linked to them, so stock was NOT changed. ` +
+            `If a physical jersey is coming back, use "Return to Stock" at the bottom of this page.`
+        );
+      }
       setStatusMessage(`Number ${currentNumber} is now free for reuse.`);
     } catch (err: any) {
       console.error("handleEndAllocation error", err);
@@ -683,19 +699,24 @@ const Allocation: React.FC = () => {
       const playerId = currentPlayer.id;
       const previousNumber = currentPlayer.final_shirt ?? null;
 
-      const { error: invFreeError } = await supabase
-        .from("inventory")
-        .update({ status: "Available", allocated_player_id: null, allocation_date: null, return_date_due: null })
-        .eq("club_id", selectedClubId)
-        .eq("allocated_player_id", playerId)
-        .eq("status", "Allocated");
+      // Free the old jersey by player link, falling back to the player's widget purchase record.
+      const release = await releasePlayerJersey({
+        clubId: selectedClubId,
+        playerId,
+        firstName: currentPlayer.first_name,
+        lastName: currentPlayer.last_name,
+        yearOfBirth: currentPlayer.year_of_birth,
+        jerseyNumber: previousNumber,
+        productType: selectedProductType,
+      });
 
-      if (invFreeError) {
-        console.error("SwapJersey inventory free error", invFreeError);
+      if (release.error) {
+        console.error("SwapJersey inventory free error", release.error);
         setAllocationMessage("Failed to free existing jersey from inventory. Exchange aborted.");
         setSwapBusy(false);
         return;
       }
+      const freedOldJersey = release.freed[0] ?? null;
 
       const invResult = await allocateNumberForClub(selectedClubId, newNumber, swapSize, selectedProductType);
 
@@ -747,7 +768,7 @@ const Allocation: React.FC = () => {
         jersey_number: newNumber,
         size: swapSize,
         previous_jersey_number: previousNumber,
-        previous_size: null,
+        previous_size: freedOldJersey?.size ?? null,
         note: noteText,
         productType: selectedProductType,
       });
@@ -765,7 +786,12 @@ const Allocation: React.FC = () => {
       );
 
       setAllocationMessage(
-        `Exchange complete: ${currentPlayer.first_name} ${currentPlayer.last_name} now has #${newNumber} (${swapSize}). Old jersey freed, new one reserved.`
+        `Exchange complete: ${currentPlayer.first_name} ${currentPlayer.last_name} now has #${newNumber} (${swapSize}). ` +
+          (freedOldJersey
+            ? `Old jersey #${freedOldJersey.jersey_number} (${freedOldJersey.size}) freed, new one reserved.`
+            : previousNumber != null
+              ? `New one reserved, but no old stock jersey could be linked to this player, so the old jersey was NOT returned to stock. If it is physically coming back, use "Return to Stock" below.`
+              : `New one reserved.`)
       );
 
       setSwapNumber("");
