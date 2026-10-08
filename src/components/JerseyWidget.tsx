@@ -948,6 +948,13 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     // YOB ±1 window rather than team-aware same-team blocking.
     const yobWindowMode = wc?.clash_detection_mode === "yob_window";
 
+    // Layer 1 (ALLOCATION_LOGIC.md 2b/2c): the birth-year window ALWAYS applies, unless the buyer is
+    // a returning player confirmed by name lookup (Plan B). A team the buyer merely picked from the
+    // dropdown can only ADD protection (same-team block), it never replaces the birth-year check.
+    const planBActive = effectiveDivisionCode !== undefined;
+    const enforceYobWindow = !planBActive;
+    const pickedTeamCode = !planBActive && !yobWindowMode ? selectedTeamName : undefined;
+
     setLoadingSuggest(true);
     setSuggestions([]);
     setSelectedNumber(null);
@@ -964,6 +971,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         crossPoolCheck,
         productType: selectedProductType,
         excludePlayerId: matchedPlayerId,
+        enforceYobWindow,
+        selectedTeamCode: pickedTeamCode,
         limit: 30,
       });
 
@@ -979,6 +988,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             crossPoolCheck,
             productType: selectedProductType,
             excludePlayerId: matchedPlayerId,
+            enforceYobWindow,
+            selectedTeamCode: pickedTeamCode,
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
             (s) => String(s.size).toLowerCase() === String(selectedSize).toLowerCase() && s.count > 0
@@ -1001,36 +1012,48 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       }
 
       if (!ranked || ranked.length === 0) {
-        // Fallback: if no specific team context was used, look up the player in the DB
-        // to find their team assignment, then re-run with team-only clash detection
-        // (only hard-blocking same-team numbers, freeing up numbers from other teams).
-        if (!effectiveDivisionCode && yobValid && !yobWindowMode) {
+        // Layer 3 (last resort, ALLOCATION_LOGIC.md): only reached when Layer 1 (birth-year window,
+        // plus any stated team) and Layer 2 (Plan B) left NO number in this size. It goes by team
+        // alone (the birth-year window is dropped), using the team found by name lookup and/or the
+        // team the buyer picked from the dropdown, so teammates' numbers are still excluded.
+        if (!planBActive && yobValid && !yobWindowMode) {
           try {
-            const lookup = await lookupPlayerByName({
-              clubId: selectedClubId,
-              firstName: firstName.trim(),
-              lastName: lastName.trim(),
-              yearOfBirth: yobNum,
-            });
-            // When multiple records share the same name, pick the first with a team assignment.
-            const fallbackDivisionCode = lookup.divisionCode
-              ?? lookup.candidates?.find(c => c.divisionCode)?.divisionCode
-              ?? null;
-            const fallbackTeamName = lookup.teamName
-              ?? lookup.candidates?.find(c => c.divisionCode)?.teamName
-              ?? null;
-            const fallbackPlayerId = lookup.playerId
-              ?? lookup.candidates?.find(c => c.divisionCode)?.playerId
-              ?? null;
-            if (lookup.found && fallbackDivisionCode && fallbackTeamName) {
+            let fallbackDivisionCode: string | null = null;
+            let fallbackTeamName: string | null = null;
+            let fallbackPlayerId: string | null = null;
+            try {
+              const lookup = await lookupPlayerByName({
+                clubId: selectedClubId,
+                firstName: firstName.trim(),
+                lastName: lastName.trim(),
+                yearOfBirth: yobNum,
+              });
+              if (lookup.found) {
+                // When multiple records share the same name, pick the first with a team assignment.
+                fallbackDivisionCode = lookup.divisionCode
+                  ?? lookup.candidates?.find(c => c.divisionCode)?.divisionCode
+                  ?? null;
+                fallbackTeamName = lookup.teamName
+                  ?? lookup.candidates?.find(c => c.divisionCode)?.teamName
+                  ?? null;
+                fallbackPlayerId = lookup.playerId
+                  ?? lookup.candidates?.find(c => c.divisionCode)?.playerId
+                  ?? null;
+              }
+            } catch (_) {
+              // lookup failed — rely on the picked team below (if any)
+            }
+            const haveLookupTeam = Boolean(fallbackDivisionCode && fallbackTeamName);
+            if (haveLookupTeam || selectedTeamName) {
               const fallbackRanked = await suggestNumbersForClubRanked({
                 clubId: selectedClubId,
                 size: selectedSize,
                 seasonYear: SEASON_YEAR,
                 yearOfBirth: yobForSearch,
-                ageGroup: yobWindowMode ? undefined : (effectiveAgeGroup ?? undefined),
-                divisionCode: fallbackDivisionCode,
-                teamName: fallbackTeamName,
+                ageGroup: effectiveAgeGroup ?? undefined,
+                divisionCode: haveLookupTeam ? fallbackDivisionCode : undefined,
+                teamName: haveLookupTeam ? fallbackTeamName : selectedTeamName,
+                selectedTeamCode: selectedTeamName,
                 crossPoolCheck,
                 productType: selectedProductType,
                 excludePlayerId: matchedPlayerId ?? fallbackPlayerId ?? undefined,

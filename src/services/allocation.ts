@@ -170,6 +170,7 @@ export interface ClashPlayer {
   first_name: string;
   last_name: string;
   division_code: string | null; // e.g. "JGC1" (GC) or "14B.1" (Seahawks)
+  team_id?: string | null;      // BC team code on older imports, e.g. "12GC3"
   team_name: string | null;     // e.g. "BLAZES" (GC), null for Seahawks
   age_group: string | null;     // e.g. "U14"
   final_shirt: number | null;
@@ -219,6 +220,52 @@ export interface SmartCheckOptions {
    * flagged as a "same-team clash" against themselves.
    */
   excludePlayerId?: string | null;
+  /**
+   * When true the YOB-window check ALWAYS runs, in addition to any same-team check. Use it for
+   * every buyer whose team is self-declared or unconfirmed (i.e. everyone except a returning
+   * player confirmed by name lookup -- Plan B). A stated team can then only ADD protection;
+   * it never replaces the birth-year check (ALLOCATION_LOGIC.md 2b/2c, Layer 1).
+   */
+  enforceYobWindow?: boolean;
+  /**
+   * The team code the buyer picked from the widget dropdown (e.g. "12GC3", "10BC3/4").
+   * Teammates are stored under that code in several different fields (division_code,
+   * team_name, team_id), so an exact (division, team name) match rarely finds them. When
+   * provided, anyone active holding the number under that code (or any part of a combined
+   * code such as "10BC3/4" = 10BC3 + 10BC4) counts as a same-team clash. Additive only.
+   */
+  selectedTeamCode?: string | null;
+}
+
+/** Team-code variants to match against stored player records ("10BC3/4" -> 10BC3/4, 10BC3, 10BC4). */
+function teamCodeVariants(code: string | null | undefined): string[] {
+  const c = (code ?? "").trim();
+  if (!c) return [];
+  const out = new Set<string>([c]);
+  const combined = c.match(/^(\d+[A-Za-z]+)(\d+(?:\/\d+)+)$/);
+  if (combined) {
+    for (const part of combined[2].split("/")) out.add(`${combined[1]}${part}`);
+  }
+  return Array.from(out);
+}
+
+/** PostgREST .or() filter matching a picked team code in any of the fields teams are stored under. */
+function teamCodeOrFilter(code: string | null | undefined): string | null {
+  const variants = teamCodeVariants(code);
+  if (variants.length === 0) return null;
+  return variants
+    .flatMap((v) => [`division_code.eq.${v}`, `team_name.eq.${v}`, `team_id.eq.${v}`])
+    .join(",");
+}
+
+function holderMatchesTeamCode(
+  p: { division_code?: string | null; team_name?: string | null; team_id?: string | null },
+  code: string | null | undefined
+): boolean {
+  const variants = teamCodeVariants(code);
+  return variants.some(
+    (v) => p.division_code === v || p.team_name === v || p.team_id === v
+  );
 }
 
 export interface SmartCheckResult {
@@ -330,6 +377,8 @@ export async function smartCheckNumber(
     crossPoolCheck = false,
     productType = "default",
     excludePlayerId,
+    enforceYobWindow = false,
+    selectedTeamCode = null,
   } = options;
 
   const seasonYear =
@@ -337,13 +386,47 @@ export async function smartCheckNumber(
       ? optSeasonYear
       : new Date().getFullYear();
 
+  // Birth-year-window clashes among the given holders (ALLOCATION_LOGIC.md 2b). Shared by the
+  // no-team path and by the "always enforce birth year" layer on top of a stated team.
+  const yobWindowClashes = (holders: ClashPlayer[]): ClashPlayer[] => {
+    if (typeof yearOfBirth !== "number" || !Number.isFinite(yearOfBirth)) {
+      // No YOB at all — flag all active holders as clashes (safe fallback)
+      return holders.filter(
+        (p) => p.bc_last_seen_season === null || (p.bc_last_seen_season ?? 0) >= seasonYear - 2
+      );
+    }
+    // Note: hasU8Division needs an async query and smartCheckNumber is called per-number,
+    // so hasU8=false here (conservative: uses the ±1 window for U10). The proactive filter in
+    // suggestNumbersForClubRanked does the full U8 check.
+    const clashWin = getClashYobWindow(yearOfBirth, seasonYear, /* hasU8 */ false);
+    return holders.filter((p) => {
+      // Inactive players don't block numbers
+      if (p.bc_last_seen_season !== null && p.bc_last_seen_season !== undefined &&
+          p.bc_last_seen_season < seasonYear - 2) {
+        return false;
+      }
+      // Cross-pool: same age group (or girls Junior/Open Girls merge bucket) = hard clash regardless of YOB window
+      if (crossPoolCheck && isSameMergeBucket(ageGroup, p.age_group)) {
+        return true;
+      }
+      return yobOverlapsWindow(
+        p.year_of_birth,
+        p.estimated_yob_min,
+        p.estimated_yob_max,
+        p.age_group,
+        seasonYear,
+        clashWin
+      );
+    });
+  };
+
   // Fetch all ACTIVE players in this club wearing this jersey number. Inactive/released
   // players (bc_last_seen_season < seasonYear - 2) must not block their old number for
   // the team-aware path either -- this filter previously only applied in the YOB-window
   // fallback branch, so the (far more common) team-aware path never freed up old numbers.
   let clashQuery = supabase
     .from("players")
-    .select("id, first_name, last_name, division_code, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, bc_last_seen_season")
+    .select("id, first_name, last_name, division_code, team_id, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, bc_last_seen_season")
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber)
     .is("deleted_at", null)
@@ -390,38 +473,27 @@ export async function smartCheckNumber(
         }
       }
     }
+
+    // Additive layers on top of the stated team. A stated team can only ADD protection:
+    // (a) teammates stored under the picked team code in any field, (b) the birth-year window.
+    if (selectedTeamCode) {
+      for (const p of allNumberHolders) {
+        if (!hardClashes.includes(p) && holderMatchesTeamCode(p, selectedTeamCode)) {
+          hardClashes.push(p);
+        }
+      }
+    }
+    if (enforceYobWindow) {
+      for (const p of yobWindowClashes(allNumberHolders)) {
+        if (!hardClashes.includes(p)) hardClashes.push(p);
+      }
+    }
+    if (hardClashes.length > 0) {
+      softWarnings = softWarnings.filter((p) => !hardClashes.includes(p));
+    }
   } else {
     // Widget path: YOB-window clash logic (ALLOCATION_LOGIC.md rules).
-    // Note: hasU8Division requires an async query but smartCheckNumber is called
-    // per-number so we pass hasU8=false here (conservative: uses ±1 window for U10).
-    // The proactive filter in suggestNumbersForClubRanked does the full U8 check.
-    if (typeof yearOfBirth !== "number" || !Number.isFinite(yearOfBirth)) {
-      // No YOB at all — flag all active holders as clashes (safe fallback)
-      hardClashes = allNumberHolders.filter(
-        (p) => p.bc_last_seen_season === null || (p.bc_last_seen_season ?? 0) >= seasonYear - 2
-      );
-    } else {
-      const clashWin = getClashYobWindow(yearOfBirth, seasonYear, /* hasU8 */ false);
-      hardClashes = allNumberHolders.filter((p) => {
-        // Inactive players don't block numbers
-        if (p.bc_last_seen_season !== null && p.bc_last_seen_season !== undefined &&
-            p.bc_last_seen_season < seasonYear - 2) {
-          return false;
-        }
-        // Cross-pool: same age group (or girls Junior/Open Girls merge bucket) = hard clash regardless of YOB window
-        if (crossPoolCheck && isSameMergeBucket(ageGroup, p.age_group)) {
-          return true;
-        }
-        return yobOverlapsWindow(
-          p.year_of_birth,
-          p.estimated_yob_min,
-          p.estimated_yob_max,
-          p.age_group,
-          seasonYear,
-          clashWin
-        );
-      });
-    }
+    hardClashes = yobWindowClashes(allNumberHolders);
   }
 
   // ── Inventory check ──────────────────────────────────────────────────────────
@@ -464,13 +536,25 @@ export async function smartCheckNumber(
         (p) => !((p.division_code ?? null) === (divisionCode ?? null) &&
                  (p.team_name ?? null) === (teamName ?? null))
       );
+      // A clash that is not a teammate (only possible with enforceYobWindow) is a player of a
+      // similar age elsewhere at the club.
+      const hasTeammateClash = hardClashes.some(
+        (p) =>
+          ((p.division_code ?? null) === (divisionCode ?? null) &&
+            (p.team_name ?? null) === (teamName ?? null)) ||
+          (selectedTeamCode ? holderMatchesTeamCode(p, selectedTeamCode) : false)
+      );
       statusMessage = hasCrossPoolClash
         ? hasStock
           ? "This number is worn by another team in the same age group (cross-pool check) — choose a different number."
           : "This number is worn by another team in the same age group and there is no available stock."
-        : hasStock
-          ? "This number is already worn by a teammate — choose a different number."
-          : "This number is already worn by a teammate and there is no available stock.";
+        : enforceYobWindow && !hasTeammateClash
+          ? hasStock
+            ? "This number is already used by a player of a similar age at this club — choose a different number."
+            : "This number is already used by a player of a similar age at this club and there is no available stock."
+          : hasStock
+            ? "This number is already worn by a teammate — choose a different number."
+            : "This number is already worn by a teammate and there is no available stock.";
     } else if (hasSoftWarning && hasStock) {
       statusMessage =
         "This number is used in an adjacent age group (different team). Consider another number, but you can proceed.";
@@ -607,6 +691,10 @@ export async function suggestNumbersForClubRanked(input: {
   productType?: string;
   /** Excludes the confirmed player's own existing jersey record from clash checks. */
   excludePlayerId?: string | null;
+  /** Always run the birth-year window, even when a team is given (a team can only add protection). */
+  enforceYobWindow?: boolean;
+  /** Team code the buyer picked from the dropdown; blocks teammates stored under it (additive). */
+  selectedTeamCode?: string | null;
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
   // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
@@ -615,6 +703,9 @@ export async function suggestNumbersForClubRanked(input: {
   // team context — see matching comment in smartCheckNumber.
   const hasTeamContext =
     input.divisionCode !== undefined || input.teamName !== undefined;
+  // Team-aware scoring/relaxation (Plan B and the last-resort fallback) only when the birth-year
+  // window is NOT being enforced on top. With enforceYobWindow the birth-year path decides.
+  const teamAware = hasTeamContext && !input.enforceYobWindow;
 
   const currentYear = input.seasonYear || new Date().getFullYear();
   const targetAge = currentYear - input.yearOfBirth;
@@ -681,7 +772,34 @@ export async function suggestNumbersForClubRanked(input: {
       const n = Number((p as any).final_shirt);
       if (Number.isFinite(n)) blockedNums.add(n);
     }
-  } else {
+  }
+
+  // Additive: teammates stored under the buyer's picked team code (see selectedTeamCode).
+  const pickedTeamFilter = teamCodeOrFilter(input.selectedTeamCode);
+  if (pickedTeamFilter) {
+    let pickedTeamQuery = supabase
+      .from("players")
+      .select("final_shirt")
+      .eq("club_id", input.clubId)
+      .in("final_shirt", candidateNums)
+      .is("deleted_at", null)
+      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`)
+      .or(pickedTeamFilter);
+    if (input.excludePlayerId) {
+      pickedTeamQuery = pickedTeamQuery.neq("id", input.excludePlayerId);
+    }
+    const { data: pickedTeamPlayers, error: ptErr } = await pickedTeamQuery;
+    if (ptErr) {
+      console.error("picked-team block query error", ptErr);
+      throw new Error("Failed to load picked-team player data.");
+    }
+    for (const p of pickedTeamPlayers ?? []) {
+      const n = Number((p as any).final_shirt);
+      if (Number.isFinite(n)) blockedNums.add(n);
+    }
+  }
+
+  if (!hasTeamContext || input.enforceYobWindow) {
     // ── Widget path: full YOB-window clash logic (ALLOCATION_LOGIC.md) ──────────
 
     // For U10 buyers (age 8-9) check whether U8 exists at this club —
@@ -837,8 +955,8 @@ export async function suggestNumbersForClubRanked(input: {
     }
   }
 
-  // Team path adjacent penalty (runs when hasTeamContext)
-  if (hasTeamContext) {
+  // Team path adjacent penalty (runs for team-aware scoring only)
+  if (teamAware) {
     const adjacentGroups = Array.from(new Set([
       ...AGE_GROUP_ORDER.filter((ag) => {
         const reqIdx = ageGroupIndex(input.ageGroup);
@@ -884,7 +1002,7 @@ export async function suggestNumbersForClubRanked(input: {
     return a.jersey_number - b.jersey_number;
   };
 
-  if (hasTeamContext) {
+  if (teamAware) {
     // Team-aware path: split into primary (no adjacent-age warning) and secondary (has warning).
     // Primary-only when 3+ clean numbers exist; otherwise append top 3 from secondary.
     const primaryPool: NumberSuggestion[] = [];

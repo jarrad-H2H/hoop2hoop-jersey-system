@@ -43,6 +43,20 @@ Update this file whenever new rules are agreed, then update the code to match.
 
 ---
 
+### 2e. Allocation Layers (agreed 2026-10-08)
+
+The widget works down these layers and only moves to the next when the previous one leaves **no number in the buyer's size**:
+
+1. **Layer 1 — Strict (default for everyone not confirmed by name lookup).** The ±1 birth-year window (Section 3) **always** applies, whatever team the buyer selects. A team the buyer merely *picks from the dropdown* is unverified, so it can only **add** protection: anyone holding the number under the picked team code (in `division_code`, `team_name` or `team_id`; combined codes such as `10BC3/4` also match `10BC3` and `10BC4`) is also blocked. It never replaces or relaxes the birth-year check. (`enforceYobWindow` + `selectedTeamCode` in `allocation.ts`.) The birth year used is whatever the buyer typed — a wrong year entered by a parent is not something the system can detect.
+2. **Layer 2 — Plan B.** A **returning player confirmed by name lookup ("Did you mean…?") with a known team** gets the relaxation in 2c: only same-team numbers are hard-blocked. Unchanged.
+3. **Layer 3 — Last resort (team only).** Only if Layers 1–2 leave no number in the size: go by team alone, dropping the birth-year window. The team is the one found by name lookup and/or the one the buyer picked. Before 2026-10-08 this fallback existed (added 2026-09-04 for Celtics when sizes ran short) but was undocumented and ran without identity confirmation. Business decision (Jarrad, 2026-10-08): keep it, but strictly as the last layer after birth year has been exhausted.
+
+**Stored teams can only add protection, never remove it.** Team data goes stale between seasons (we hold last season's allocations while buyers enter next season's) and mixes two sources — BC team names (SHAMROCKS, CLOVERS…) and the club's own registration labels (e.g. BOSTON, CRUSHERS) — so a stored team must never be the reason a number is *allowed* when a birth-year check would block it, except in Layer 3 (explicitly the last resort) and Plan B (confirmed identity).
+
+**Known limitation (not yet changed):** a purchase made as "new player" is stored on a separate record with a number but no team, while the club's team-list record has the team but no number. Layer 3 matches on stored team, so it cannot see that number. Resolving the two records by name would close this but has not been agreed.
+
+---
+
 ## 3. Age Group Clash Windows
 
 | Player Age (current_year − YOB) | Division | Clash Window |
