@@ -390,17 +390,29 @@
       form.parentElement;
 
     if (searchRoot) {
-      // Find the last variant picker sibling
-      var variantEls = $all("variant-radios, variant-selects", searchRoot);
-      var lastVariant = variantEls.length ? variantEls[variantEls.length - 1] : null;
-      if (lastVariant && lastVariant.parentNode) {
-        var afterVariant = lastVariant.nextSibling;
-        if (afterVariant) {
-          lastVariant.parentNode.insertBefore(host, afterVariant);
-        } else {
-          lastVariant.parentNode.appendChild(host);
-        }
+      // Preferred: insert before the product-form web component.
+      // In Dawn, the DOM order inside product-info is:
+      //   variant-radios → [stock count] → product-form → ATC button
+      // Inserting before product-form keeps the stock count above the widget.
+      var productFormEl = $("product-form", searchRoot);
+      if (productFormEl && productFormEl.parentNode) {
+        productFormEl.parentNode.insertBefore(host, productFormEl);
         inserted = true;
+      }
+
+      // Fallback: after the last variant picker (themes without product-form web component)
+      if (!inserted) {
+        var variantEls = $all("variant-radios, variant-selects", searchRoot);
+        var lastVariant = variantEls.length ? variantEls[variantEls.length - 1] : null;
+        if (lastVariant && lastVariant.parentNode) {
+          var afterVariant = lastVariant.nextSibling;
+          if (afterVariant) {
+            lastVariant.parentNode.insertBefore(host, afterVariant);
+          } else {
+            lastVariant.parentNode.appendChild(host);
+          }
+          inserted = true;
+        }
       }
     }
 
@@ -422,10 +434,10 @@
     }
 
     if (!inserted) {
-      // Fallback: before product-form web component
-      var productFormEl = form.closest("product-form");
-      if (productFormEl && productFormEl.parentNode) {
-        productFormEl.parentNode.insertBefore(host, productFormEl);
+      // Fallback: before product-form web component (searched from form upward)
+      var productFormElFallback = form.closest("product-form");
+      if (productFormElFallback && productFormElFallback.parentNode) {
+        productFormElFallback.parentNode.insertBefore(host, productFormElFallback);
         inserted = true;
       }
     }
