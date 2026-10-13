@@ -1,8 +1,18 @@
 // FILE: src/components/Importer.tsx
 import React, { useState, useEffect, ChangeEvent } from "react";
 import { supabase } from "../services/supabase";
+import {
+  ParsingStrategy,
+  ParsedPlayer,
+  ExistingPlayerRef,
+  parseCsv,
+  parseBcRows,
+  parseAgeGroupFromCode,
+  parseGenderFromDivision,
+  estimateYobRange,
+  planReturningPlayers,
+} from "../services/bcImport";
 
-type ParsingStrategy = "north_gc" | "gold_coast";
 type ImportMode = "upsert" | "replace";
 
 interface Competition {
@@ -10,199 +20,9 @@ interface Competition {
   name: string;
 }
 
-interface RawRow {
-  [key: string]: string;
-}
-
-interface ParsedPlayer {
-  bcPlayerId: string;
-  bcUserId: string;
-  firstName: string;
-  lastName: string;
-  clubName: string;
-  teamRaw: string;
-  divisionCode: string | null;   // e.g. "JGC1", "16BC2"
-  teamName: string | null;       // e.g. "BLAZES", "FLAMES"
-  ageGroup: string;              // normalised: U10/U12/U14/U16/U18/U20/SLG
-  ageGroupRaw: string;           // raw BC value
-  divisionGrade: string;
-  finalShirt: number | null;
-  borrowingDivision: string | null;
-  isBorrowed: boolean;
-  playing: string;
-}
-
 interface PreviewRow extends ParsedPlayer {
   clubId: string | null;
   isNewClub: boolean;
-}
-
-// ─── Age group normalisation ──────────────────────────────────────────────────
-function normalizeAgeGroup(raw: string): string {
-  const s = (raw ?? "").trim().toUpperCase();
-  const underMatch = s.match(/^UNDER\s+(\d+)/);
-  if (underMatch) return `U${underMatch[1]}`;
-  const uMatch = s.match(/^U(\d+)/);
-  if (uMatch) return `U${uMatch[1]}`;
-  if (s.startsWith("JUNIOR")) return "Junior";          // "Junior" age group (not U14)
-  if (/SUPERLEA[GU]/i.test(s)) return "SLG";           // Super League Girls only
-  if (/^OPEN\s+GIRLS?/i.test(s)) return "Open Girls";  // Open Girls competition
-  if (/^OPEN/i.test(s)) return "Open";                 // Other Open divisions
-  if (/^SENIOR/i.test(s)) return "Seniors";            // Senior / adult
-  return raw.trim();
-}
-
-// ─── Gender from division code + raw age group string ────────────────────────
-// Returns 'Male' | 'Female' | 'Mixed' | null (unknown)
-function parseGenderFromDivision(
-  divisionCode: string | null,
-  ageGroupRaw: string
-): string | null {
-  const s = `${divisionCode ?? ""} ${ageGroupRaw}`.toUpperCase();
-  if (/MIXED|MIX(\b|$)|\bJMC\b/.test(s)) return "Mixed";
-  // Female: digit followed by G (e.g. "16G", "10G"), or keyword
-  if (/\d+G[\W._]|\d+G$|\bJGC?\b|GIRL|FEMALE|WOMEN/.test(s)) return "Female";
-  // Male: digit followed by B (e.g. "16B", "10B"), or keyword
-  if (/\d+B[\W._]|\d+B$|\bJBC?\b|BOY|\bMALE\b|\bMEN\b/.test(s)) return "Male";
-  return null;
-}
-
-// ─── Age group from division code (for teams table) ──────────────────────────
-// Extracts "U16" from "16B.2", "U10" from "10G.1", etc.
-function parseAgeGroupFromCode(divisionCode: string | null): string | null {
-  if (!divisionCode) return null;
-  const numMatch = divisionCode.match(/^(\d{1,2})[A-Z]/);
-  if (numMatch) return `U${numMatch[1]}`;
-  const uMatch = divisionCode.match(/^U(\d{1,2})/i);
-  if (uMatch) return `U${uMatch[1]}`;
-  if (/^(JB|JG|JMC|JGC|JBC)/i.test(divisionCode)) return "Junior";
-  if (/^OGC/i.test(divisionCode)) return "Open Girls"; // Open Girls (e.g. OGC1, OGC2)
-  if (/^SLG/i.test(divisionCode)) return "SLG";        // Super League Girls
-  return null;
-}
-
-// ─── Dedup priority score ─────────────────────────────────────────────────────
-function dedupScore(p: ParsedPlayer): number {
-  let score = 0;
-  if (p.finalShirt === null) score += 100;
-  if (p.isBorrowed) score += 10;
-  if (p.playing !== "1") score += 1;
-  return score;
-}
-
-// ─── YOB range estimation from age group ─────────────────────────────────────
-// Returns estimated birth year range for clash-window calculations.
-// min = oldest possible birth year, max = youngest possible birth year.
-// Derived dynamically from competition year — never hardcoded year constants.
-function estimateYobRange(
-  ageGroup: string,
-  competitionYear: number
-): { min: number | null; max: number | null } {
-  switch (ageGroup) {
-    case "U8":   return { min: competitionYear - 7,  max: competitionYear - 5  }; // ages 5–7
-    case "U10":  return { min: competitionYear - 9,  max: competitionYear - 8  }; // ages 8–9
-    case "U12":  return { min: competitionYear - 11, max: competitionYear - 10 }; // ages 10–11
-    case "U14":  return { min: competitionYear - 13, max: competitionYear - 12 }; // ages 12–13
-    case "U16":  return { min: competitionYear - 15, max: competitionYear - 14 }; // ages 14–15
-    case "U18":  return { min: competitionYear - 17, max: competitionYear - 16 }; // ages 16–17
-    case "Open":
-    case "Seniors":
-    case "SLG":  return { min: competitionYear - 99, max: competitionYear - 18 }; // 18+
-    case "Open Girls": return { min: competitionYear - 99, max: competitionYear - 16 }; // girls only: U18 + Open/Seniors merged, ages 16+
-    case "Junior": return { min: competitionYear - 15, max: competitionYear - 12 }; // girls only: U14 + U16 merged, ages 12-15
-    default:     return { min: null, max: null };
-  }
-}
-
-// ─── Club name overrides ──────────────────────────────────────────────────────
-const CLUB_NAME_OVERRIDES: Record<string, string> = {
-  VARSTIY: "Varsity",   // typo variant
-  VARSITY: "Varsity",   // all-caps variant
-  COPPERHEADS: "Varsity",
-  "KING'S": "King's",  // case variants
-};
-
-function normalizeClubName(raw: string): string {
-  const upper = raw.trim().toUpperCase();
-  return CLUB_NAME_OVERRIDES[upper] ?? raw.trim();
-}
-
-// ─── Multi-word club prefixes ─────────────────────────────────────────────────
-const MULTI_WORD_CLUB_PREFIXES: string[] = [
-  "EMMANUEL COLLEGE",
-  "GOLD COAST BASKETBALL",
-  "NORTH GOLD COAST SEAHAWKS",
-];
-
-function matchMultiWordClub(raw: string): [string, string] | null {
-  const upper = raw.trim().toUpperCase();
-  for (const prefix of MULTI_WORD_CLUB_PREFIXES) {
-    if (upper === prefix || upper.startsWith(prefix + " ")) {
-      const club = raw.trim().slice(0, prefix.length);
-      const rest = raw.trim().slice(prefix.length).trim();
-      return [club, rest];
-    }
-  }
-  return null;
-}
-
-// ─── Team field parsing ───────────────────────────────────────────────────────
-function looksLikeTeamCode(token: string): boolean {
-  return /^(\d{1,2}|[JOS])[A-Z]{1,2}\d/i.test(token);
-}
-
-function deriveTeamFields(
-  teamRaw: string,
-  strategy: ParsingStrategy
-): { clubName: string; divisionCode: string | null; teamName: string | null } {
-  const trimmed = teamRaw.trim();
-  const parts = trimmed.split(/\s+/).filter(Boolean);
-
-  if (parts.length === 0) return { clubName: "", divisionCode: null, teamName: null };
-
-  if (strategy === "north_gc") {
-    const clubName = parts[0] ?? "";
-    const divisionCode = parts.slice(1).join(" ") || null;
-    return { clubName, divisionCode, teamName: null };
-  }
-
-  if (looksLikeTeamCode(parts[0])) {
-    const divisionCode = parts[0];
-    const remainder = parts.slice(1).join(" ");
-    const multi = matchMultiWordClub(remainder);
-    if (multi) {
-      const [clubName, teamRest] = multi;
-      return { clubName, divisionCode, teamName: teamRest || null };
-    }
-    const clubName = parts[1] ?? "";
-    const teamName = parts.slice(2).join(" ") || null;
-    return { clubName, divisionCode, teamName };
-  } else {
-    const multi = matchMultiWordClub(trimmed);
-    if (multi) {
-      const [clubName, teamRest] = multi;
-      return { clubName, divisionCode: null, teamName: teamRest || null };
-    }
-    const clubName = parts[0] ?? "";
-    const teamName = parts.slice(1).join(" ") || null;
-    return { clubName, divisionCode: null, teamName };
-  }
-}
-
-// ─── CSV parser ───────────────────────────────────────────────────────────────
-function parseCsv(text: string): RawRow[] {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length < 2) return [];
-  const header = lines[0].split(",").map((h) => h.trim());
-  const rows: RawRow[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",");
-    if (cols.length === 1 && cols[0].trim() === "") continue;
-    const row: RawRow = {};
-    header.forEach((key, idx) => { row[key] = (cols[idx] ?? "").trim(); });
-    rows.push(row);
-  }
-  return rows;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -292,77 +112,7 @@ const Importer: React.FC = () => {
         return;
       }
 
-      const seenBcIds = new Map<string, ParsedPlayer>();
-      const noBcIdRows: ParsedPlayer[] = [];
-
-      for (const row of rawRows) {
-        const teamRaw = (row["Played For (Team)"] ?? row["playedForTeam"] ?? "").trim();
-        const { clubName, divisionCode, teamName } = deriveTeamFields(teamRaw, parsingStrategy);
-
-        const bcPlayerId = (row["Player Id"] ?? row["Player ID"] ?? "").trim();
-        // "User ID" is the stable cross-team identifier in BC's export -- unlike "Player Id"
-        // (above), which can change between separate team registrations for the same person.
-        const bcUserId = (row["User ID"] ?? row["UserId"] ?? "").trim();
-        const firstName = (row["First Name"] ?? row["FirstName"] ?? "").trim();
-        const lastName = (row["Last Name"] ?? row["LastName"] ?? "").trim();
-
-        const shirtStr = (row["finalShirt"] ?? row["FinalShirt"] ?? "").trim();
-        const shirtNum = shirtStr !== "" ? Number(shirtStr) : NaN;
-        const finalShirt = Number.isFinite(shirtNum) ? shirtNum : null;
-
-        // playerDivisionGrade = "UNDER 10 MIXED 3" — age + gender + specific grade number
-        // playerDivisionName  = "UNDER 10 MIXED"   — age + gender only (no grade)
-        // Use grade as primary; fall back to name if grade is missing
-        const divisionGrade = (row["playerDivisionGrade"] ?? "").trim();
-        const ageGroupRaw = (divisionGrade || (row["playerDivisionName"] ?? "")).trim();
-        // Prefer age group derived from the division code (e.g. "14G.1" → "U14") over
-        // the raw BC text field (e.g. playerDivisionGrade = "Super League Girls 1" → "SLG"),
-        // which can be misleading when a player has a cross-pool grade assignment.
-        const ageGroupFromCode = parseAgeGroupFromCode(divisionCode ?? null);
-        const ageGroup = ageGroupFromCode ?? normalizeAgeGroup(ageGroupRaw);
-        const playing = (row["playing"] ?? "").trim();
-
-        const currentDiv = (row["Current Team Division"] ?? "").trim().toUpperCase();
-        const borrowingDiv = (row["Borrowing Team Division"] ?? "").trim().toUpperCase();
-        const isBorrowed = borrowingDiv.length > 0 && borrowingDiv !== currentDiv;
-        const borrowingDivision = isBorrowed
-          ? normalizeAgeGroup(
-              (row["Borrowing Team Grade"] || (row["Borrowing Team Division"] ?? ""))
-            )
-          : null;
-
-        const player: ParsedPlayer = {
-          bcPlayerId,
-          bcUserId,
-          firstName,
-          lastName,
-          clubName: normalizeClubName(clubName),
-          teamRaw,
-          divisionCode,
-          teamName,
-          ageGroup,
-          ageGroupRaw,
-          divisionGrade,
-          finalShirt,
-          borrowingDivision,
-          isBorrowed,
-          playing,
-        };
-
-        if (bcPlayerId) {
-          const existing = seenBcIds.get(bcPlayerId);
-          if (!existing || dedupScore(player) < dedupScore(existing)) {
-            seenBcIds.set(bcPlayerId, player);
-          }
-        } else {
-          noBcIdRows.push(player);
-        }
-      }
-
-      const parsed: ParsedPlayer[] = [
-        ...Array.from(seenBcIds.values()),
-        ...noBcIdRows,
-      ];
+      const parsed: ParsedPlayer[] = parseBcRows(rawRows, parsingStrategy);
 
       if (parsed.length === 0) {
         setErrorMessage("No player rows found after parsing. Check the CSV format.");
@@ -513,8 +263,10 @@ const Importer: React.FC = () => {
       // ── Step 4: Upsert players ─────────────────────────────────────────────
       const currentYear = new Date().getFullYear();
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
+      let returningCount = 0;
+      let retiredCount = 0;
       if (withBcId.length > 0) {
-        const upsertPayload = withBcId.map((r) => {
+        const toPayload = (r: PreviewRow) => {
           const yob = estimateYobRange(r.ageGroup, currentYear);
           return {
             bc_player_id: r.bcPlayerId,
@@ -535,16 +287,105 @@ const Importer: React.FC = () => {
             estimated_yob_min: yob.min,
             estimated_yob_max: yob.max,
           };
+        };
+
+        // BC issues a new Player Id every season, so returning players are found by
+        // User ID instead and their existing record is updated in place (see bcImport.ts).
+        const pids = withBcId.map((r) => r.bcPlayerId);
+        const knownPlayerIds = new Set<string>();
+        for (let i = 0; i < pids.length; i += 200) {
+          const { data, error } = await supabase
+            .from("players")
+            .select("bc_player_id")
+            .in("bc_player_id", pids.slice(i, i + 200));
+          if (error) {
+            setErrorMessage(`Failed to check existing players: ${error.message}`);
+            return;
+          }
+          for (const p of data ?? []) knownPlayerIds.add(p.bc_player_id as string);
+        }
+
+        const importClubIds = Array.from(
+          new Set(withBcId.map((r) => clubMap.get(r.clubName) ?? r.clubId).filter(Boolean) as string[])
+        );
+        const existing: ExistingPlayerRef[] = [];
+        for (let from = 0; importClubIds.length > 0; from += 1000) {
+          const { data, error } = await supabase
+            .from("players")
+            .select("id, club_id, bc_player_id, bc_user_id, division_code, age_group, final_shirt")
+            .in("club_id", importClubIds)
+            .is("deleted_at", null)
+            .not("bc_user_id", "is", null)
+            .order("id")
+            .range(from, from + 999);
+          if (error) {
+            setErrorMessage(`Failed to load existing players: ${error.message}`);
+            return;
+          }
+          existing.push(...((data ?? []) as ExistingPlayerRef[]));
+          if (!data || data.length < 1000) break;
+        }
+
+        const plan = planReturningPlayers(
+          withBcId.map((r, key) => ({
+            key,
+            clubId: clubMap.get(r.clubName) ?? r.clubId ?? null,
+            bcPlayerId: r.bcPlayerId,
+            bcUserId: r.bcUserId,
+            divisionCode: r.divisionCode,
+            ageGroup: r.ageGroup,
+          })),
+          knownPlayerIds,
+          existing
+        );
+
+        const returningPayload: (ReturnType<typeof toPayload> & { id: string })[] = [];
+        const upsertPayload: ReturnType<typeof toPayload>[] = [];
+        withBcId.forEach((r, key) => {
+          const match = plan.matches.get(key);
+          if (match) {
+            // No shirt in BC this season doesn't mean the jersey was handed back — keep it.
+            returningPayload.push({ ...toPayload(r), id: match.id, final_shirt: r.finalShirt ?? match.final_shirt });
+          } else {
+            upsertPayload.push(toPayload(r));
+          }
         });
 
-        const { error: upsertErr } = await supabase
-          .from("players")
-          .upsert(upsertPayload, { onConflict: "bc_player_id", ignoreDuplicates: false });
-
-        if (upsertErr) {
-          setErrorMessage(`Player upsert failed: ${upsertErr.message}`);
-          return;
+        if (returningPayload.length > 0) {
+          const { error: returningErr } = await supabase
+            .from("players")
+            .upsert(returningPayload, { onConflict: "id" });
+          if (returningErr) {
+            setErrorMessage(`Returning player update failed: ${returningErr.message}`);
+            return;
+          }
         }
+
+        if (upsertPayload.length > 0) {
+          const { error: upsertErr } = await supabase
+            .from("players")
+            .upsert(upsertPayload, { onConflict: "bc_player_id", ignoreDuplicates: false });
+
+          if (upsertErr) {
+            setErrorMessage(`Player upsert failed: ${upsertErr.message}`);
+            return;
+          }
+        }
+
+        // Older registrations of a person who is in this import but now on fewer teams.
+        for (let i = 0; i < plan.surplusIds.length; i += 200) {
+          const { error: retireErr } = await supabase
+            .from("players")
+            .update({ deleted_at: new Date().toISOString() })
+            .in("id", plan.surplusIds.slice(i, i + 200));
+          if (retireErr) {
+            setErrorMessage(`Failed to retire old duplicate registrations: ${retireErr.message}`);
+            return;
+          }
+        }
+
+        returningCount = returningPayload.length;
+        retiredCount = plan.surplusIds.length;
       }
 
       const withoutBcId = previewRows.filter((r) => !r.bcPlayerId);
@@ -664,6 +505,8 @@ const Importer: React.FC = () => {
       const parts: string[] = [];
       if (importMode === "replace") parts.push("existing players cleared");
       if (withBcId.length > 0) parts.push(`${withBcId.length} players upserted`);
+      if (returningCount > 0) parts.push(`${returningCount} returning players matched by BC User ID`);
+      if (retiredCount > 0) parts.push(`${retiredCount} old duplicate registrations retired`);
       if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} players inserted`);
       if (newClubNames.length > 0) parts.push(`${newClubNames.length} club(s) created`);
       if (teamRows.length > 0) parts.push(`${teamRows.length} teams linked to "${season}"`);
@@ -715,7 +558,8 @@ const Importer: React.FC = () => {
       <div>
         <h2 className="text-2xl font-bold mb-2">Game Log Importer</h2>
         <p className="text-gray-600 text-sm">
-          Import Basketball Connect game log exports. Players are deduplicated by BC Player ID.
+          Import Basketball Connect game log exports. Players are deduplicated by BC Player ID; in
+          Merge mode, returning players from an earlier season are matched by BC User ID and updated in place.
           Teams are linked to the selected competition with parsed age group and gender.
         </p>
       </div>
