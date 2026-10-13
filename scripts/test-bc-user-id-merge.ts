@@ -1,6 +1,7 @@
 // Verifies planReturningPlayers (BC User ID matching for season-to-season Merge imports).
-// Pure logic, no DB. Run with: npx tsx scripts/test-bc-user-id-merge.ts
-import { planReturningPlayers, ExistingPlayerRef, ImportRegistration } from "../src/services/bcImport";
+// Also checks the U20 birth-year rule. Pure logic, no DB. Run with: npx tsx scripts/test-bc-user-id-merge.ts
+import { planReturningPlayers, estimateYobRange, ExistingPlayerRef, ImportRegistration } from "../src/services/bcImport";
+import { yobOverlapsWindow, getClashYobWindow } from "../src/services/allocation";
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -51,6 +52,16 @@ check("brand new player is not matched", m(5) === undefined);
 check("record from another club is never matched", m(6) === undefined && !plan.surplusIds.includes("other-club"));
 check("legacy record without User ID untouched", !plan.surplusIds.includes("no-uid"));
 check("exactly one record retired", plan.surplusIds.length === 1);
+
+// U20 rule (2026-10-13): BC U20 players are born 2009 or earlier (in 2026).
+const u20 = estimateYobRange("U20", 2026);
+check("U20 estimate is 2009 or older", u20.min === 1927 && u20.max === 2009);
+const clashes = (buyerYob: number) =>
+  yobOverlapsWindow(null, u20.min, u20.max, "U20", 2026, getClashYobWindow(buyerYob, 2026, false));
+check("U20 player clashes with a U18 buyer (born 2010)", clashes(2010));
+check("U20 player clashes with an adult buyer (born 2000)", clashes(2000));
+check("U20 player does NOT clash with a U16 buyer (born 2011)", !clashes(2011));
+check("U20 player does NOT clash with a U10 buyer (born 2017)", !clashes(2017));
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

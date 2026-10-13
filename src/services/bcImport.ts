@@ -95,6 +95,7 @@ export function estimateYobRange(
     case "U14":  return { min: competitionYear - 13, max: competitionYear - 12 }; // ages 12–13
     case "U16":  return { min: competitionYear - 15, max: competitionYear - 14 }; // ages 14–15
     case "U18":  return { min: competitionYear - 17, max: competitionYear - 16 }; // ages 16–17
+    case "U20":  return { min: competitionYear - 99, max: competitionYear - 17 }; // ages 17+ (born 2009 or earlier in 2026) — Hoop2Hoop rule 2026-10-13
     case "Open":
     case "Seniors":
     case "SLG":  return { min: competitionYear - 99, max: competitionYear - 18 }; // 18+

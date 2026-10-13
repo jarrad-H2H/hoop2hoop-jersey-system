@@ -82,6 +82,8 @@ SELECT EXISTS (
 
 **Junior age group** — confirmed with Gold Coast Basketball (2026-06-22): a girls-only division merging U14 + U16, i.e. ages 12–15. **Open Girls** — confirmed same date: a girls-only division merging U18 + Open/Seniors, i.e. ages 16 and up.
 
+**U20 (BC-imported players)** — Hoop2Hoop rule (2026-10-13): estimated YOB = born `current_year − 17` or earlier (2009 or older in 2026), i.e. `estimated_yob_min = year − 99`, `estimated_yob_max = year − 17`. Same rule in the importer (`estimateYobRange`) and the clash fallback (`estimateYobFromAgeGroup`). Before this, U20 had no estimate, and a player with no YOB data at all is conservatively treated as clashing with **every** buyer — so U20 numbers were blocked club-wide. Now they clash with U18 and adult buyers only.
+
 **SLG (Super League Girls)** — a separate age group in the Gold Coast competition, female-only, for elite girls. Treat as a single-gender pool; no cross-pool check.
 
 ---
@@ -238,7 +240,7 @@ If either condition is false → no cross-pool check (treat as single-gender poo
   - If BC has **no shirt number** this season for a matched player, the existing `final_shirt` is kept (registered-but-not-played ≠ jersey handed back).
   - A person who IS in the import but now on fewer teams has their extra old records **soft-deleted** (`deleted_at`).
   - A person **absent** from the import is never touched — club decision (Wolves, 2026-10-13): a player may sit a season out and come back expecting to keep their singlet, so their number stays blocked until the normal inactivity rule (Section 5) releases it.
-  - Records with no `bc_user_id` (imported before User ID capture) can't be matched — backfill `bc_user_id` from that season's CSV (Player Id → User ID) before the next season's Merge, otherwise they duplicate as before. Wolves was backfilled 2026-10-13; the other Seahawks clubs have not been.
+  - Records with no `bc_user_id` (imported before User ID capture) can't be matched — backfill `bc_user_id` from that season's CSV (Player Id → User ID) before the next season's Merge, otherwise they duplicate as before. All 12 Seahawks clubs were backfilled 2026-10-13 (every Seahawks player now has a `bc_user_id`); Wolves also has Winter 2026 data, the other 11 still hold Summer 2025/26 data.
   - The Seahawks file named "Seahawks Winter Jun 19 2026.csv" actually contains Summer 2025/26 games (Oct 2025–Mar 2026) — check the Start Time range of an export, not its filename.
 
 ### Club name structure differences
