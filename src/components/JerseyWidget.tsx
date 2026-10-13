@@ -707,6 +707,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // raw-label merge-bucket siblings of effectiveAgeGroup, gated on the player's gender
   // being known and Female (these divisions are girls-only). Also narrow by team gender
   // so a Male buyer never sees Female-only teams and vice versa (Mixed/unset always shown).
+  //
+  // Super League Girls (Seahawks) has no age limit — it is the only girls' competition above
+  // U14 and younger girls play up into it (BC exports: SLG girls also in U12G/U14G) — so a
+  // girl always sees her club's SLG teams, whatever her year of birth.
   const filteredTeams = useMemo(() => {
     if (!effectiveAgeGroup) return [];
     const bucketSiblingsLower = ageGroupBucketSiblings(effectiveAgeGroup).map((s) => s.toLowerCase());
@@ -719,7 +723,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         effectivePlayerGender === "Female" &&
         !!t.age_group &&
         bucketSiblingsLower.includes(t.age_group.trim().toLowerCase());
-      if (!standardMatch && !bucketMatch) return false;
+      const slgMatch = effectivePlayerGender === "Female" && tag === "SLG";
+      if (!standardMatch && !bucketMatch && !slgMatch) return false;
 
       if (!effectivePlayerGender) return true;
       const teamGender = (t.gender || "").trim();
