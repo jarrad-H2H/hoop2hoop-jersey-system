@@ -220,7 +220,8 @@ export function parseBcRows(rawRows: RawRow[], strategy: ParsingStrategy): Parse
 
     const shirtStr = (row["finalShirt"] ?? row["FinalShirt"] ?? "").trim();
     const shirtNum = shirtStr !== "" ? Number(shirtStr) : NaN;
-    const finalShirt = Number.isFinite(shirtNum) ? shirtNum : null;
+    // Playing numbers are 0–99; anything else (e.g. a scorer typo like 299) counts as no number.
+    const finalShirt = Number.isInteger(shirtNum) && shirtNum >= 0 && shirtNum <= 99 ? shirtNum : null;
 
     // playerDivisionGrade = "UNDER 10 MIXED 3" — age + gender + specific grade number
     // playerDivisionName  = "UNDER 10 MIXED"   — age + gender only (no grade)
@@ -272,6 +273,33 @@ export function parseBcRows(rawRows: RawRow[], strategy: ParsingStrategy): Parse
   }
 
   return [...Array.from(seenBcIds.values()), ...noBcIdRows];
+}
+
+// ─── Report date ──────────────────────────────────────────────────────────────
+// Latest game in the export ("Start Time", d/m/yyyy H:mm, local time).
+export function latestGameTime(rawRows: RawRow[]): Date | null {
+  let latest: Date | null = null;
+  for (const row of rawRows) {
+    const m = (row["Start Time"] ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+    if (!m) continue;
+    const t = new Date(+m[3], +m[2] - 1, +m[1], +(m[4] ?? 23), +(m[5] ?? 59));
+    if (!latest || t > latest) latest = t;
+  }
+  return latest;
+}
+
+// ─── Number to store for a player already on record ──────────────────────────
+// BC's number wins, except: no BC number keeps ours (registered but not played); a BC #0
+// doesn't replace a different number we hold (#0 is often the scorer's "not entered"); and
+// a number bought through the allocator after the report's last game is newer than BC's.
+export function resolveImportedShirt(
+  bcShirt: number | null,
+  existingShirt: number | null,
+  boughtAfterReport: boolean
+): number | null {
+  if (boughtAfterReport || bcShirt === null) return existingShirt;
+  if (bcShirt === 0 && existingShirt !== null && existingShirt !== 0) return existingShirt;
+  return bcShirt;
 }
 
 // ─── Returning-player matching by BC User ID ─────────────────────────────────

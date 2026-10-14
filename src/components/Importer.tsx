@@ -11,7 +11,11 @@ import {
   parseGenderFromDivision,
   estimateYobRange,
   planReturningPlayers,
+  latestGameTime,
+  resolveImportedShirt,
 } from "../services/bcImport";
+
+type OnRecord = ExistingPlayerRef & { first_name: string | null; last_name: string | null };
 
 type ImportMode = "upsert" | "replace";
 
@@ -39,6 +43,7 @@ const Importer: React.FC = () => {
   const [loadingCompetitions, setLoadingCompetitions] = useState(false);
 
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
+  const [reportEndsAt, setReportEndsAt] = useState<Date | null>(null);
   const [newClubNames, setNewClubNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -75,6 +80,7 @@ const Importer: React.FC = () => {
     const f = e.target.files?.[0] ?? null;
     setFile(f);
     setPreviewRows([]);
+    setReportEndsAt(null);
     setNewClubNames([]);
     setStatusMessage(null);
     setErrorMessage(null);
@@ -113,6 +119,7 @@ const Importer: React.FC = () => {
         return;
       }
 
+      setReportEndsAt(latestGameTime(rawRows));
       const parsed: ParsedPlayer[] = parseBcRows(rawRows, parsingStrategy);
 
       if (parsed.length === 0) {
@@ -268,6 +275,8 @@ const Importer: React.FC = () => {
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
       let returningCount = 0;
       let retiredCount = 0;
+      let keptPurchased = 0;
+      let keptOverZero = 0;
       if (withBcId.length > 0) {
         const toPayload = (r: PreviewRow) => {
           const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
@@ -295,27 +304,28 @@ const Importer: React.FC = () => {
         // BC issues a new Player Id every season, so returning players are found by
         // User ID instead and their existing record is updated in place (see bcImport.ts).
         const pids = withBcId.map((r) => r.bcPlayerId);
-        const knownPlayerIds = new Set<string>();
+        const knownByPid = new Map<string, OnRecord>(); // same-season re-import: registration already on record
         for (let i = 0; i < pids.length; i += 200) {
           const { data, error } = await supabase
             .from("players")
-            .select("bc_player_id")
+            .select("id, club_id, bc_player_id, bc_user_id, division_code, age_group, final_shirt, first_name, last_name")
             .in("bc_player_id", pids.slice(i, i + 200));
           if (error) {
             setErrorMessage(`Failed to check existing players: ${error.message}`);
             return;
           }
-          for (const p of data ?? []) knownPlayerIds.add(p.bc_player_id as string);
+          for (const p of (data ?? []) as OnRecord[]) knownByPid.set(p.bc_player_id as string, p);
         }
+        const knownPlayerIds = new Set(knownByPid.keys());
 
         const importClubIds = Array.from(
           new Set(withBcId.map((r) => clubMap.get(r.clubName) ?? r.clubId).filter(Boolean) as string[])
         );
-        const existing: ExistingPlayerRef[] = [];
+        const existing: OnRecord[] = [];
         for (let from = 0; importClubIds.length > 0; from += 1000) {
           const { data, error } = await supabase
             .from("players")
-            .select("id, club_id, bc_player_id, bc_user_id, division_code, age_group, final_shirt")
+            .select("id, club_id, bc_player_id, bc_user_id, division_code, age_group, final_shirt, first_name, last_name")
             .in("club_id", importClubIds)
             .is("deleted_at", null)
             .not("bc_user_id", "is", null)
@@ -325,8 +335,28 @@ const Importer: React.FC = () => {
             setErrorMessage(`Failed to load existing players: ${error.message}`);
             return;
           }
-          existing.push(...((data ?? []) as ExistingPlayerRef[]));
+          existing.push(...((data ?? []) as OnRecord[]));
           if (!data || data.length < 1000) break;
+        }
+
+        // Numbers bought through the allocator after this report's last game are newer than BC's.
+        const buyKey = (club: string | null, first: string | null, last: string | null, shirt: number | null) =>
+          `${club}|${(first ?? "").trim().toLowerCase()}|${(last ?? "").trim().toLowerCase()}|${shirt}`;
+        const boughtAfterReport = new Set<string>();
+        if (importClubIds.length > 0) {
+          let q = supabase
+            .from("pending_allocations")
+            .select("club_id, player_first_name, player_last_name, jersey_number")
+            .eq("status", "purchased")
+            .in("club_id", importClubIds);
+          if (reportEndsAt) q = q.gt("purchased_at", reportEndsAt.toISOString());
+          const { data, error } = await q;
+          if (error) {
+            setErrorMessage(`Failed to check recent purchases: ${error.message}`);
+            return;
+          }
+          for (const b of data ?? [])
+            boughtAfterReport.add(buyKey(b.club_id, b.player_first_name, b.player_last_name, b.jersey_number));
         }
 
         const plan = planReturningPlayers(
@@ -345,10 +375,15 @@ const Importer: React.FC = () => {
         const returningPayload: (ReturnType<typeof toPayload> & { id: string })[] = [];
         const upsertPayload: ReturnType<typeof toPayload>[] = [];
         withBcId.forEach((r, key) => {
-          const match = plan.matches.get(key);
+          const match = (plan.matches.get(key) as OnRecord | undefined) ?? knownByPid.get(r.bcPlayerId);
           if (match) {
-            // No shirt in BC this season doesn't mean the jersey was handed back — keep it.
-            returningPayload.push({ ...toPayload(r), id: match.id, final_shirt: r.finalShirt ?? match.final_shirt });
+            const bought = boughtAfterReport.has(buyKey(match.club_id, match.first_name, match.last_name, match.final_shirt));
+            const shirt = resolveImportedShirt(r.finalShirt, match.final_shirt, bought);
+            if (r.finalShirt !== null && shirt !== r.finalShirt) {
+              if (bought) keptPurchased++;
+              else keptOverZero++;
+            }
+            returningPayload.push({ ...toPayload(r), id: match.id, final_shirt: shirt });
           } else {
             upsertPayload.push(toPayload(r));
           }
@@ -508,7 +543,9 @@ const Importer: React.FC = () => {
       const parts: string[] = [];
       if (importMode === "replace") parts.push("existing players cleared");
       if (withBcId.length > 0) parts.push(`${withBcId.length} players upserted`);
-      if (returningCount > 0) parts.push(`${returningCount} returning players matched by BC User ID`);
+      if (returningCount > 0) parts.push(`${returningCount} existing players updated`);
+      if (keptPurchased > 0) parts.push(`${keptPurchased} numbers bought after this report kept`);
+      if (keptOverZero > 0) parts.push(`${keptOverZero} BC #0s ignored (existing number kept)`);
       if (retiredCount > 0) parts.push(`${retiredCount} old duplicate registrations retired`);
       if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} players inserted`);
       if (newClubNames.length > 0) parts.push(`${newClubNames.length} club(s) created`);
