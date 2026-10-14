@@ -594,6 +594,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             type: "h2h:config",
             bundleJerseyProperty: (row as any).bundle_jersey_property ?? null,
             currentWindowAgeGroup: resolvedWc?.current_window_age_group ?? null,
+            preorderMode: (clubJoin?.preorder_mode as string | undefined) ?? null,
           }, "*");
         }
       } catch (_) {}

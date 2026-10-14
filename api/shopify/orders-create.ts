@@ -25,6 +25,12 @@ type ShopifyLineItem = {
   product_id?: number | string;
   quantity?: number;
   properties?: any;
+  variant_title?: string;
+};
+
+type ShopifyAddress = {
+  first_name?: string;
+  last_name?: string;
 };
 
 type ShopifyCustomer = {
@@ -40,6 +46,8 @@ type ShopifyOrderPayload = {
   order_number?: number | string;
   line_items?: ShopifyLineItem[];
   customer?: ShopifyCustomer;
+  shipping_address?: ShopifyAddress;
+  billing_address?: ShopifyAddress;
   note_attributes?: Array<{ name?: string; value?: string }>;
 };
 
@@ -175,6 +183,170 @@ async function writeOrderNotePreallocated(
     method: "PUT",
     body: JSON.stringify({ order: { id: Number(orderId), note: newNote } }),
   });
+}
+
+// ── Safety net: sales that bypassed the allocator ───────────────────────────
+// Clubs with widget_config.require_widget = true must never get a silent sale. If a line for
+// one of their mapped products arrives with no allocator data, it is recorded as an 'unmatched'
+// pre-order row (so it appears in Pre-Order Manager with the order attached) and the Shopify
+// order is flagged. The storefront script (public/widget.js, GUARDED_PRODUCT_IDS) is what
+// prevents this; this is what catches anything that gets past it (script blocked, direct API calls).
+function propertyValue(props: any, key: string | null | undefined): string {
+  if (!key) return "";
+  const want = normalizeKey(key);
+  if (Array.isArray(props)) {
+    const p = props.find((p: any) => normalizeKey(p?.name ?? p?.key) === want);
+    return String(p?.value ?? "").trim();
+  }
+  if (props && typeof props === "object") {
+    for (const [k, v] of Object.entries(props)) {
+      if (normalizeKey(k) === want) return String(v ?? "").trim();
+    }
+  }
+  return "";
+}
+
+async function writeOrderNoteUnallocated(orderId: string, units: number): Promise<void> {
+  if (!process.env.SHOPIFY_ADMIN_TOKEN || !process.env.SHOPIFY_STORE_DOMAIN) return;
+  const marker = "NO JERSEY ALLOCATION";
+  const block = `⚠️ ${marker}: ${units} pack${units === 1 ? "" : "s"} in this order ${units === 1 ? "was" : "were"} bought without the player name/number step. Check Pre-Order Manager (Unmatched) before this order is produced.`;
+  const getResp = await shopifyAdminFetch(`orders/${orderId}.json?fields=id,note`);
+  if (!getResp.ok) return;
+  const { order: existingOrder } = await getResp.json() as { order: { id: number; note: string | null } };
+  const existingNote = (existingOrder.note ?? "").trim();
+  if (existingNote.includes(marker)) return; // webhook retry
+  const newNote = existingNote ? `${existingNote}\n\n${block}` : block;
+  await shopifyAdminFetch(`orders/${orderId}.json`, {
+    method: "PUT",
+    body: JSON.stringify({ order: { id: Number(orderId), note: newNote } }),
+  });
+}
+
+// `skipUnits`: units already accounted for by the cart-attribute fallback (0 or 1).
+// Returns how many units were flagged.
+export async function flagUnallocatedLines(args: {
+  supabase: any;
+  payload: ShopifyOrderPayload;
+  lineItems: ShopifyLineItem[];
+  orderId: string;
+  orderNumber: string;
+  nowIso: string;
+  skipUnits: number;
+}): Promise<number> {
+  const { supabase, payload, lineItems, orderId, orderNumber, nowIso } = args;
+  let skipUnits = args.skipUnits;
+
+  // Lines that carry no allocator data of any kind.
+  const candidates = lineItems.filter((li) => {
+    if (li?.product_id == null) return false;
+    if (extractPreallocatedProperties(li.properties).preorderRequestId) return false;
+    if (extractPreorderProperties(li.properties).isPreorder) return false;
+    if (extractProperties(li.properties).reservationId) return false;
+    return true;
+  });
+  if (candidates.length === 0) return 0;
+
+  const productIds = [...new Set(candidates.map((li) => String(li.product_id)))];
+  const { data: mapRows, error: mapErr } = await supabase
+    .from("shopify_product_club_map")
+    .select("shopify_product_id, club_id, product_type, bundle_jersey_property")
+    .in("shopify_product_id", productIds);
+  if (mapErr || !mapRows || mapRows.length === 0) return 0;
+
+  const clubIds = [...new Set((mapRows as any[]).map((r) => r.club_id))];
+  const { data: clubRows } = await supabase
+    .from("clubs")
+    .select("id, name, active_preorder_season, widget_config")
+    .in("id", clubIds);
+  const guardedClubs = new Map<string, any>();
+  for (const c of (clubRows ?? []) as any[]) {
+    if (c?.widget_config?.require_widget === true) guardedClubs.set(c.id, c);
+  }
+  if (guardedClubs.size === 0) return 0;
+
+  const buyer = payload.customer?.first_name || payload.customer?.last_name
+    ? payload.customer
+    : (payload.shipping_address ?? payload.billing_address ?? {});
+  const buyerFirst = String(buyer?.first_name ?? "").trim() || "Unknown";
+  const buyerLast = String(buyer?.last_name ?? "").trim() || "Unknown";
+
+  let flagged = 0;
+  for (const li of candidates) {
+    const map = (mapRows as any[]).find((r) => String(r.shopify_product_id) === String(li.product_id));
+    const club = map ? guardedClubs.get(map.club_id) : null;
+    if (!map || !club) continue;
+
+    let need = Math.max(1, Math.min(10, Number(li.quantity ?? 1) || 1));
+    if (skipUnits > 0) {
+      const s = Math.min(skipUnits, need);
+      need -= s;
+      skipUnits -= s;
+    }
+    if (need <= 0) continue;
+
+    const lineItemId = li?.id != null ? String(li.id) : "";
+    if (lineItemId) {
+      // Idempotency: Shopify retries webhooks.
+      const { count } = await supabase
+        .from("preorder_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("club_id", club.id)
+        .eq("shopify_order_id", orderId)
+        .eq("shopify_line_item_id", lineItemId)
+        .eq("status", "unmatched");
+      need -= count ?? 0;
+      if (need <= 0) continue;
+    }
+
+    const size = propertyValue(li.properties, map.bundle_jersey_property) || String(li.variant_title ?? "").trim() || "Unknown";
+
+    if (!club.active_preorder_season) {
+      await logEvent(supabase, {
+        order_id: orderId, order_number: orderNumber, level: "error",
+        message: "Allocator bypass: club has no active pre-order season, so no unmatched row could be created",
+        meta: { clubId: club.id, productId: String(li.product_id), units: need },
+      });
+      flagged += need;
+      continue;
+    }
+
+    const rows = Array.from({ length: need }, () => ({
+      club_id: club.id,
+      season: club.active_preorder_season,
+      product_type: map.product_type ?? null,
+      first_name: buyerFirst,
+      last_name: buyerLast,
+      year_of_birth: null,
+      size,
+      jersey_name: null,
+      status: "unmatched",
+      assigned_number: null,
+      any_number: false,
+      pref_1: null,
+      pref_2: null,
+      pref_3: null,
+      shopify_order_id: orderId,
+      shopify_line_item_id: lineItemId || null,
+      shopify_product_id: String(li.product_id),
+      order_number: orderNumber || null,
+      paid_at: nowIso,
+    }));
+    const { error: insErr } = await supabase.from("preorder_requests").insert(rows);
+    await logEvent(supabase, {
+      order_id: orderId, order_number: orderNumber,
+      level: insErr ? "error" : "warn",
+      message: insErr
+        ? "Allocator bypass: failed to record unmatched row"
+        : "Allocator bypass: sale arrived with no allocator data — recorded as unmatched",
+      meta: { club: club.name, productId: String(li.product_id), units: need, size, buyer: `${buyerFirst} ${buyerLast}`, detail: insErr?.message ?? null },
+    });
+    flagged += need;
+  }
+
+  if (flagged > 0) {
+    try { await writeOrderNoteUnallocated(orderId, flagged); } catch { /* note is best-effort */ }
+  }
+  return flagged;
 }
 
 // ── Shopify inventory sync helper ───────────────────────────────────────────
@@ -781,6 +953,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // check Shopify cart note_attributes. widget.js writes these via /cart/update.js
   // when the widget confirms on Simple Bundles pages, where the bundle app may use a
   // saved fetch reference that bypasses our window.fetch patch.
+  let fallbackLinkedValid = false; // the cart-attribute fallback linked exactly one genuine request to this order
   if (processed === 0 && Array.isArray(payload?.note_attributes) && payload!.note_attributes!.length > 0) {
     const noteAttrs: Record<string, string> = {};
     for (const attr of payload!.note_attributes!) {
@@ -792,6 +965,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const paJerseyName = noteAttrs[normalizeKey("_h2h_prealloc_jersey_name")] || "";
     if (paRequestId) {
       try {
+        // Cart attributes outlive the order they were written for. If this request is already linked
+        // to a DIFFERENT order, these are stale (an earlier confirmation riding along on a new cart):
+        // don't re-point the request, or the original order loses its link (seen on a Logan record).
+        const { data: priorRow } = await supabase
+          .from("preorder_requests")
+          .select("shopify_order_id")
+          .eq("id", paRequestId)
+          .maybeSingle();
+        const priorOrderId = (priorRow as any)?.shopify_order_id ? String((priorRow as any).shopify_order_id) : null;
+        if (priorOrderId && priorOrderId !== orderId) {
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, level: "warn",
+            message: "Cart attributes point at a pre-allocated request already linked to another order — treated as stale, not re-linked",
+            meta: { preorderRequestId: paRequestId, linkedToOrderId: priorOrderId },
+          });
+          throw new Error("__stale_link__");
+        }
         const { error: paErr } = await supabase
           .from("preorder_requests")
           .update({
@@ -808,6 +998,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           });
         } else {
           processed += 1;
+          fallbackLinkedValid = true;
           await writeOrderNotePreallocated(orderId, paJerseyNumber, paJerseyName);
           await logEvent(supabase, {
             order_id: orderId, order_number: orderNumber, level: "info",
@@ -816,13 +1007,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           });
         }
       } catch (e: any) {
-        await logEvent(supabase, {
-          order_id: orderId, order_number: orderNumber, level: "error",
-          message: "Exception processing pre-allocated order (cart-attrs fallback)",
-          meta: { detail: e?.message ?? String(e), preorderRequestId: paRequestId },
-        });
+        if (e?.message !== "__stale_link__") { // stale links are already logged above
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, level: "error",
+            message: "Exception processing pre-allocated order (cart-attrs fallback)",
+            meta: { detail: e?.message ?? String(e), preorderRequestId: paRequestId },
+          });
+        }
       }
     }
+  }
+
+  // Safety net: any line for a require_widget club's product that still has no allocator data
+  // (storefront guard blocked/bypassed, direct cart API call, stale cart attributes) is recorded
+  // as 'unmatched' and the order is flagged — never a silent sale. Failures here must not affect
+  // normal order processing.
+  try {
+    await flagUnallocatedLines({
+      supabase, payload: payload!, lineItems, orderId, orderNumber, nowIso,
+      skipUnits: fallbackLinkedValid ? 1 : 0,
+    });
+  } catch (netErr: any) {
+    await logEvent(supabase, {
+      order_id: orderId, order_number: orderNumber, level: "error",
+      message: "Allocator safety net failed",
+      meta: { detail: netErr?.message ?? String(netErr) },
+    });
   }
 
   // Sync available inventory counts to Shopify for every club that had a confirmed

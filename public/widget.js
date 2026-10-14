@@ -33,6 +33,31 @@
   var h2hBundlePage = false; // true when widget is on a Simple Bundles product page
   var h2hClubConfirmed = false; // true when widget has confirmed a valid H2H club mapping
 
+  // ── Guarded products (fail-closed) ───────────────────────────────────────────
+  // Products that must NEVER reach the cart unless the allocator confirmed first.
+  // Every other product keeps the normal behaviour (locked only once the iframe
+  // reports a club mapping). A guarded product is locked from the moment this
+  // script runs, and stays locked if the iframe is slow, blocked, or never answers:
+  // there is no "widget failed so let them buy anyway" path.
+  //   - Add to Cart is disabled and re-disabled if any app re-enables it
+  //   - click / form submit are blocked in the capture phase
+  //   - /cart/add requests for the product are rejected (fetch + XHR) unless the
+  //     widget has confirmed, and a confirmation is good for exactly ONE add
+  // Currently: Logan Thunder Rep Player Pack MALE / FEMALE (Logan Thunder Rep has
+  // widget_config.require_widget = true; the orders webhook flags any sale of these
+  // products that still arrives without allocator data). To guard another club's
+  // product, add its Shopify product id + handle here AND set require_widget on the club.
+  var GUARDED_PRODUCT_IDS = { "10489007833387": true, "10489010192683": true };
+  var GUARDED_PRODUCT_HANDLES = {
+    "logan-thunder-rep-player-pack-male": "10489007833387",
+    "logan-thunder-rep-player-pack-female": "10489010192683",
+  };
+  var GUARD_LOAD_TIMEOUT_MS = 12000;
+  var h2hGuarded = false;           // true on a guarded product page
+  var h2hGuardVariantIds = null;    // { variantId: true } for the guarded product (null = unknown → treat every add as guarded)
+  var h2hGuardResponded = false;    // iframe has answered (config / clubConfirmed)
+  var h2hGuardLabel = "Loading jersey allocator…";
+
   // Patch window.fetch immediately — before any Shopify app script loads.
   // Injects H2H line-item properties into the first /cart/add POST that fires
   // after the widget confirms, covering Simple Bundles and any other app
@@ -41,6 +66,26 @@
     if (!window.fetch) return;
     var origFetch = window.fetch;
     window.fetch = function (url, options) {
+      // Guarded product: reject the add outright unless the widget confirmed (one add per confirmation).
+      var guardedAdd = false;
+      try {
+        var gUrl = typeof url === "string" ? url : (url && url.url ? String(url.url) : "");
+        var gMethod = String((options && options.method) || (url && url.method) || "GET").toUpperCase();
+        if (h2hGuarded && gMethod === "POST" && gUrl.indexOf("/cart/add") !== -1 && guardTouchesProduct(options && options.body)) {
+          if (!(h2hSharedProps && !h2hSharedPropsInjected)) {
+            guardOnBlocked();
+            try {
+              return Promise.resolve(new Response(
+                JSON.stringify({ status: 422, message: "Jersey allocator not completed", description: "Please complete the jersey allocator on this page before adding to cart." }),
+                { status: 422, headers: { "Content-Type": "application/json" } }
+              ));
+            } catch (_) {
+              return Promise.reject(new Error("Jersey allocator not completed"));
+            }
+          }
+          guardedAdd = true;
+        }
+      } catch (_) {}
       if (
         h2hSharedProps &&
         !h2hSharedPropsInjected &&
@@ -67,7 +112,15 @@
           h2hSharedPropsInjected = true;
         } catch (_) {}
       }
-      return origFetch.apply(this, arguments);
+      var fetchResult = origFetch.apply(this, arguments);
+      if (guardedAdd && fetchResult && typeof fetchResult.then === "function") {
+        // A confirmation covers one successful add. If the add fails, hand it back so the customer can retry.
+        return fetchResult.then(
+          function (r) { if (r && r.ok === false) guardAddFailed(); else guardAfterSuccess(); return r; },
+          function (e) { guardAddFailed(); throw e; }
+        );
+      }
+      return fetchResult;
     };
   })();
 
@@ -87,6 +140,27 @@
       return origOpen.apply(this, arguments);
     };
     XMLHttpRequest.prototype.send = function (body) {
+      // Guarded product: reject the add unless the widget confirmed (one add per confirmation).
+      // The request is redirected to a URL that 404s, so the calling app sees an ordinary
+      // failed request instead of hanging.
+      var guardedAddXhr = false;
+      try {
+        if (h2hGuarded && String(this._h2hXhrMethod).toUpperCase() === "POST" &&
+            String(this._h2hXhrUrl).indexOf("/cart/add") !== -1 && guardTouchesProduct(body)) {
+          if (!(h2hSharedProps && !h2hSharedPropsInjected)) {
+            guardOnBlocked();
+            try { origOpen.call(this, "GET", "/__h2h_guard_blocked__", true); } catch (_) {}
+            return origSend.call(this, null);
+          }
+          guardedAddXhr = true;
+        }
+      } catch (_) {}
+      if (guardedAddXhr) {
+        var guardXhr = this;
+        this.addEventListener("loadend", function () {
+          if (guardXhr.status >= 200 && guardXhr.status < 300) guardAfterSuccess(); else guardAddFailed();
+        });
+      }
       if (this._h2hXhrMethod.toUpperCase() === "POST" && typeof body === "string" && body) {
         var url = this._h2hXhrUrl;
         try {
@@ -117,6 +191,239 @@
   function $all(sel, root) {
     try { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
     catch (_) { return []; }
+  }
+
+  // ── Guard helpers (see "Guarded products" above) ────────────────────────────
+  function guardReadVariantIds() {
+    var ids = {};
+    var found = false;
+    try {
+      var vs = window.ShopifyAnalytics && window.ShopifyAnalytics.meta &&
+               window.ShopifyAnalytics.meta.product && window.ShopifyAnalytics.meta.product.variants;
+      if (vs && vs.length) {
+        for (var i = 0; i < vs.length; i++) {
+          if (vs[i] && vs[i].id != null) { ids[String(vs[i].id)] = true; found = true; }
+        }
+      }
+    } catch (_) {}
+    try {
+      // The main product form's variant input (Dawn marks it .product-variant-id). Only fall back to
+      // any /cart/add form's id when analytics gave us nothing, so "you may also like" forms stay out.
+      $all(found ? ".product-variant-id" : 'section[id^="MainProduct-"] form[action^="/cart/add"] [name="id"], .product-variant-id').forEach(function (el) {
+        if (el.value) { ids[String(el.value).trim()] = true; found = true; }
+      });
+    } catch (_) {}
+    return found ? ids : null;
+  }
+
+  // Variant ids a /cart/add payload is adding, or null when the payload can't be read.
+  function guardAddIds(body) {
+    var out = [];
+    var collect = function (p) {
+      p.forEach(function (v, k) {
+        if (k === "id" || /^items\[\d+\]\[id\]$/.test(k)) out.push(String(v));
+      });
+    };
+    try {
+      if (body == null) return null;
+      if (typeof body === "string") {
+        var s = body.replace(/^\s+/, "");
+        if (s.charAt(0) === "{" || s.charAt(0) === "[") {
+          var j = JSON.parse(s);
+          var arr = Array.isArray(j) ? j : (j && Array.isArray(j.items) ? j.items : (j ? [j] : []));
+          arr.forEach(function (it) { if (it && it.id != null) out.push(String(it.id)); });
+        } else {
+          collect(new URLSearchParams(s));
+        }
+      } else if (typeof FormData !== "undefined" && body instanceof FormData) {
+        collect(body);
+      } else if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+        collect(body);
+      } else {
+        return null;
+      }
+    } catch (_) { return null; }
+    return out;
+  }
+
+  // True when the payload adds the guarded product. Unreadable payload or unknown
+  // variant list → assume it does (fail-closed).
+  function guardTouchesProduct(body) {
+    var ids = guardAddIds(body);
+    if (ids === null || !h2hGuardVariantIds) return true;
+    for (var i = 0; i < ids.length; i++) { if (h2hGuardVariantIds[ids[i]]) return true; }
+    return false;
+  }
+
+  // True when this cart form adds the guarded product (other forms on the page, e.g.
+  // "you may also like", are left alone).
+  function guardFormTouchesProduct(form) {
+    if (!form) return false;
+    var idEl = form.querySelector('[name="id"]');
+    var v = idEl && idEl.value ? String(idEl.value).trim() : "";
+    if (!v || !h2hGuardVariantIds) return true;
+    return !!h2hGuardVariantIds[v];
+  }
+
+  function guardForms() {
+    return $all('form[action^="/cart/add"]').filter(guardFormTouchesProduct);
+  }
+
+  function guardButtons() {
+    var out = [];
+    guardForms().forEach(function (f) {
+      $all('button, input[type="submit"]', f).forEach(function (b) {
+        var t = (b.getAttribute("type") || "submit").toLowerCase();
+        if (t === "submit" || b.getAttribute("name") === "add") out.push(b);
+      });
+    });
+    return out;
+  }
+
+  // A confirmation is usable until it has been spent on one successful add.
+  function guardConfirmed() { return !!(h2hSharedProps && !h2hSharedPropsInjected); }
+  // …and spent once that add has gone through.
+  function guardConsumed() { return !!(h2hSharedProps && h2hSharedPropsInjected); }
+
+  function guardLockAll(label) {
+    if (label) h2hGuardLabel = label;
+    guardButtons().forEach(function (b) {
+      if (!b.disabled) b.disabled = true;
+      var node = getAtcLabelNode(b);
+      if (node && b.tagName !== "INPUT" && (node.textContent || "").trim() !== h2hGuardLabel) node.textContent = h2hGuardLabel;
+    });
+  }
+
+  function guardUnlockAll() {
+    guardButtons().forEach(function (b) {
+      b.disabled = false;
+      var node = getAtcLabelNode(b);
+      if (node && b.tagName !== "INPUT") node.textContent = originalAtcLabel || "Add to cart";
+    });
+  }
+
+  function guardClearNotice() {
+    try {
+      var el = document.getElementById("h2h-guard-notice");
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    } catch (_) {}
+  }
+
+  function guardShowNotice(msg, withReload) {
+    try {
+      var forms = guardForms();
+      if (!forms.length) return;
+      var el = document.getElementById("h2h-guard-notice");
+      var fresh = !el;
+      if (fresh) el = document.createElement("div");
+      el.id = "h2h-guard-notice";
+      el.setAttribute("role", "alert");
+      el.style.cssText = "margin:0 0 12px;padding:10px 12px;border:2px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:6px;font-size:14px;line-height:1.4;";
+      el.textContent = msg + " ";
+      if (withReload) {
+        var a = document.createElement("a");
+        a.href = "#";
+        a.textContent = "Reload page";
+        a.style.cssText = "color:#92400e;font-weight:700;text-decoration:underline;";
+        a.addEventListener("click", function (ev) { ev.preventDefault(); window.location.reload(); });
+        el.appendChild(a);
+      }
+      if (fresh) {
+        var anchor = forms[0].closest("product-form") || forms[0];
+        if (anchor.parentNode) anchor.parentNode.insertBefore(el, anchor);
+      }
+    } catch (_) {}
+  }
+
+  // Something tried to add the guarded product without a valid confirmation.
+  function guardOnBlocked() {
+    if (guardConsumed()) {
+      // The confirmation was already spent on a pack that is now in the cart.
+      guardLockAll("Pack added to cart");
+      guardShowNotice("This pack is already in your cart. To order for another player, reload this page and enter that player's details.", true);
+      return;
+    }
+    guardLockAll(h2hGuardResponded ? "Select jersey number first" : "Loading jersey allocator…");
+    guardShowNotice(
+      h2hGuardResponded
+        ? "Please complete the jersey allocator above before adding this pack to your cart."
+        : "The jersey allocator is still loading. Please wait a moment and try again.",
+      false
+    );
+  }
+
+  // The one confirmed add succeeded: lock again so the next pack needs its own confirmation.
+  function guardAfterSuccess() {
+    if (!h2hGuarded) return;
+    guardLockAll("Pack added to cart");
+    guardShowNotice("Pack added to your cart. To order for another player, reload this page and enter that player's details.", true);
+  }
+
+  // The confirmed add failed (network, Shopify error): give the confirmation back so they can retry.
+  function guardAddFailed() {
+    if (!h2hGuarded) return;
+    h2hSharedPropsInjected = false;
+    if (h2hSharedProps) { guardClearNotice(); guardUnlockAll(); }
+  }
+
+  // Keeps the guarded button locked whatever other apps do to it.
+  function guardEnforce() {
+    if (!h2hGuarded) return;
+    if (guardConfirmed()) return; // confirmed and unspent: the normal widget handlers own the button
+    guardLockAll();
+  }
+
+  function guardInit(productId) {
+    if (h2hGuarded) return;
+    var handleMatch = window.location.pathname.match(/\/products\/([^\/?#]+)/);
+    var handle = handleMatch ? handleMatch[1].toLowerCase() : "";
+    var hit = (productId && GUARDED_PRODUCT_IDS[String(productId)]) || (handle && GUARDED_PRODUCT_HANDLES[handle]);
+    if (!hit) return;
+    h2hGuarded = true;
+    h2hGuardVariantIds = guardReadVariantIds();
+    try { snapshotOriginalAtcLabel(document); } catch (_) {}
+    guardLockAll("Loading jersey allocator…");
+    // Re-assert the lock whenever anything touches the page (Section Rendering, other apps)
+    // and on a slow timer as a backstop.
+    try {
+      var root = document.querySelector('section[id^="MainProduct-"]') || document.querySelector("main") || document.body;
+      new MutationObserver(function () { guardEnforce(); }).observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled", "class", "style"] });
+    } catch (_) {}
+    setInterval(guardEnforce, 500);
+    // Capture-phase click / submit blocks fire before Simple Bundles or Dawn handlers.
+    document.addEventListener("click", function (e) {
+      if (!h2hGuarded || guardConfirmed()) return;
+      var btn = e.target && e.target.closest ? e.target.closest('form[action^="/cart/add"] button, form[action^="/cart/add"] input[type="submit"]') : null;
+      if (!btn || !guardFormTouchesProduct(btn.closest("form"))) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      guardOnBlocked();
+    }, true);
+    document.addEventListener("submit", function (e) {
+      var f = e && e.target;
+      if (!h2hGuarded || guardConfirmed() || !f || !f.action || String(f.action).indexOf("/cart/add") === -1) return;
+      if (!guardFormTouchesProduct(f)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      guardOnBlocked();
+    }, true);
+    // If the allocator never answers, say so instead of leaving a dead button.
+    setTimeout(function () {
+      if (h2hGuardResponded) return;
+      guardShowNotice("The jersey allocator didn't load. Please reload the page. If it keeps happening, try a different browser or connection, or contact your club.", true);
+    }, GUARD_LOAD_TIMEOUT_MS);
+  }
+
+  // The iframe answered: from here the normal widget flow decides when the button unlocks.
+  function guardMarkResponded() {
+    if (!h2hGuarded) return;
+    h2hGuardResponded = true;
+    // Don't overwrite the "pack added" state if the iframe re-announces itself after an add.
+    if (!guardConsumed()) {
+      h2hGuardLabel = "Select jersey number first";
+      guardClearNotice();
+    }
+    guardEnforce();
   }
 
   // ── Product page detection ───────────────────────────────────────────────────
@@ -276,7 +583,9 @@
       var current = (node.textContent || "").trim();
       if (current) originalAtcLabel = current;
     }
-    node.textContent = label;
+    // Skip no-op writes: rewriting identical text still fires a childList mutation,
+    // which would re-trigger the MutationObservers that call this in a tight loop.
+    if ((node.textContent || "").trim() !== label) node.textContent = label;
     try { btn.setAttribute("aria-label", label); } catch (_) {}
   }
 
@@ -639,7 +948,9 @@
     iframe.style.overflow = "hidden";
     iframe.style.opacity = "0";
     iframe.style.transition = "opacity 0.2s";
-    iframe.setAttribute("loading", "lazy");
+    // Guarded products load the allocator immediately (a lazy iframe only starts loading once the
+    // browser decides it is near the viewport, which left Add to Cart unlocked in the meantime).
+    iframe.setAttribute("loading", h2hGuarded ? "eager" : "lazy");
     host.appendChild(iframe);
 
     // ── Variant state broadcasting ──────────────────────────────────────────
@@ -698,6 +1009,9 @@
       try {
         if (!event || !event.data) return;
         if (event.origin !== baseUrl) return;
+        // On guarded products only browser-delivered messages count. A message forged from the
+        // console (new MessageEvent("message", { origin: ... })) is not trusted and cannot unlock the button.
+        if (h2hGuarded && event.isTrusted !== true) return;
         var data = event.data;
 
         if (data.type === "h2h:reservation:ready") {
@@ -855,6 +1169,10 @@
           bundleJerseyProperty = data.bundleJerseyProperty || null;
           h2hBundlePage = !!bundleJerseyProperty;
           if (h2hBundlePage) lockAtcButton(scope);
+          guardMarkResponded();
+          if (h2hGuarded && data.preorderMode === "off") {
+            guardShowNotice("This pack isn't open for ordering right now.", false);
+          }
           sendVariantState(true);
         }
 
@@ -873,6 +1191,7 @@
           host.style.marginTop = "1rem";
           h2hClubConfirmed = true;
           lockAtcButton(scope);
+          guardMarkResponded();
         }
 
         if (data.type === "h2h:resize" && typeof data.height === "number") {
@@ -993,12 +1312,17 @@
     // ShopifyAnalytics isn't available until DOMContentLoaded — by the time
     // we reach here, it should be ready. If not, retry once after a short delay.
     var productId = getShopifyProductId();
+    // Guarded products lock before anything else, and don't depend on mount() succeeding.
+    var pathHandle = (window.location.pathname.match(/\/products\/([^\/?#]+)/) || [])[1];
+    var handleProductId = pathHandle ? GUARDED_PRODUCT_HANDLES[pathHandle.toLowerCase()] : "";
+    guardInit(productId || handleProductId);
+    if (!productId && handleProductId) productId = handleProductId;
     if (productId) {
-      mount(productId);
+      try { mount(productId); } catch (_) {}
     } else {
       setTimeout(function () {
         productId = getShopifyProductId();
-        if (productId) mount(productId);
+        if (productId) { guardInit(productId); try { mount(productId); } catch (_) {} }
       }, 500);
     }
   }
