@@ -18,6 +18,7 @@ type ImportMode = "upsert" | "replace";
 interface Competition {
   id: string;
   name: string;
+  ngc_clash_rules?: boolean;
 }
 
 interface PreviewRow extends ParsedPlayer {
@@ -62,7 +63,7 @@ const Importer: React.FC = () => {
       setLoadingCompetitions(true);
       const { data, error } = await supabase
         .from("competitions")
-        .select("id, name")
+        .select("id, name, ngc_clash_rules")
         .order("name", { ascending: true });
       if (!error) setCompetitions((data ?? []) as Competition[]);
       setLoadingCompetitions(false);
@@ -218,6 +219,8 @@ const Importer: React.FC = () => {
       }
 
       const season = competitionLabel; // competition name used as competition_source on players
+      // North Gold Coast rules (ALLOCATION_LOGIC.md 2f): SLG players estimated as aged 12+.
+      const ngcRules = competitions.find((c) => c.id === competitionId)?.ngc_clash_rules === true;
 
       // ── Step 2: Resolve clubs (create new if needed) ───────────────────────
       const clubMap = new Map<string, string>();
@@ -267,7 +270,7 @@ const Importer: React.FC = () => {
       let retiredCount = 0;
       if (withBcId.length > 0) {
         const toPayload = (r: PreviewRow) => {
-          const yob = estimateYobRange(r.ageGroup, currentYear);
+          const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
           return {
             bc_player_id: r.bcPlayerId,
             bc_user_id: r.bcUserId || null,
@@ -391,7 +394,7 @@ const Importer: React.FC = () => {
       const withoutBcId = previewRows.filter((r) => !r.bcPlayerId);
       if (withoutBcId.length > 0) {
         const insertPayload = withoutBcId.map((r) => {
-          const yob = estimateYobRange(r.ageGroup, currentYear);
+          const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
           return {
             first_name: r.firstName,
             last_name: r.lastName,

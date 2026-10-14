@@ -236,6 +236,8 @@ export interface SmartCheckOptions {
    * code such as "10BC3/4" = 10BC3 + 10BC4) counts as a same-team clash. Additive only.
    */
   selectedTeamCode?: string | null;
+  /** Buyer's gender (widget answer or mens/womens product). Enables the North Gold Coast rules (§2f). */
+  buyerGender?: BuyerGender | null;
 }
 
 /** Team-code variants to match against stored player records ("10BC3/4" -> 10BC3/4, 10BC3, 10BC4). */
@@ -267,6 +269,108 @@ function holderMatchesTeamCode(
   return variants.some(
     (v) => p.division_code === v || p.team_name === v || p.team_id === v
   );
+}
+
+// ─── North Gold Coast (Seahawks) rules — ALLOCATION_LOGIC.md §2f ─────────────
+// Only for clubs with a team in a competition flagged competitions.ngc_clash_rules:
+//   1. Super League Girls is one number pool per club (SLG has no age limit and girls move
+//      between SLG teams, so a birth-year window can't tell who might be a teammate).
+//   2. A boys'-team player never blocks a girl and vice versa. Mixed teams, and holders with
+//      no team on record, still block everyone.
+
+export type BuyerGender = "Male" | "Female";
+
+interface NgcContext {
+  active: boolean;
+  /** teams.name and teams.id -> teams.gender ("Male" | "Female" | "Mixed") */
+  teamGender: Map<string, string>;
+  /** teams.id of the club's SLG teams (pending reservations store the team as teams.id) */
+  slgTeamIds: Set<string>;
+}
+
+const INACTIVE_NGC: NgcContext = { active: false, teamGender: new Map(), slgTeamIds: new Set() };
+const ngcContextCache = new Map<string, NgcContext>();
+
+async function getNgcContext(clubId: string): Promise<NgcContext> {
+  const cached = ngcContextCache.get(clubId);
+  if (cached) return cached;
+  const { data: active, error } = await supabase.rpc("club_uses_ngc_clash_rules", { p_club_id: clubId });
+  if (error) {
+    console.error("club_uses_ngc_clash_rules error", error);
+    return INACTIVE_NGC; // not cached, so a transient failure retries on the next check
+  }
+  let ctx = INACTIVE_NGC;
+  if (active === true) {
+    const { data: teams } = await supabase
+      .from("teams")
+      .select("id, name, gender")
+      .eq("club_id_uuid", clubId);
+    const teamGender = new Map<string, string>();
+    const slgTeamIds = new Set<string>();
+    for (const t of (teams ?? []) as { id: string | null; name: string | null; gender: string | null }[]) {
+      if (t.id && isSlgCode(t.name)) slgTeamIds.add(t.id);
+      if (!t.gender) continue;
+      if (t.name) teamGender.set(t.name, t.gender);
+      if (t.id) teamGender.set(t.id, t.gender);
+    }
+    ctx = { active: true, teamGender, slgTeamIds };
+  }
+  ngcContextCache.set(clubId, ctx);
+  return ctx;
+}
+
+const isSlgCode = (code: string | null | undefined): boolean => /^SLG/i.test((code ?? "").trim());
+
+type TeamFields = {
+  division_code?: string | null;
+  team_name?: string | null;
+  team_id?: string | null;
+  age_group?: string | null;
+};
+
+function isSlgHolder(p: TeamFields): boolean {
+  return (
+    isSlgCode(p.division_code) || isSlgCode(p.team_name) || isSlgCode(p.team_id) ||
+    (p.age_group ?? "").trim().toUpperCase() === "SLG"
+  );
+}
+
+/** Gender of the team a holder is stored under; null when no team is on record. */
+function holderTeamGender(p: TeamFields, ctx: NgcContext): string | null {
+  for (const code of [p.division_code, p.team_name, p.team_id]) {
+    const g = code ? ctx.teamGender.get(code) : undefined;
+    if (g) return g;
+  }
+  return isSlgHolder(p) ? "Female" : null;
+}
+
+/** NGC rule 2: false only when the holder's team is single-gender and not the buyer's gender. */
+function holderBlocksBuyer(p: TeamFields, ctx: NgcContext, buyerGender: BuyerGender | null | undefined): boolean {
+  if (!ctx.active || !buyerGender) return true;
+  const g = holderTeamGender(p, ctx);
+  if (g !== "Male" && g !== "Female") return true;
+  return g === buyerGender;
+}
+
+/**
+ * NGC rule 1: the club's SLG number pool applies to a girl who picked an SLG team, whose
+ * looked-up record is on an SLG team, or who is 12 or older and picked no team.
+ */
+function slgPoolApplies(
+  ctx: NgcContext,
+  o: {
+    buyerGender?: BuyerGender | null;
+    yearOfBirth?: number;
+    seasonYear: number;
+    divisionCode?: string | null;
+    teamName?: string | null;
+    selectedTeamCode?: string | null;
+  }
+): boolean {
+  if (!ctx.active || o.buyerGender !== "Female") return false;
+  if (isSlgCode(o.selectedTeamCode) || isSlgCode(o.divisionCode) || isSlgCode(o.teamName)) return true;
+  const age = typeof o.yearOfBirth === "number" ? o.seasonYear - o.yearOfBirth : NaN;
+  return !o.selectedTeamCode && age >= 12;
 }
 
 export interface SmartCheckResult {
@@ -380,6 +484,7 @@ export async function smartCheckNumber(
     excludePlayerId,
     enforceYobWindow = false,
     selectedTeamCode = null,
+    buyerGender = null,
   } = options;
 
   const seasonYear =
@@ -387,9 +492,21 @@ export async function smartCheckNumber(
       ? optSeasonYear
       : new Date().getFullYear();
 
+  const ngc = await getNgcContext(clubId);
+  const slgPool = slgPoolApplies(ngc, { buyerGender, yearOfBirth, seasonYear, divisionCode, teamName, selectedTeamCode });
+
+  // Same team as the buyer's stated/looked-up team. Seahawks records carry the team in
+  // division_code only (team_name null) while widget purchases store it in team_name, so a
+  // division-only team is matched in any field.
+  const isTeammate = (p: ClashPlayer): boolean =>
+    ((p.division_code ?? null) === (divisionCode ?? null) &&
+      (p.team_name ?? null) === (teamName ?? null)) ||
+    (divisionCode != null && teamName == null && holderMatchesTeamCode(p, divisionCode));
+
   // Birth-year-window clashes among the given holders (ALLOCATION_LOGIC.md 2b). Shared by the
   // no-team path and by the "always enforce birth year" layer on top of a stated team.
-  const yobWindowClashes = (holders: ClashPlayer[]): ClashPlayer[] => {
+  const yobWindowClashes = (allHolders: ClashPlayer[]): ClashPlayer[] => {
+    const holders = allHolders.filter((p) => holderBlocksBuyer(p, ngc, buyerGender));
     if (typeof yearOfBirth !== "number" || !Number.isFinite(yearOfBirth)) {
       // No YOB at all — flag all active holders as clashes (safe fallback)
       return holders.filter(
@@ -455,13 +572,10 @@ export async function smartCheckNumber(
 
   if (hasTeamContext) {
     for (const p of allNumberHolders) {
-      // Same team = same (division_code, team_name) pair, null-safe.
-      const sameTeam =
-        (p.division_code ?? null) === (divisionCode ?? null) &&
-        (p.team_name ?? null) === (teamName ?? null);
-
-      if (sameTeam) {
+      if (isTeammate(p)) {
         hardClashes.push(p);
+      } else if (!holderBlocksBuyer(p, ngc, buyerGender)) {
+        // NGC: other-gender team, not a possible teammate
       } else {
         // Cross-pool: same age group (or girls Junior/Open Girls merge bucket), different team = hard clash
         const sameAgeGroup = isSameMergeBucket(ageGroup, p.age_group);
@@ -495,6 +609,15 @@ export async function smartCheckNumber(
   } else {
     // Widget path: YOB-window clash logic (ALLOCATION_LOGIC.md rules).
     hardClashes = yobWindowClashes(allNumberHolders);
+  }
+
+  // NGC rule 1: every SLG player at the club counts as a teammate for an SLG buyer.
+  const slgPoolClashes = slgPool ? allNumberHolders.filter((p) => isSlgHolder(p)) : [];
+  for (const p of slgPoolClashes) {
+    if (!hardClashes.includes(p)) hardClashes.push(p);
+  }
+  if (slgPoolClashes.length > 0) {
+    softWarnings = softWarnings.filter((p) => !hardClashes.includes(p));
   }
 
   // ── Inventory check ──────────────────────────────────────────────────────────
@@ -533,22 +656,23 @@ export async function smartCheckNumber(
   if (hasTeamContext) {
     if (hasHardClash) {
       // Distinguish same-team clash vs cross-pool (different team, same age group)
-      const hasCrossPoolClash = crossPoolCheck && hardClashes.some(
-        (p) => !((p.division_code ?? null) === (divisionCode ?? null) &&
-                 (p.team_name ?? null) === (teamName ?? null))
-      );
+      const hasCrossPoolClash = crossPoolCheck && hardClashes.some((p) => !isTeammate(p));
       // A clash that is not a teammate (only possible with enforceYobWindow) is a player of a
       // similar age elsewhere at the club.
       const hasTeammateClash = hardClashes.some(
         (p) =>
-          ((p.division_code ?? null) === (divisionCode ?? null) &&
-            (p.team_name ?? null) === (teamName ?? null)) ||
+          isTeammate(p) ||
           (selectedTeamCode ? holderMatchesTeamCode(p, selectedTeamCode) : false)
       );
+      const hasSlgPoolClash = slgPoolClashes.length > 0 && !hasTeammateClash;
       statusMessage = hasCrossPoolClash
         ? hasStock
           ? "This number is worn by another team in the same age group (cross-pool check) — choose a different number."
           : "This number is worn by another team in the same age group and there is no available stock."
+        : hasSlgPoolClash
+        ? hasStock
+          ? "This number is already worn by a Super League Girls player at this club — choose a different number."
+          : "This number is already worn by a Super League Girls player at this club and there is no available stock."
         : enforceYobWindow && !hasTeammateClash
           ? hasStock
             ? "This number is already used by a player of a similar age at this club — choose a different number."
@@ -696,8 +820,11 @@ export async function suggestNumbersForClubRanked(input: {
   enforceYobWindow?: boolean;
   /** Team code the buyer picked from the dropdown; blocks teammates stored under it (additive). */
   selectedTeamCode?: string | null;
+  /** Buyer's gender (widget answer or mens/womens product). Enables the North Gold Coast rules (§2f). */
+  buyerGender?: BuyerGender | null;
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
+  const ngc = await getNgcContext(input.clubId);
   // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
   // but the widget path now uses age-group-derived windows (ALLOCATION_LOGIC.md).
   // Team-aware path: an actual team identity is known. ageGroup alone does NOT imply
@@ -749,16 +876,24 @@ export async function suggestNumbersForClubRanked(input: {
       .is("deleted_at", null)
       .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
 
-    // null-safe team filter
-    if (input.divisionCode != null) {
-      sameTeamQuery.eq("division_code", input.divisionCode);
+    const divisionOnlyFilter =
+      input.divisionCode != null && input.teamName == null ? teamCodeOrFilter(input.divisionCode) : null;
+    if (divisionOnlyFilter) {
+      // Seahawks: the division code IS the team, stored in division_code on BC records and in
+      // team_name on widget purchases — match it in any field (see smartCheckNumber isTeammate).
+      sameTeamQuery.or(divisionOnlyFilter);
     } else {
-      sameTeamQuery.is("division_code", null);
-    }
-    if (input.teamName != null) {
-      sameTeamQuery.eq("team_name", input.teamName);
-    } else {
-      sameTeamQuery.is("team_name", null);
+      // null-safe team filter
+      if (input.divisionCode != null) {
+        sameTeamQuery.eq("division_code", input.divisionCode);
+      } else {
+        sameTeamQuery.is("division_code", null);
+      }
+      if (input.teamName != null) {
+        sameTeamQuery.eq("team_name", input.teamName);
+      } else {
+        sameTeamQuery.is("team_name", null);
+      }
     }
     if (input.excludePlayerId) {
       sameTeamQuery.neq("id", input.excludePlayerId);
@@ -835,7 +970,7 @@ export async function suggestNumbersForClubRanked(input: {
     // "Active" = bc_last_seen_season IS NULL (transitional) OR >= currentYear - 2.
     let allHoldersQuery = supabase
       .from("players")
-      .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group, division_code")
+      .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group, division_code, team_name, team_id")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
       .is("deleted_at", null)
@@ -865,6 +1000,8 @@ export async function suggestNumbersForClubRanked(input: {
         if (divCode && girlsDivCodes.has(divCode)) continue;
         if (!divCode && (ageGrp === "Junior" || ageGrp === "Open Girls")) continue;
       }
+      // NGC rule 2: other-gender teams never block.
+      if (!holderBlocksBuyer(p as TeamFields, ngc, input.buyerGender)) continue;
 
       if (yobOverlapsWindow(exactYob, estMin, estMax, ageGrp, currentYear, clashWindow)) {
         blockedNums.add(n);
@@ -876,7 +1013,7 @@ export async function suggestNumbersForClubRanked(input: {
     // Source 2: active pending reservations / purchases
     const { data: resBlock, error: rbErr } = await supabase
       .from("pending_allocations")
-      .select("jersey_number, year_of_birth, expires_at, status")
+      .select("jersey_number, year_of_birth, expires_at, status, team_id")
       .eq("club_id", input.clubId)
       .in("jersey_number", candidateNums)
       .in("status", ["reserved", "purchased"]);
@@ -896,6 +1033,7 @@ export async function suggestNumbersForClubRanked(input: {
         const expiresAt = Date.parse(String((r as any).expires_at));
         if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
       }
+      if (!holderBlocksBuyer({ team_id: (r as any).team_id ?? null }, ngc, input.buyerGender)) continue;
       if (resYob >= clashWindow.min && resYob <= clashWindow.max) {
         blockedNums.add(n);
       } else if (resYob >= adjWindow.min && resYob <= adjWindow.max) {
@@ -956,6 +1094,62 @@ export async function suggestNumbersForClubRanked(input: {
     }
   }
 
+  // ── NGC rule 1: SLG number pool — every SLG player's number, across all the club's SLG
+  // teams (incl. kept players from last season and live SLG reservations), is blocked. ───
+  const slgPool = slgPoolApplies(ngc, {
+    buyerGender: input.buyerGender,
+    yearOfBirth: input.yearOfBirth,
+    seasonYear: currentYear,
+    divisionCode: input.divisionCode,
+    teamName: input.teamName,
+    selectedTeamCode: input.selectedTeamCode,
+  });
+  if (slgPool) {
+    let slgQuery = supabase
+      .from("players")
+      .select("final_shirt")
+      .eq("club_id", input.clubId)
+      .in("final_shirt", candidateNums)
+      .is("deleted_at", null)
+      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`)
+      .or("division_code.ilike.SLG*,team_name.ilike.SLG*,team_id.ilike.SLG*,age_group.eq.SLG");
+    if (input.excludePlayerId) {
+      slgQuery = slgQuery.neq("id", input.excludePlayerId);
+    }
+    const { data: slgPlayers, error: slgErr } = await slgQuery;
+    if (slgErr) {
+      console.error("SLG pool block query error", slgErr);
+      throw new Error("Failed to load Super League Girls player data.");
+    }
+    for (const p of slgPlayers ?? []) {
+      const n = Number((p as any).final_shirt);
+      if (Number.isFinite(n)) blockedNums.add(n);
+    }
+
+    if (ngc.slgTeamIds.size > 0) {
+      const { data: slgRes, error: slgResErr } = await supabase
+        .from("pending_allocations")
+        .select("jersey_number, status, expires_at")
+        .eq("club_id", input.clubId)
+        .in("jersey_number", candidateNums)
+        .in("team_id", Array.from(ngc.slgTeamIds))
+        .in("status", ["reserved", "purchased"]);
+      if (slgResErr) {
+        console.error("SLG pool reservation query error", slgResErr);
+        throw new Error("Failed to load Super League Girls reservation data.");
+      }
+      const nowMs = Date.now();
+      for (const r of slgRes ?? []) {
+        if ((r as any).status === "reserved") {
+          const exp = Date.parse(String((r as any).expires_at));
+          if (!Number.isFinite(exp) || exp <= nowMs) continue;
+        }
+        const n = Number((r as any).jersey_number);
+        if (Number.isFinite(n)) blockedNums.add(n);
+      }
+    }
+  }
+
   // Team path adjacent penalty (runs for team-aware scoring only)
   if (teamAware) {
     const adjacentGroups = Array.from(new Set([
@@ -970,7 +1164,7 @@ export async function suggestNumbersForClubRanked(input: {
     if (adjacentGroups.length > 0) {
       let adjQuery = supabase
         .from("players")
-        .select("final_shirt, division_code, team_name")
+        .select("final_shirt, division_code, team_name, team_id, age_group")
         .eq("club_id", input.clubId)
         .in("final_shirt", candidateNums)
         .in("age_group", adjacentGroups)
@@ -984,6 +1178,7 @@ export async function suggestNumbersForClubRanked(input: {
       for (const p of adjPlayers ?? []) {
         const n = Number((p as any).final_shirt);
         if (!Number.isFinite(n)) continue;
+        if (!holderBlocksBuyer(p as TeamFields, ngc, input.buyerGender)) continue;
         const sameTeam =
           ((p as any).division_code ?? null) === (input.divisionCode ?? null) &&
           ((p as any).team_name ?? null) === (input.teamName ?? null);

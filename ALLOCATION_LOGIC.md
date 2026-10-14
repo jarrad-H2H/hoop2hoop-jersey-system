@@ -55,6 +55,25 @@ The widget works down these layers and only moves to the next when the previous 
 
 **Known limitation (not yet changed):** a purchase made as "new player" is stored on a separate record with a number but no team, while the club's team-list record has the team but no number. Layer 3 matches on stored team, so it cannot see that number. Resolving the two records by name would close this but has not been agreed.
 
+**Plan B fix (2026-10-14):** a confirmed returning player who *also* picked their team from the dropdown used to lose all same-team blocking at Seahawks clubs. The widget swapped the dropdown pick into `teamName`, and Seahawks records hold the team in `division_code` with `team_name` NULL, so the `(division_code, team_name)` teammate match found nobody (e.g. Callum Honeycombe picking 18B.1 → teammate Noah Turner's #30 dropped to a soft warning). Now: Plan B keeps the looked-up team; the dropdown pick is passed as `selectedTeamCode` (additive, same as Layer 1); and a division-only team (`teamName` null) matches teammates in any field (`division_code`, `team_name`, `team_id`), so widget purchases stored under `team_name` are teammates too.
+
+---
+
+### 2f. North Gold Coast Rules (agreed 2026-10-14, NGC competition only)
+
+Apply **only** to clubs with a team in a competition where `competitions.ngc_clash_rules = true` (set for "North Gold Coast Seahawks Domestic Competition"). The widget (anon) asks via the `club_uses_ngc_clash_rules(club_id)` RPC; `getNgcContext()` in `allocation.ts`. The buyer's gender comes from the widget's gender question or the mens/womens product (`buyerGender`). Admin pages don't pass a gender, so they keep the standard rules.
+
+Why: Seahawks girls' age-group teams stop at U14 (U10G/U12G/U14G only). Super League Girls (SLG, DIV 1–4) is the competition for every older girl, graded by playing level, not age: girls who also play U12G/U14G appear in DIV 1, 2 and 3 (BC exports Summer 2025/26 + Winter 2026, 275 SLG girls, 32 also in U12G/U14G). So an SLG team can mix a 12-year-old and an adult, and BC gives no birth years, so a birth-year window cannot tell who might be a teammate.
+
+1. **SLG number pool.** For a girl buyer who (a) picks an SLG team, (b) is looked up as an SLG player (Plan B), or (c) is 12 or older and picks no team ("I don't know"), every number held by any SLG player at the club is blocked: all SLG teams, players kept from last season, and live SLG reservations. At Wolves every girl 12+ is SLG (no U14 girls' team). Safe while a club's SLG stays well under 99 numbers (Wolves 2026: 18 girls a season + 4 kept = 22 girls on 20 numbers). Check before a big SLG club goes live (Pelicans has 6 SLG teams).
+2. **Normal ±1 birth-year check stays on top (not ±3).** The pool already covers every SLG girl whatever her age; a wider window would only take numbers from younger U10/U12 girls who aren't her teammates.
+3. **Boys' teams never block girls and girls' teams never block boys.** A holder whose team (looked up in `teams` by `division_code`/`team_name`/`team_id`; SLG = Female) is single-gender and not the buyer's gender is skipped in the birth-year window, reservations, and adjacent-age scoring. **Mixed** teams, and holders with **no team on record** (widget buyers who chose "I don't know"), still block everyone.
+4. **Importer:** SLG players in an NGC import are estimated as aged 12+ (`estimated_yob_max = year − 12`, was 18+). Existing NGC SLG players were updated 2026-10-14 (213 rows, 10 clubs).
+
+Edge: a club in NGC **and** another competition (King's) gets the rules for all its teams. Not a client.
+
+Tested by `scripts/test-ngc-rules.ts` (read-only, live Wolves data).
+
 ---
 
 ## 3. Age Group Clash Windows
@@ -83,6 +102,8 @@ SELECT EXISTS (
 **Junior age group** — confirmed with Gold Coast Basketball (2026-06-22): a girls-only division merging U14 + U16, i.e. ages 12–15. **Open Girls** — confirmed same date: a girls-only division merging U18 + Open/Seniors, i.e. ages 16 and up.
 
 **U20 (BC-imported players)** — Hoop2Hoop rule (2026-10-13): estimated YOB = born `current_year − 17` or earlier (2009 or older in 2026), i.e. `estimated_yob_min = year − 99`, `estimated_yob_max = year − 17`. Same rule in the importer (`estimateYobRange`) and the clash fallback (`estimateYobFromAgeGroup`). Before this, U20 had no estimate, and a player with no YOB data at all is conservatively treated as clashing with **every** buyer — so U20 numbers were blocked club-wide. Now they clash with U18 and adult buyers only.
+
+**SLG at North Gold Coast** — no age limit; handled by team pool, not age (Section 2f). The SLG note below (18+) applies outside NGC only.
 
 **SLG (Super League Girls)** — a separate age group in the Gold Coast competition, female-only, for elite girls. Treat as a single-gender pool; no cross-pool check.
 

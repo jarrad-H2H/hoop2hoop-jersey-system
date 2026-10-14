@@ -945,9 +945,17 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     // Playing up: Plan B's matched team is the player's PRIMARY (lower) team, which does
     // NOT apply to this purchase — they're buying a second jersey for a DIFFERENT, higher
     // team selected from the dropdown. Prioritise that dropdown selection in this case.
+    // Plan B keeps the looked-up team as-is. Swapping in the dropdown pick (old behaviour) broke
+    // the teammate match for Seahawks records, whose team is in division_code with team_name
+    // null — a confirmed player who also picked their own team lost all same-team blocking.
+    // The pick is still applied, additively, as pickedTeamCode below.
     const effectiveDivisionCode = playingUp === true ? undefined : planBDivisionCode;
     const effectiveTeamName =
-      playingUp === true ? selectedTeamName : planBTeamName ?? selectedTeamName;
+      playingUp === true
+        ? selectedTeamName
+        : planBDivisionCode !== undefined
+          ? planBTeamName
+          : selectedTeamName;
 
     // yob_window mode: strip all team context so clash checking uses the pure
     // YOB ±1 window rather than team-aware same-team blocking.
@@ -958,7 +966,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     // dropdown can only ADD protection (same-team block), it never replaces the birth-year check.
     const planBActive = effectiveDivisionCode !== undefined;
     const enforceYobWindow = !planBActive;
-    const pickedTeamCode = !planBActive && !yobWindowMode ? selectedTeamName : undefined;
+    // A team picked from the dropdown only ever ADDS protection, in Plan B as well.
+    const pickedTeamCode = !yobWindowMode ? selectedTeamName : undefined;
 
     setLoadingSuggest(true);
     setSuggestions([]);
@@ -978,6 +987,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         excludePlayerId: matchedPlayerId,
         enforceYobWindow,
         selectedTeamCode: pickedTeamCode,
+        buyerGender: effectivePlayerGender,
         limit: 30,
       });
 
@@ -995,6 +1005,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             excludePlayerId: matchedPlayerId,
             enforceYobWindow,
             selectedTeamCode: pickedTeamCode,
+            buyerGender: effectivePlayerGender,
           });
           const hasStockForSize = (check.stockBySize ?? []).some(
             (s) => String(s.size).toLowerCase() === String(selectedSize).toLowerCase() && s.count > 0
@@ -1059,6 +1070,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                 divisionCode: haveLookupTeam ? fallbackDivisionCode : undefined,
                 teamName: haveLookupTeam ? fallbackTeamName : selectedTeamName,
                 selectedTeamCode: selectedTeamName,
+                buyerGender: effectivePlayerGender,
                 crossPoolCheck,
                 productType: selectedProductType,
                 excludePlayerId: matchedPlayerId ?? fallbackPlayerId ?? undefined,

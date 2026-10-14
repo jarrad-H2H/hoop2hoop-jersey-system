@@ -86,8 +86,12 @@ function dedupScore(p: ParsedPlayer): number {
 // Derived dynamically from competition year — never hardcoded year constants.
 export function estimateYobRange(
   ageGroup: string,
-  competitionYear: number
+  competitionYear: number,
+  /** competitions.ngc_clash_rules — North Gold Coast SLG has no age limit (ALLOCATION_LOGIC.md 2f) */
+  ngcRules = false
 ): { min: number | null; max: number | null } {
+  // NGC: girls' age teams stop at U14 and younger girls play up, so SLG = aged 12 or older.
+  if (ngcRules && ageGroup === "SLG") return { min: competitionYear - 99, max: competitionYear - 12 };
   switch (ageGroup) {
     case "U8":   return { min: competitionYear - 7,  max: competitionYear - 5  }; // ages 5–7
     case "U10":  return { min: competitionYear - 9,  max: competitionYear - 8  }; // ages 8–9
