@@ -1521,18 +1521,72 @@ export async function lookupPlayerByName(params: {
   const firstTrimmed = firstName.trim();
   const lastTrimmed = lastName.trim();
 
-  // Helper: look up the inventory row for a player's current jersey (needed for write-off on exchange).
-  const fetchInventoryId = async (jerseyNumber: number | null): Promise<string | null> => {
-    if (!jerseyNumber) return null;
-    const { data } = await supabase
+  // Helper: the stock jersey THIS player holds with their current number — the one the order
+  // webhook writes off when they say it will be their only jersey. It used to take any
+  // Allocated jersey with that number at the club, so another child's jersey was written off
+  // (Celtics 2026-09/10: Harrison Cleary -> Cooper Mulheron's #75, Frankie Hunter -> Marisha
+  // Tasarz's #88). Same matching as releasePlayerJersey: the player link, else their own
+  // purchase of that number. A number that never came from our stock (e.g. a BC singlet)
+  // has no jersey to write off.
+  const fetchInventoryId = async (p: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    year_of_birth: number | null;
+    final_shirt: number | null;
+  }): Promise<string | null> => {
+    const jerseyNumber = p.final_shirt;
+    if (jerseyNumber == null) return null;
+
+    const { data: linked } = await supabase
       .from("inventory")
       .select("id")
       .eq("club_id", clubId)
+      .eq("allocated_player_id", p.id)
       .eq("jersey_number", jerseyNumber)
-      .eq("status", "Allocated")
+      .eq("status", STATUS_ALLOCATED)
       .eq("product_type", productType)
       .limit(1);
-    return ((data ?? [])[0] as any)?.id ?? null;
+    const linkedId = ((linked ?? [])[0] as { id: string } | undefined)?.id;
+    if (linkedId) return linkedId;
+
+    const first = (p.first_name ?? "").trim();
+    const last = (p.last_name ?? "").trim();
+    if (!first || !last) return null;
+    let purchaseQuery = supabase
+      .from("pending_allocations")
+      .select("inventory_id, created_at")
+      .eq("club_id", clubId)
+      .eq("jersey_number", jerseyNumber)
+      .eq("product_type", productType)
+      .eq("status", "purchased")
+      .not("inventory_id", "is", null)
+      .ilike("player_first_name", first)
+      .ilike("player_last_name", last)
+      .order("purchased_at", { ascending: false })
+      .limit(1);
+    if (p.year_of_birth != null) purchaseQuery = purchaseQuery.eq("year_of_birth", p.year_of_birth);
+    const { data: purchases } = await purchaseQuery;
+    const purchase = (purchases ?? [])[0] as { inventory_id: string; created_at: string } | undefined;
+    if (!purchase?.inventory_id) return null;
+
+    // Reserved or bought again since (returned, then sold to someone else)? No longer theirs.
+    const { data: newer } = await supabase
+      .from("pending_allocations")
+      .select("id")
+      .eq("inventory_id", purchase.inventory_id)
+      .in("status", ["reserved", "purchased"])
+      .gt("created_at", purchase.created_at)
+      .limit(1);
+    if ((newer ?? []).length > 0) return null;
+
+    const { data: inv } = await supabase
+      .from("inventory")
+      .select("id")
+      .eq("id", purchase.inventory_id)
+      .eq("status", STATUS_ALLOCATED)
+      .limit(1);
+    return ((inv ?? [])[0] as { id: string } | undefined)?.id ?? null;
   };
 
   // Search by name first — no cohort filter on the primary query. BC-imported players
@@ -1562,7 +1616,7 @@ export async function lookupPlayerByName(params: {
         firstName: p.first_name ?? "",
         lastName: p.last_name ?? "",
         currentJerseyNumber: p.final_shirt ?? null,
-        previousInventoryId: await fetchInventoryId(p.final_shirt ?? null),
+        previousInventoryId: await fetchInventoryId(p),
         divisionCode: p.division_code ?? null,
         teamName: p.team_name ?? null,
         ageGroup: p.age_group ?? null,
@@ -1597,7 +1651,7 @@ export async function lookupPlayerByName(params: {
 
   if (!player) return { found: false };
 
-  const previousInventoryId = await fetchInventoryId(player.final_shirt ?? null);
+  const previousInventoryId = await fetchInventoryId(player);
 
   return {
     found: true,
