@@ -2079,6 +2079,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                   setExistingPlayerInventoryId(null);
                   setKeepExistingJersey(null);
                   setPlayerCandidates([]);
+                  // Otherwise "New to this club? No" stays selected and the next
+                  // "Find Available Numbers" click re-runs the lookup, finding the same
+                  // rejected player again (an endless loop for the customer).
+                  setIsNewPlayer(true);
                 }}
                 className="flex-1 py-2 px-3 rounded border border-orange-400 bg-white text-orange-900 text-sm font-medium hover:bg-orange-100 transition-colors"
               >
