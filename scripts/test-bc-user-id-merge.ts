@@ -1,6 +1,9 @@
 // Verifies planReturningPlayers (BC User ID matching for season-to-season Merge imports).
 // Also checks the U20 birth-year rule. Pure logic, no DB. Run with: npx tsx scripts/test-bc-user-id-merge.ts
-import { planReturningPlayers, estimateYobRange, ExistingPlayerRef, ImportRegistration } from "../src/services/bcImport";
+import {
+  planReturningPlayers, estimateYobRange, linkWebsiteBuyers,
+  ExistingPlayerRef, ImportRegistration, WebsiteBuyerRef, UnmatchedRegistration,
+} from "../src/services/bcImport";
 import { yobOverlapsWindow, getClashYobWindow } from "../src/services/allocation";
 
 let failures = 0;
@@ -52,6 +55,41 @@ check("brand new player is not matched", m(5) === undefined);
 check("record from another club is never matched", m(6) === undefined && !plan.surplusIds.includes("other-club"));
 check("legacy record without User ID untouched", !plan.surplusIds.includes("no-uid"));
 check("exactly one record retired", plan.surplusIds.length === 1);
+
+// Website buyers (no BC IDs) linked to their first BC registration (2026-10-15).
+const buyer = (id: string, first: string, last: string, yob: number, club = CLUB): WebsiteBuyerRef =>
+  ({ id, club_id: club, bc_player_id: null, bc_user_id: null, division_code: null, age_group: null, final_shirt: 1,
+     first_name: first, last_name: last, year_of_birth: yob });
+const unmatched = (key: number, first: string, last: string, age: string, club = CLUB): UnmatchedRegistration => {
+  const r = estimateYobRange(age, 2026);
+  return { key, clubId: club, firstName: first, lastName: last, yobMin: r.min, yobMax: r.max };
+};
+const links = linkWebsiteBuyers(
+  [
+    unmatched(10, "Oaklie", "Hayes", "U10"),        // born 2018: fits U10
+    unmatched(11, "Watson", "McHale", "U16"),       // born 2013: playing up into U16
+    unmatched(12, "Old", "Kid", "U10"),             // born 2008: far too old for U10
+    unmatched(13, "Sam", "Twin", "U12"),            // two website Sam Twins: ambiguous
+    unmatched(14, "Other", "Club", "U12"),          // website profile is at another club
+    unmatched(15, "Russell", "Rigby", "U12"),       // one profile, two registrations
+    unmatched(16, "Russell", "Rigby", "U14"),
+  ],
+  [
+    buyer("oaklie", "Oaklie", "Hayes", 2018),
+    buyer("watson", "watson", "mchale ", 2013),
+    buyer("old", "Old", "Kid", 2008),
+    buyer("sam1", "Sam", "Twin", 2015), buyer("sam2", "Sam", "Twin", 2015),
+    buyer("other", "Other", "Club", 2015, OTHER),
+    buyer("russell", "Russell", "Rigby", 2015),
+  ]
+);
+check("website buyer linked when birth year fits the age group (Oaklie Hayes)", links.get(10)?.id === "oaklie");
+check("website buyer linked when playing up (Watson McHale, U16 at 13)", links.get(11)?.id === "watson");
+check("not linked when birth year is too old for the team", !links.has(12));
+check("not linked when two profiles share the name", !links.has(13));
+check("not linked across clubs", !links.has(14));
+check("one profile, two teams: linked to the team that fits, not the playing-up one",
+  links.get(15)?.id === "russell" && !links.has(16));
 
 // U20 rule (2026-10-13): BC U20 players are born 2009 or earlier (in 2026).
 const u20 = estimateYobRange("U20", 2026);

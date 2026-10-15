@@ -316,6 +316,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [retainLooking, setRetainLooking] = useState(false);
   const [retainLookupDone, setRetainLookupDone] = useState(false);
   const [retainFoundNumber, setRetainFoundNumber] = useState<number | null>(null);
+  const [retainPlayerId, setRetainPlayerId] = useState<string | null>(null);
   const [retainLookupError, setRetainLookupError] = useState<string | null>(null);
   const [retainConfirming, setRetainConfirming] = useState(false);
   const [retainPendingId, setRetainPendingId] = useState<string>("");
@@ -769,6 +770,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setError(null);
     setRetainLookupDone(false);
     setRetainFoundNumber(null);
+    setRetainPlayerId(null);
     setRetainLookupError(null);
     if (!sizeSelected) { setError("Please select a size above to continue."); return; }
     if (!firstName.trim() || !lastName.trim()) { setError("Please enter your first name and surname."); return; }
@@ -786,6 +788,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       });
       if (result.found && result.currentJerseyNumber != null) {
         setRetainFoundNumber(result.currentJerseyNumber);
+        setRetainPlayerId(result.playerId ?? null);
       } else if (result.found) {
         setRetainLookupError("no_number");
       } else {
@@ -818,6 +821,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         previousInventoryId: null,
         productType: selectedProductType,
         madeToOrder: true,
+        playerId: retainPlayerId,
       });
       if (!result.success) { setError(result.message || "Could not reserve. Please try again."); return; }
       const pid = result.pendingAllocationId || "";
@@ -1132,6 +1136,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         previousJerseyNumber: existingPlayerJersey ?? null,
         previousInventoryId: existingPlayerInventoryId ?? null,
         productType: selectedProductType,
+        playerId: isNewPlayer === false && identityConfirmed === true ? matchedPlayerId : null,
       });
 
       if (!result.success) {

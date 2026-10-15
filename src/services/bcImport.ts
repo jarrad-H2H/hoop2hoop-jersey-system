@@ -405,3 +405,66 @@ export function planReturningPlayers(
 
   return { matches, surplusIds };
 }
+
+// ─── Website buyers → their first BC registration ────────────────────────────
+// A jersey bought on the website creates a profile with no BC IDs (the website never knows
+// them). When that player first appears in a BC report, the registration is linked to that
+// profile — same club, same name, birth year fits the team's age group (or is up to one age
+// group younger: playing up) — so it is updated in place instead of duplicated. Only
+// unambiguous pairs are linked: exactly one profile for the registration and vice versa.
+
+export interface WebsiteBuyerRef extends ExistingPlayerRef {
+  first_name: string | null;
+  last_name: string | null;
+  year_of_birth: number | null;
+}
+
+export interface UnmatchedRegistration {
+  key: number;
+  clubId: string | null;
+  firstName: string;
+  lastName: string;
+  /** estimated birth-year range for the registration's age group (estimateYobRange) */
+  yobMin: number | null;
+  yobMax: number | null;
+}
+
+const nameKey = (s: string | null | undefined) =>
+  (s ?? "").normalize("NFKD").toLowerCase().replace(/[^a-z]/g, "");
+
+export function linkWebsiteBuyers(
+  registrations: UnmatchedRegistration[],
+  buyers: WebsiteBuyerRef[]
+): Map<number, WebsiteBuyerRef> {
+  const links = new Map<number, WebsiteBuyerRef>();
+  const claimed = new Set<string>();
+  const sameKid = (r: UnmatchedRegistration, b: WebsiteBuyerRef) =>
+    b.club_id === r.clubId &&
+    nameKey(b.first_name) === nameKey(r.firstName) &&
+    nameKey(b.last_name) === nameKey(r.lastName);
+  const passes: ((yob: number, min: number, max: number) => boolean)[] = [
+    (yob, min, max) => yob >= min && yob <= max, // birth year fits the age group
+    (yob, _min, max) => yob > max && yob <= max + 2, // playing up one age group
+  ];
+
+  for (const fits of passes) {
+    const forReg = new Map<number, WebsiteBuyerRef[]>();
+    const regsForBuyer = new Map<string, number>();
+    for (const r of registrations) {
+      if (links.has(r.key) || r.yobMin == null || r.yobMax == null) continue;
+      const found = buyers.filter(
+        (b) => !claimed.has(b.id) && b.year_of_birth != null && sameKid(r, b) &&
+          fits(b.year_of_birth, r.yobMin!, r.yobMax!)
+      );
+      forReg.set(r.key, found);
+      for (const b of found) regsForBuyer.set(b.id, (regsForBuyer.get(b.id) ?? 0) + 1);
+    }
+    for (const [key, found] of forReg) {
+      if (found.length === 1 && regsForBuyer.get(found[0].id) === 1) {
+        links.set(key, found[0]);
+        claimed.add(found[0].id);
+      }
+    }
+  }
+  return links;
+}

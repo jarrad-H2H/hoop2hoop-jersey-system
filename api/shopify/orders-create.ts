@@ -222,6 +222,17 @@ async function writeOrderNoteUnallocated(orderId: string, units: number): Promis
   });
 }
 
+// A confirmed returning player's purchase updates their own profile, except when they keep their
+// current jersey and buy a different number (a second jersey, e.g. playing up): that gets its
+// own profile for the team it was bought for.
+export function purchaseUpdatesOwnProfile(
+  keepExisting: boolean | null,
+  newNumber: number | null,
+  ownNumber: number | null
+): boolean {
+  return keepExisting !== true || newNumber === ownNumber;
+}
+
 // `skipUnits`: units already accounted for by the cart-attribute fallback (0 or 1).
 // Returns how many units were flagged.
 export async function flagUnallocatedLines(args: {
@@ -613,7 +624,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const { data: pending, error: pendingErr } = await supabase
         .from("pending_allocations")
-        .select("id, status, expires_at, inventory_id, jersey_number, size, season_year, year_of_birth, club_id, team_id, player_first_name, player_last_name, is_new_player, keep_existing_jersey, previous_jersey_number, previous_inventory_id, product_type")
+        .select("id, status, expires_at, inventory_id, jersey_number, size, season_year, year_of_birth, club_id, team_id, player_first_name, player_last_name, is_new_player, keep_existing_jersey, previous_jersey_number, previous_inventory_id, product_type, player_id")
         .eq("id", reservationId)
         .maybeSingle();
 
@@ -802,40 +813,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 age_group: pendingTeamAgeGroup,
               });
             } else if (isNewPlayerFlag === false) {
-              // Existing player — find the row for THIS specific team (when known) and
-              // update its final_shirt. If no row exists for this team — either a brand
-              // new team-membership (playing up) or a player not yet recorded — INSERT a
-              // new row rather than overwriting an unrelated team's record.
-              const { data: existingPlayers } = await supabase
-                .from("players")
-                .select("id, team_name")
-                .eq("club_id", clubId)
-                .ilike("first_name", playerFirstName)
-                .ilike("last_name", playerLastName)
-                .eq("year_of_birth", yob);
+              // The profile the buyer confirmed in the widget ("Did you mean…?"). BC profiles
+              // have no birth year, so the name + birth-year search below never finds them.
+              let ownProfile: { id: string; final_shirt: number | null; year_of_birth: number | null } | null = null;
+              if (p.player_id) {
+                const { data: own } = await supabase
+                  .from("players")
+                  .select("id, final_shirt, year_of_birth")
+                  .eq("id", p.player_id)
+                  .eq("club_id", clubId)
+                  .is("deleted_at", null)
+                  .maybeSingle();
+                ownProfile = (own as any) ?? null;
+              }
 
-              const rows = (existingPlayers ?? []) as any[];
-              const existingPlayer = pendingTeamName
-                ? rows.find((r) => r.team_name === pendingTeamName)
-                : rows[0];
-
-              if (existingPlayer?.id) {
+              if (ownProfile && purchaseUpdatesOwnProfile(keepExistingFlag, newJerseyNum, ownProfile.final_shirt)) {
                 await supabase
                   .from("players")
-                  .update({ final_shirt: newJerseyNum })
-                  .eq("id", existingPlayer.id);
+                  .update({ final_shirt: newJerseyNum, year_of_birth: ownProfile.year_of_birth ?? yob })
+                  .eq("id", ownProfile.id);
               } else {
-                // No row for this team — insert a new one (covers both "not found at all"
-                // and "found, but only for a different team membership").
-                await supabase.from("players").insert({
-                  first_name: playerFirstName,
-                  last_name: playerLastName,
-                  year_of_birth: yob,
-                  club_id: clubId,
-                  final_shirt: newJerseyNum,
-                  team_name: pendingTeamName,
-                  age_group: pendingTeamAgeGroup,
-                });
+                // Existing player — find the row for THIS specific team (when known) and
+                // update its final_shirt. If no row exists for this team — either a brand
+                // new team-membership (playing up) or a player not yet recorded — INSERT a
+                // new row rather than overwriting an unrelated team's record.
+                const { data: existingPlayers } = await supabase
+                  .from("players")
+                  .select("id, team_name")
+                  .eq("club_id", clubId)
+                  .ilike("first_name", playerFirstName)
+                  .ilike("last_name", playerLastName)
+                  .eq("year_of_birth", yob);
+
+                const rows = (existingPlayers ?? []) as any[];
+                const existingPlayer = pendingTeamName
+                  ? rows.find((r) => r.team_name === pendingTeamName)
+                  : rows[0];
+
+                if (existingPlayer?.id) {
+                  await supabase
+                    .from("players")
+                    .update({ final_shirt: newJerseyNum })
+                    .eq("id", existingPlayer.id);
+                } else {
+                  // No row for this team — insert a new one (covers both "not found at all"
+                  // and "found, but only for a different team membership").
+                  await supabase.from("players").insert({
+                    first_name: playerFirstName,
+                    last_name: playerLastName,
+                    year_of_birth: yob,
+                    club_id: clubId,
+                    final_shirt: newJerseyNum,
+                    team_name: pendingTeamName,
+                    age_group: pendingTeamAgeGroup,
+                  });
+                }
               }
 
               // If they're releasing their old jersey, write it off permanently.

@@ -13,6 +13,8 @@ import {
   planReturningPlayers,
   latestGameTime,
   resolveImportedShirt,
+  linkWebsiteBuyers,
+  WebsiteBuyerRef,
 } from "../services/bcImport";
 
 type OnRecord = ExistingPlayerRef & { first_name: string | null; last_name: string | null };
@@ -279,6 +281,7 @@ const Importer: React.FC = () => {
       let retiredCount = 0;
       let keptPurchased = 0;
       let keptOverZero = 0;
+      let linkedBuyers: string[] = [];
       if (withBcId.length > 0) {
         const toPayload = (r: PreviewRow) => {
           const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
@@ -375,10 +378,45 @@ const Importer: React.FC = () => {
           existing
         );
 
+        // Website buyers appearing in BC for the first time are linked, not duplicated.
+        const buyers: WebsiteBuyerRef[] = [];
+        if (importClubIds.length > 0) {
+          const { data, error } = await supabase
+            .from("players")
+            .select("id, club_id, bc_player_id, bc_user_id, division_code, age_group, final_shirt, first_name, last_name, year_of_birth")
+            .in("club_id", importClubIds)
+            .is("deleted_at", null)
+            .is("bc_user_id", null)
+            .is("bc_player_id", null)
+            .not("year_of_birth", "is", null);
+          if (error) {
+            setErrorMessage(`Failed to load website buyers: ${error.message}`);
+            return;
+          }
+          buyers.push(...((data ?? []) as WebsiteBuyerRef[]));
+        }
+        const websiteLinks = linkWebsiteBuyers(
+          withBcId.flatMap((r, key) => {
+            if (plan.matches.has(key) || knownPlayerIds.has(r.bcPlayerId)) return [];
+            const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
+            return [{
+              key,
+              clubId: clubMap.get(r.clubName) ?? r.clubId ?? null,
+              firstName: r.firstName,
+              lastName: r.lastName,
+              yobMin: yob.min,
+              yobMax: yob.max,
+            }];
+          }),
+          buyers
+        );
+        linkedBuyers = Array.from(websiteLinks.values(), (b) => `${b.first_name} ${b.last_name}`);
+
         const returningPayload: (ReturnType<typeof toPayload> & { id: string })[] = [];
         const upsertPayload: ReturnType<typeof toPayload>[] = [];
         withBcId.forEach((r, key) => {
-          const match = (plan.matches.get(key) as OnRecord | undefined) ?? knownByPid.get(r.bcPlayerId);
+          const match =
+            (plan.matches.get(key) as OnRecord | undefined) ?? websiteLinks.get(key) ?? knownByPid.get(r.bcPlayerId);
           if (match) {
             const bought = boughtAfterReport.has(buyKey(match.club_id, match.first_name, match.last_name, match.final_shirt));
             const shirt = resolveImportedShirt(r.finalShirt, match.final_shirt, bought);
@@ -549,6 +587,8 @@ const Importer: React.FC = () => {
       if (returningCount > 0) parts.push(`${returningCount} existing players updated`);
       if (keptPurchased > 0) parts.push(`${keptPurchased} numbers bought after this report kept`);
       if (keptOverZero > 0) parts.push(`${keptOverZero} BC #0s ignored (existing number kept)`);
+      if (linkedBuyers.length > 0)
+        parts.push(`${linkedBuyers.length} website buyers linked to their BC registration (${linkedBuyers.join(", ")})`);
       if (retiredCount > 0) parts.push(`${retiredCount} old duplicate registrations retired`);
       if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} players inserted`);
       if (newClubNames.length > 0) parts.push(`${newClubNames.length} club(s) created`);

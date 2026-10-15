@@ -1712,6 +1712,8 @@ export async function reserveNumberForPurchase(input: {
   productType?: string;
   /** Made-to-order: skip inventory stock check; create a placeholder Pending row instead. */
   madeToOrder?: boolean;
+  /** Profile of a returning player confirmed via "Did you mean…?"; the order updates this profile. */
+  playerId?: string | null;
 }): Promise<{
   success: boolean;
   message: string;
@@ -1734,6 +1736,7 @@ export async function reserveNumberForPurchase(input: {
     p_previous_inventory_id: input.previousInventoryId ?? null,
     p_product_type: input.productType ?? "default",
     p_is_made_to_order: input.madeToOrder ?? false,
+    p_player_id: input.playerId ?? null,
   });
 
   if (error) {
