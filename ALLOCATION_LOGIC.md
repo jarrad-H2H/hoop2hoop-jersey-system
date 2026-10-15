@@ -123,12 +123,15 @@ SELECT EXISTS (
 
 ## 5. Active vs. Released Players
 
+- **Rule (changed 2026-10-15, Jarrad): released after two seasons (~12 months) missing from the club's BC reports.** Seahawks and Gold Coast each run two seasons a year.
+- `bc_last_seen_at` (date) = the last game in the BC report the player last appeared in; the importer sets it on every player in the file.
 - A player is **active** if:
-  - `bc_last_seen_season >= current_year - 2` — appeared in a BC import within the last 2 seasons, OR
-  - `bc_last_seen_season IS NULL` — player exists in the system (e.g., from a direct widget purchase) but has never appeared in a BC upload; treat as **active conservatively**
-- Active players' numbers are **included** in clash checking
-- **Released / inactive**: `bc_last_seen_season < current_year - 2` — their numbers re-enter the available pool
-- `bc_last_seen_season` is updated every time a player appears in a BC import
+  - `bc_last_seen_at >= (the club's newest bc_last_seen_at) − 12 months`, OR
+  - `bc_last_seen_at IS NULL` — never in a BC report (e.g. shop-only buyer); treat as **active conservatively**
+- Measured from the **club's newest report, not today**: if a club's reports stop being imported, nobody is released (no data ≠ inactive). Per club, across competitions (King's spans two — not a client).
+- One helper: `activePlayersFilter()` / `activeCutoff()` in `allocation.ts`; Number Report and the Stock Planner number plan use `activeCutoff()` too.
+- Active players' numbers are **included** in clash checking; released players' numbers re-enter the available pool
+- Before 2026-10-15 this was `bc_last_seen_season >= current_year − 2` (calendar years — a player last seen in 2026 stayed blocked until 1 Jan 2029). Existing BC players were backfilled as last seen 30 June 2026 (all were imported mid-2026). Test: `scripts/test-release-rule.ts`.
 - Jerseys are **not** season-refresh items — players carry their jersey across seasons until released (inactive)
 
 ---
@@ -255,7 +258,7 @@ If either condition is false → no cross-pool check (treat as single-gender poo
   - `gender` — "Boys", "Girls", "Mixed" (from BC CSV column C or D)
   - `competition_id` — set from selected competition in the Importer UI
 - Importer estimates YOB range and stores `estimated_yob_min` / `estimated_yob_max` on each player
-- `bc_last_seen_season` is updated to the import year on every player seen in that run
+- `bc_last_seen_at` is set to the report's last game date (latest `Start Time`) on every player seen in that run (also `bc_last_seen_season` = import year, informational only)
 - Club name normalisation handles known aliases: VARSITY → Varsity, COPPERHEADS → Varsity, king's → King's
 - **BC ID columns (2026-06-22)**: the CSV's `Player Id` column (stored as `bc_player_id`, used as the upsert conflict key — one row per team registration) is **not** reliably stable across a player's separate team registrations. The CSV's `User ID` column **is** stable across teams for the same person — confirmed by direct analysis of real export data (e.g. "Annabel Ashton": same `User ID` on both her LEPRECHAUNS and SHAMROCKS rows, but a different `Player Id` for each). `User ID` is now also captured, into `bc_user_id`, purely for linking/display purposes — it is NOT an upsert key, since multi-team players are intentionally represented as separate rows (one per team).
 - **Season-to-season Merge matches by User ID (2026-10-13)**: BC issues a brand-new `Player Id` for every registration **every season** (confirmed on Seahawks exports: Summer 2025/26 vs Winter 2026 share 0 Player Ids but 74 of 94 Wolves User IDs). Matching on Player Id alone turned every returning player into a duplicate each season. Merge now runs `planReturningPlayers` (`src/services/bcImport.ts`): a registration whose Player Id isn't already in the DB is paired with the same person's existing record at the same club (same `bc_user_id`) — same team first, then same age group, then any — and that record is updated in place (new Player Id written onto it, `players.id` preserved so purchase/allocation links survive). Multi-team players still get one row per team.

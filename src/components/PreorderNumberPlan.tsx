@@ -3,6 +3,7 @@
 // size × birth year, then suggests clash-free print numbers for warehouse stock.
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
+import { activeCutoff } from "../services/allocation";
 import {
   buildCohorts,
   suggestStockNumbers,
@@ -71,7 +72,7 @@ const PreorderNumberPlan: React.FC<Props> = ({ clubId, clubName, productType }) 
           fetchAll<any>((f, t) =>
             supabase
               .from("players")
-              .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group, bc_last_seen_season")
+              .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group, bc_last_seen_at")
               .eq("club_id", clubId)
               .is("deleted_at", null)
               .not("final_shirt", "is", null)
@@ -100,11 +101,13 @@ const PreorderNumberPlan: React.FC<Props> = ({ clubId, clubName, productType }) 
         }
 
         const h: NumberHolder[] = [];
+        const latestReport = players.reduce<string | null>(
+          (max, p) => (p.bc_last_seen_at && (!max || p.bc_last_seen_at > max) ? p.bc_last_seen_at : max), null);
+        const cutoff = activeCutoff(latestReport);
         for (const p of players) {
           const ag = (p.age_group ?? "").trim().toUpperCase();
           if (GIRLS_ONLY_AGE_GROUPS.has(ag)) continue;
-          const seen = p.bc_last_seen_season;
-          if (seen != null && seen < SEASON_YEAR - 2) continue; // released
+          if (p.bc_last_seen_at && p.bc_last_seen_at < cutoff) continue; // released
           h.push({
             number: p.final_shirt,
             exactYob: p.year_of_birth ?? null,

@@ -272,6 +272,8 @@ const Importer: React.FC = () => {
 
       // ── Step 4: Upsert players ─────────────────────────────────────────────
       const currentYear = new Date().getFullYear();
+      const seenOn = reportEndsAt ?? new Date();
+      const lastSeenDate = `${seenOn.getFullYear()}-${String(seenOn.getMonth() + 1).padStart(2, "0")}-${String(seenOn.getDate()).padStart(2, "0")}`;
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
       let returningCount = 0;
       let retiredCount = 0;
@@ -296,6 +298,7 @@ const Importer: React.FC = () => {
             borrowing_division: r.borrowingDivision ?? null,
             competition_source: season,
             bc_last_seen_season: currentYear,        // integer year, not competition name
+            bc_last_seen_at: lastSeenDate,           // drives number release (ALLOCATION_LOGIC.md 5)
             estimated_yob_min: yob.min,
             estimated_yob_max: yob.max,
           };

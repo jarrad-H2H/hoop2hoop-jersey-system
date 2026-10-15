@@ -1,7 +1,7 @@
 // Verifies two fixes against "Hoop2Hoop Test Club":
 //   1. Concurrent reservations on a single-stock number -- only one must succeed
 //      (reserve_jersey's FOR UPDATE SKIP LOCKED atomicity).
-//   2. Inactive/released players (bc_last_seen_season < currentYear - 2) must not block
+//   2. Released players (missing from the club's BC reports for 12 months) must not block
 //      their old number via the team-aware clash path (previously only the YOB-window
 //      fallback path checked this).
 // Run with: npx tsx scripts/test-race-and-inactive.ts
@@ -38,12 +38,14 @@ async function testRaceCondition() {
   //     where club_id = '<CLUB_ID>' and jersey_number = 7;
 }
 
-// Requires this fixture to exist first (run via the privileged Supabase SQL tool --
-// anon, same as the real widget, has no INSERT permission on players):
+// Requires these fixtures to exist first (run via the privileged Supabase SQL tool --
+// anon, same as the real widget, has no INSERT permission on players). The second row is the
+// club's newest BC report, which the release rule measures from:
 //   insert into players (first_name, last_name, club_id, team_id, team_name, age_group,
-//     final_shirt, year_of_birth, bc_last_seen_season) values
+//     final_shirt, year_of_birth, bc_last_seen_at) values
 //     ('OldPlayer', 'Departed', '<CLUB_ID>', 'H2H-TEST-U10-MIXED',
-//      'H2H Test U10 Mixed Team A', 'U10', 9, 2017, 2022);
+//      'H2H Test U10 Mixed Team A', 'U10', 9, 2017, '2024-06-30'),
+//     ('OldPlayer', 'Current', '<CLUB_ID>', 'H2H-TEST-U18-B', null, 'U18', 50, 2010, '2026-10-11');
 // Clean up afterwards with:
 //   delete from players where club_id = '<CLUB_ID>' and first_name = 'OldPlayer';
 async function testInactivePlayer() {

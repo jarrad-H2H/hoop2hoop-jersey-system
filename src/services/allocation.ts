@@ -178,7 +178,6 @@ export interface ClashPlayer {
   year_of_birth: number | null;
   estimated_yob_min?: number | null;
   estimated_yob_max?: number | null;
-  bc_last_seen_season?: number | null;
 }
 
 export interface StockBySize {
@@ -319,7 +318,47 @@ async function getNgcContext(clubId: string): Promise<NgcContext> {
   return ctx;
 }
 
-const isSlgCode = (code: string | null | undefined): boolean => /^SLG/i.test((code ?? "").trim());
+// ─── Active players (ALLOCATION_LOGIC.md 5) ───────────────────────────────────
+// A number is released once the club's BC reports from the last 12 months (two seasons)
+// no longer include its holder. Measured from the club's newest report rather than today,
+// so a club whose reports haven't been imported lately never has its numbers freed.
+// Players never seen in a BC report (bc_last_seen_at null, e.g. shop-only) stay active.
+const RELEASE_AFTER_MONTHS = 12;
+
+/** Oldest last-seen date that still counts as active, given the club's newest report date. */
+export function activeCutoff(latestReport: string | null): string {
+  if (!latestReport) return "1900-01-01";
+  const d = new Date(latestReport + "T00:00:00Z");
+  d.setUTCMonth(d.getUTCMonth() - RELEASE_AFTER_MONTHS);
+  return d.toISOString().slice(0, 10);
+}
+
+export const activeFilterFor = (cutoff: string) => `bc_last_seen_at.is.null,bc_last_seen_at.gte.${cutoff}`;
+
+const activeFilterCache = new Map<string, string>();
+
+/** PostgREST `.or()` filter selecting the club's active players. */
+async function activePlayersFilter(clubId: string): Promise<string> {
+  const cached = activeFilterCache.get(clubId);
+  if (cached) return cached;
+  const { data, error } = await supabase
+    .from("players")
+    .select("bc_last_seen_at")
+    .eq("club_id", clubId)
+    .is("deleted_at", null)
+    .not("bc_last_seen_at", "is", null)
+    .order("bc_last_seen_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error("activePlayersFilter error", error);
+    return activeFilterFor(activeCutoff(null)); // everyone active; not cached, so it retries
+  }
+  const filter = activeFilterFor(activeCutoff(data?.[0]?.bc_last_seen_at ?? null));
+  activeFilterCache.set(clubId, filter);
+  return filter;
+}
+
+const isSlgCode =(code: string | null | undefined): boolean => /^SLG/i.test((code ?? "").trim());
 
 type TeamFields = {
   division_code?: string | null;
@@ -493,6 +532,7 @@ export async function smartCheckNumber(
       : new Date().getFullYear();
 
   const ngc = await getNgcContext(clubId);
+  const activeFilter = await activePlayersFilter(clubId);
   const slgPool = slgPoolApplies(ngc, { buyerGender, yearOfBirth, seasonYear, divisionCode, teamName, selectedTeamCode });
 
   // Same team as the buyer's stated/looked-up team. Seahawks records carry the team in
@@ -509,20 +549,13 @@ export async function smartCheckNumber(
     const holders = allHolders.filter((p) => holderBlocksBuyer(p, ngc, buyerGender));
     if (typeof yearOfBirth !== "number" || !Number.isFinite(yearOfBirth)) {
       // No YOB at all — flag all active holders as clashes (safe fallback)
-      return holders.filter(
-        (p) => p.bc_last_seen_season === null || (p.bc_last_seen_season ?? 0) >= seasonYear - 2
-      );
+      return holders;
     }
     // Note: hasU8Division needs an async query and smartCheckNumber is called per-number,
     // so hasU8=false here (conservative: uses the ±1 window for U10). The proactive filter in
     // suggestNumbersForClubRanked does the full U8 check.
     const clashWin = getClashYobWindow(yearOfBirth, seasonYear, /* hasU8 */ false);
     return holders.filter((p) => {
-      // Inactive players don't block numbers
-      if (p.bc_last_seen_season !== null && p.bc_last_seen_season !== undefined &&
-          p.bc_last_seen_season < seasonYear - 2) {
-        return false;
-      }
       // Cross-pool: same age group (or girls Junior/Open Girls merge bucket) = hard clash regardless of YOB window
       if (crossPoolCheck && isSameMergeBucket(ageGroup, p.age_group)) {
         return true;
@@ -538,17 +571,15 @@ export async function smartCheckNumber(
     });
   };
 
-  // Fetch all ACTIVE players in this club wearing this jersey number. Inactive/released
-  // players (bc_last_seen_season < seasonYear - 2) must not block their old number for
-  // the team-aware path either -- this filter previously only applied in the YOB-window
-  // fallback branch, so the (far more common) team-aware path never freed up old numbers.
+  // Fetch all ACTIVE players in this club wearing this jersey number (released players
+  // don't block their old number on any path).
   let clashQuery = supabase
     .from("players")
-    .select("id, first_name, last_name, division_code, team_id, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, bc_last_seen_season")
+    .select("id, first_name, last_name, division_code, team_id, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max")
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber)
     .is("deleted_at", null)
-    .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${seasonYear - 2}`);
+    .or(activeFilter);
   if (excludePlayerId) {
     clashQuery = clashQuery.neq("id", excludePlayerId);
   }
@@ -825,6 +856,7 @@ export async function suggestNumbersForClubRanked(input: {
 }): Promise<NumberSuggestion[]> {
   const limit = Math.max(1, input.limit ?? 10);
   const ngc = await getNgcContext(input.clubId);
+  const activeFilter = await activePlayersFilter(input.clubId);
   // cohortWindowYears / adjacentCohortYears kept in the signature for API compatibility
   // but the widget path now uses age-group-derived windows (ALLOCATION_LOGIC.md).
   // Team-aware path: an actual team identity is known. ageGroup alone does NOT imply
@@ -865,16 +897,14 @@ export async function suggestNumbersForClubRanked(input: {
   const adjCounts = new Map<number, number>();
 
   if (hasTeamContext) {
-    // Team-aware: block numbers worn by ACTIVE players on the SAME team. Inactive/released
-    // players (bc_last_seen_season < currentYear - 2) must not block their old number here
-    // either -- this filter previously only applied in the YOB-window fallback branch.
+    // Team-aware: block numbers worn by ACTIVE players on the SAME team.
     const sameTeamQuery = supabase
       .from("players")
       .select("final_shirt")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
       .is("deleted_at", null)
-      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
+      .or(activeFilter);
 
     const divisionOnlyFilter =
       input.divisionCode != null && input.teamName == null ? teamCodeOrFilter(input.divisionCode) : null;
@@ -919,7 +949,7 @@ export async function suggestNumbersForClubRanked(input: {
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
       .is("deleted_at", null)
-      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`)
+      .or(activeFilter)
       .or(pickedTeamFilter);
     if (input.excludePlayerId) {
       pickedTeamQuery = pickedTeamQuery.neq("id", input.excludePlayerId);
@@ -967,14 +997,13 @@ export async function suggestNumbersForClubRanked(input: {
     }
 
     // Single query: all active holders of candidate numbers at this club.
-    // "Active" = bc_last_seen_season IS NULL (transitional) OR >= currentYear - 2.
     let allHoldersQuery = supabase
       .from("players")
       .select("final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max, age_group, division_code, team_name, team_id")
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
       .is("deleted_at", null)
-      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
+      .or(activeFilter);
     if (input.excludePlayerId) {
       allHoldersQuery = allHoldersQuery.neq("id", input.excludePlayerId);
     }
@@ -1044,7 +1073,7 @@ export async function suggestNumbersForClubRanked(input: {
 
   // ── Cross-pool blocking: additionally hard-block same-age-group numbers ──────
   // Runs in BOTH team-aware and widget paths when crossPoolCheck is active.
-  // Inactive players (bc_last_seen_season < currentYear - 2) are excluded.
+  // Inactive players are excluded.
   if (input.crossPoolCheck && input.ageGroup) {
     let cpQuery = supabase
       .from("players")
@@ -1053,7 +1082,7 @@ export async function suggestNumbersForClubRanked(input: {
       .in("age_group", ageGroupBucketSiblings(input.ageGroup))
       .in("final_shirt", candidateNums)
       .is("deleted_at", null)
-      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
+      .or(activeFilter);
     if (input.excludePlayerId) {
       cpQuery = cpQuery.neq("id", input.excludePlayerId);
     }
@@ -1111,7 +1140,7 @@ export async function suggestNumbersForClubRanked(input: {
       .eq("club_id", input.clubId)
       .in("final_shirt", candidateNums)
       .is("deleted_at", null)
-      .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`)
+      .or(activeFilter)
       .or("division_code.ilike.SLG*,team_name.ilike.SLG*,team_id.ilike.SLG*,age_group.eq.SLG");
     if (input.excludePlayerId) {
       slgQuery = slgQuery.neq("id", input.excludePlayerId);
@@ -1169,7 +1198,7 @@ export async function suggestNumbersForClubRanked(input: {
         .in("final_shirt", candidateNums)
         .in("age_group", adjacentGroups)
         .is("deleted_at", null)
-        .or(`bc_last_seen_season.is.null,bc_last_seen_season.gte.${currentYear - 2}`);
+        .or(activeFilter);
       if (input.excludePlayerId) {
         adjQuery = adjQuery.neq("id", input.excludePlayerId);
       }

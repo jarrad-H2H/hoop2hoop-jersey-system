@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, fetchAllPages } from "../services/supabase";
+import { activeCutoff } from "../services/allocation";
 import { FileSpreadsheet, FileDown } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
@@ -16,7 +17,7 @@ interface PlayerRow {
   age_group: string | null;
   final_shirt: number | null;
   year_of_birth: number | null;
-  bc_last_seen_season: number | null;
+  bc_last_seen_at: string | null;
 }
 
 interface Competition {
@@ -30,7 +31,7 @@ interface Club {
 }
 
 const PLAYER_COLUMNS =
-  "id, first_name, last_name, club_id, division_code, team_name, age_group, final_shirt, year_of_birth, bc_last_seen_season";
+  "id, first_name, last_name, club_id, division_code, team_name, age_group, final_shirt, year_of_birth, bc_last_seen_at";
 
 /** A team's identity is (division_code, team_name) -- the same convention used
  * everywhere else in this app (allocation.ts, Allocation.tsx) for clash-checking. */
@@ -45,8 +46,6 @@ function teamLabel(p: { division_code: string | null; team_name: string | null; 
 }
 
 const NumberReport: React.FC = () => {
-  const currentYear = new Date().getFullYear();
-
   const [competitions, setCompetitions] = useState<Competition[]>([]);
   const [loadingCompetitions, setLoadingCompetitions] = useState(false);
 
@@ -208,14 +207,22 @@ const NumberReport: React.FC = () => {
     void load();
   }, [clubId]);
 
-  const isActive = (p: PlayerRow) =>
-    p.bc_last_seen_season == null || p.bc_last_seen_season >= currentYear - 2;
-
   const basePlayers = clubId ? clubPlayers : wholeCompetitionPlayers;
 
+  // Released = missing from the club's BC reports for 12 months (ALLOCATION_LOGIC.md 5).
+  const cutoffByClub = useMemo(() => {
+    const latest = new Map<string, string>();
+    for (const p of basePlayers)
+      if (p.bc_last_seen_at && p.bc_last_seen_at > (latest.get(p.club_id) ?? "")) latest.set(p.club_id, p.bc_last_seen_at);
+    return new Map(Array.from(latest, ([club, d]) => [club, activeCutoff(d)]));
+  }, [basePlayers]);
+
   const filteredPlayers = useMemo(
-    () => (activeOnly ? basePlayers.filter(isActive) : basePlayers),
-    [basePlayers, activeOnly, currentYear]
+    () =>
+      activeOnly
+        ? basePlayers.filter((p) => p.bc_last_seen_at == null || p.bc_last_seen_at >= (cutoffByClub.get(p.club_id) ?? ""))
+        : basePlayers,
+    [basePlayers, activeOnly, cutoffByClub]
   );
 
   const teamOptions = useMemo(() => {
