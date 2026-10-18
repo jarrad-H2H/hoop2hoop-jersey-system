@@ -4,6 +4,15 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
+// Invite and reset links go straight to our own /reset-password page (not Supabase's emailed
+// /verify link, which depends on the project's Site URL and was never usable for an invite).
+// The token is only spent when the person submits their new password there, so an email
+// link-scanner opening the page can't use it up. The super admin sends the link themselves.
+function setPasswordLink(req: VercelRequest, hashedToken: string, type: "invite" | "recovery"): string {
+  const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+  return `https://${host}/reset-password?token_hash=${encodeURIComponent(hashedToken)}&type=${type}`;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
   const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -58,22 +67,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const body = req.body ?? {};
     const action = String(body.action ?? "");
 
-    // Invite a new staff member by email
+    // Invite a new staff member: creates their account and returns a set-password link
     if (action === "invite") {
       const email = String(body.email ?? "").trim().toLowerCase();
       if (!email) return res.status(400).json({ ok: false, error: "Email required" });
+      const superAdmin = body.superAdmin === true;
 
-      const { data, error } = await supabase.auth.admin.inviteUserByEmail(email);
-      if (error) return res.status(400).json({ ok: false, error: error.message });
+      const { data, error } = await supabase.auth.admin.generateLink({ type: "invite", email });
+      if (error) {
+        const already = /already (been )?registered|already exists/i.test(error.message);
+        return res.status(400).json({
+          ok: false,
+          error: already
+            ? `${email} already has an account. Use Reset Password next to their name to make them a new link.`
+            : error.message,
+        });
+      }
 
-      await supabase
+      const { error: adminErr } = await supabase
         .from("admin_users")
-        .upsert({ user_id: data.user.id, is_super_admin: false }, { onConflict: "user_id" });
+        .upsert({ user_id: data.user.id, is_super_admin: superAdmin }, { onConflict: "user_id" });
+      if (adminErr) return res.status(500).json({ ok: false, error: adminErr.message });
 
-      return res.status(200).json({ ok: true, userId: data.user.id });
+      return res.status(200).json({
+        ok: true,
+        userId: data.user.id,
+        link: setPasswordLink(req, data.properties.hashed_token, "invite"),
+      });
     }
 
-    // Generate a password reset link for a staff member
+    // Generate a set-new-password link for a staff member
     if (action === "reset-password") {
       const email = String(body.email ?? "").trim().toLowerCase();
       if (!email) return res.status(400).json({ ok: false, error: "Email required" });
@@ -84,8 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       if (error) return res.status(400).json({ ok: false, error: error.message });
 
-      const link = (data as any)?.properties?.action_link ?? null;
-      return res.status(200).json({ ok: true, link });
+      return res.status(200).json({ ok: true, link: setPasswordLink(req, data.properties.hashed_token, "recovery") });
     }
 
     // Delete a staff member account

@@ -4,44 +4,61 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../services/supabase";
 import { Lock } from "lucide-react";
 
+type LinkType = "invite" | "recovery";
+
 /**
- * Handles two cases:
- *   1. Email recovery link — Supabase sets a session from the URL token and fires
- *      a PASSWORD_RECOVERY event. sessionReady becomes true once that event fires.
- *   2. Logged-in admin clicking "Change Password" — already has a session so
- *      sessionReady is true immediately.
+ * Set-password page. Three ways in:
+ *   1. Invite / reset link made on the User Management page (?token_hash=…&type=invite|recovery).
+ *      The token is only spent when the person submits their new password, so an email
+ *      link-scanner that opens the page can't use it up first.
+ *   2. "Forgot password?" email sent by Supabase: lands with the session in the URL and fires
+ *      PASSWORD_RECOVERY.
+ *   3. Logged-in admin clicking "Change Password": already has a session.
  */
 const ResetPassword: React.FC = () => {
   const navigate = useNavigate();
+  const [linkToken] = useState<{ tokenHash: string; type: LinkType } | null>(() => {
+    const q = new URLSearchParams(window.location.search);
+    const tokenHash = q.get("token_hash");
+    const type = q.get("type");
+    return tokenHash && (type === "invite" || type === "recovery") ? { tokenHash, type } : null;
+  });
+  const [status, setStatus] = useState<"checking" | "ready" | "invalid" | "done">(linkToken ? "ready" : "checking");
+  const [verified, setVerified] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sessionReady, setSessionReady] = useState(false);
 
   useEffect(() => {
-    // Case 2: already logged in
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) setSessionReady(true);
-    });
+    if (linkToken) return;
 
-    // Case 1: recovery link fires PASSWORD_RECOVERY
+    // Supabase reports a failed emailed link (expired, already used) in the URL.
+    const params = new URLSearchParams(window.location.hash.slice(1) || window.location.search);
+    if (params.get("error_description") || params.get("error_code")) {
+      setStatus("invalid");
+      return;
+    }
+
+    let cancelled = false;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!cancelled) setStatus((prev) => (prev === "checking" ? (session ? "ready" : "invalid") : prev));
+    });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") {
-        setSessionReady(true);
-      }
+      if (event === "PASSWORD_RECOVERY") setStatus("ready");
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [linkToken]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setMessage(null);
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
@@ -54,16 +71,29 @@ const ResetPassword: React.FC = () => {
 
     setLoading(true);
     try {
+      if (linkToken && !verified) {
+        const { error: linkError } = await supabase.auth.verifyOtp({
+          token_hash: linkToken.tokenHash,
+          type: linkToken.type,
+        });
+        if (linkError) {
+          setStatus("invalid");
+          return;
+        }
+        setVerified(true);
+      }
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
-      setMessage("Password updated successfully. Redirecting to login...");
-      setTimeout(() => navigate("/login"), 2500);
+      setStatus("done");
+      setTimeout(() => navigate("/admin"), 2000);
     } catch (err: any) {
       setError(err.message ?? "Failed to update password.");
     } finally {
       setLoading(false);
     }
   };
+
+  const isInvite = linkToken?.type === "invite";
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
@@ -73,20 +103,30 @@ const ResetPassword: React.FC = () => {
             <Lock size={28} />
           </div>
           <h2 className="text-3xl font-bold text-white">Hoop2Hoop</h2>
-          <p className="text-brand-200 mt-2">Set New Password</p>
+          <p className="text-brand-200 mt-2">{isInvite ? "Set Up Your Login" : "Set New Password"}</p>
         </div>
 
         <div className="p-8">
-          {!sessionReady ? (
-            <p className="text-sm text-gray-500 text-center py-4">
-              Verifying reset link&hellip;
-            </p>
-          ) : message ? (
+          {status === "checking" ? (
+            <p className="text-sm text-gray-500 text-center py-4">Checking your link&hellip;</p>
+          ) : status === "invalid" ? (
+            <div className="space-y-6 text-center">
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                This link has expired or has already been used. Ask the person who sent it to you for a new link.
+              </div>
+              <button type="button" onClick={() => navigate("/login")} className="text-brand-600 hover:underline text-sm">
+                Back to login
+              </button>
+            </div>
+          ) : status === "done" ? (
             <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm text-center">
-              {message}
+              Password saved. Opening the admin panel&hellip;
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-6">
+              {isInvite && (
+                <p className="text-sm text-gray-600">Choose a password to finish setting up your admin login.</p>
+              )}
               {error && (
                 <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
                   {error}
@@ -100,6 +140,7 @@ const ResetPassword: React.FC = () => {
                 <input
                   type="password"
                   required
+                  autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="At least 8 characters"
@@ -114,6 +155,7 @@ const ResetPassword: React.FC = () => {
                 <input
                   type="password"
                   required
+                  autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter new password"
@@ -131,7 +173,7 @@ const ResetPassword: React.FC = () => {
                 {loading && (
                   <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
                 )}
-                {loading ? "Updating..." : "Update Password"}
+                {loading ? "Saving..." : isInvite ? "Set Password" : "Update Password"}
               </button>
 
               <p className="text-center text-sm text-gray-500">

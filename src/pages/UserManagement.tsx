@@ -33,11 +33,14 @@ const UserManagement: React.FC = () => {
   const [currentUserId, setCurrentUserId] = useState<string>("");
 
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteSuperAdmin, setInviteSuperAdmin] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   const [actionMsg, setActionMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [resetLink, setResetLink] = useState<string | null>(null);
+  // Set-password link for the super admin to send to the person themselves.
+  const [shareLink, setShareLink] = useState<{ email: string; link: string; kind: "invite" | "reset" } | null>(null);
+  const [copied, setCopied] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null); // userId being actioned
 
   const load = useCallback(async () => {
@@ -64,10 +67,13 @@ const UserManagement: React.FC = () => {
     if (!email) return;
     setInviteLoading(true);
     setInviteMsg(null);
-    const result = await apiCall("POST", { action: "invite", email });
-    if (result.ok) {
-      setInviteMsg({ type: "ok", text: `Invite sent to ${email}. They'll receive an email to set their password.` });
+    setShareLink(null);
+    const result = await apiCall("POST", { action: "invite", email, superAdmin: inviteSuperAdmin });
+    if (result.ok && result.link) {
+      setShareLink({ email, link: result.link, kind: "invite" });
+      setCopied(false);
       setInviteEmail("");
+      setInviteSuperAdmin(false);
       await load();
     } else {
       setInviteMsg({ type: "err", text: result.error ?? "Invite failed" });
@@ -78,15 +84,25 @@ const UserManagement: React.FC = () => {
   const handleResetPassword = async (user: AdminUser) => {
     setActionLoading(user.id);
     setActionMsg(null);
-    setResetLink(null);
+    setShareLink(null);
     const result = await apiCall("POST", { action: "reset-password", email: user.email });
     if (result.ok && result.link) {
-      setResetLink(result.link);
-      setActionMsg({ type: "ok", text: `Password reset link generated for ${user.email}. Copy it and send it to them directly.` });
+      setShareLink({ email: user.email, link: result.link, kind: "reset" });
+      setCopied(false);
     } else {
       setActionMsg({ type: "err", text: result.error ?? "Failed to generate reset link" });
     }
     setActionLoading(null);
+  };
+
+  const copyShareLink = async () => {
+    if (!shareLink) return;
+    try {
+      await navigator.clipboard.writeText(shareLink.link);
+      setCopied(true);
+    } catch {
+      setCopied(false); // clipboard blocked — the link box can still be selected and copied by hand
+    }
   };
 
   const handleDelete = async (user: AdminUser) => {
@@ -132,8 +148,8 @@ const UserManagement: React.FC = () => {
       {/* Invite form */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-700 mb-3">Invite New Staff Member</h2>
-        <form onSubmit={handleInvite} className="flex gap-3 items-end">
-          <div className="flex-1">
+        <form onSubmit={handleInvite} className="flex flex-wrap gap-3 items-end">
+          <div className="flex-1 min-w-[220px]">
             <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Email address</label>
             <input
               type="email"
@@ -144,13 +160,21 @@ const UserManagement: React.FC = () => {
               className="w-full border rounded px-3 py-2 text-sm"
             />
           </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700 py-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={inviteSuperAdmin}
+              onChange={e => setInviteSuperAdmin(e.target.checked)}
+            />
+            Full admin (can also manage users)
+          </label>
           <button
             type="submit"
             disabled={inviteLoading}
             className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-700 disabled:opacity-50"
           >
             <UserPlus size={15} />
-            {inviteLoading ? "Sending…" : "Send Invite"}
+            {inviteLoading ? "Creating…" : "Create Invite Link"}
           </button>
         </form>
         {inviteMsg && (
@@ -167,17 +191,33 @@ const UserManagement: React.FC = () => {
         </div>
       )}
 
-      {/* Reset link */}
-      {resetLink && (
+      {/* Set-password link to send */}
+      {shareLink && (
         <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
-          <p className="font-semibold text-yellow-800 mb-1">Password reset link (expires in 1 hour):</p>
-          <input
-            readOnly
-            value={resetLink}
-            onClick={e => (e.target as HTMLInputElement).select()}
-            className="w-full font-mono text-xs bg-white border rounded px-2 py-1.5 text-gray-700"
-          />
-          <p className="text-yellow-700 text-xs mt-1">Copy and send this to the staff member. It expires after one use.</p>
+          <p className="font-semibold text-yellow-800 mb-1">
+            {shareLink.kind === "invite"
+              ? `Invite link for ${shareLink.email}`
+              : `Password reset link for ${shareLink.email}`}
+          </p>
+          <div className="flex gap-2">
+            <input
+              readOnly
+              value={shareLink.link}
+              onClick={e => (e.target as HTMLInputElement).select()}
+              className="flex-1 min-w-0 font-mono text-xs bg-white border rounded px-2 py-1.5 text-gray-700"
+            />
+            <button
+              type="button"
+              onClick={copyShareLink}
+              className="px-3 py-1.5 border border-yellow-300 rounded bg-white text-xs font-medium text-yellow-800 hover:bg-yellow-100"
+            >
+              {copied ? "Copied" : "Copy link"}
+            </button>
+          </div>
+          <p className="text-yellow-700 text-xs mt-1">
+            Email this link to them yourself. It opens a page where they choose their own password, works once,
+            and expires after about an hour, so send it when they're ready. If it expires, use Reset Password to make a new one.
+          </p>
         </div>
       )}
 
