@@ -1039,13 +1039,12 @@ export async function suggestNumbersForClubRanked(input: {
       }
     }
 
-    // Source 2: active pending reservations / purchases
-    const { data: resBlock, error: rbErr } = await supabase
-      .from("pending_allocations")
-      .select("jersey_number, year_of_birth, expires_at, status, team_id")
-      .eq("club_id", input.clubId)
-      .in("jersey_number", candidateNums)
-      .in("status", ["reserved", "purchased"]);
+    // Source 2: active pending reservations / purchases. Through a database function: the public
+    // key can't read pending_allocations, which holds buyers' names.
+    const { data: resBlock, error: rbErr } = await supabase.rpc("widget_reservation_holds", {
+      p_club_id: input.clubId,
+      p_jersey_numbers: candidateNums,
+    });
 
     if (rbErr) {
       console.error("reservations block query error", rbErr);
@@ -1156,19 +1155,17 @@ export async function suggestNumbersForClubRanked(input: {
     }
 
     if (ngc.slgTeamIds.size > 0) {
-      const { data: slgRes, error: slgResErr } = await supabase
-        .from("pending_allocations")
-        .select("jersey_number, status, expires_at")
-        .eq("club_id", input.clubId)
-        .in("jersey_number", candidateNums)
-        .in("team_id", Array.from(ngc.slgTeamIds))
-        .in("status", ["reserved", "purchased"]);
+      const { data: slgRes, error: slgResErr } = await supabase.rpc("widget_reservation_holds", {
+        p_club_id: input.clubId,
+        p_jersey_numbers: candidateNums,
+      });
       if (slgResErr) {
         console.error("SLG pool reservation query error", slgResErr);
         throw new Error("Failed to load Super League Girls reservation data.");
       }
       const nowMs = Date.now();
       for (const r of slgRes ?? []) {
+        if (!ngc.slgTeamIds.has(String((r as any).team_id))) continue;
         if ((r as any).status === "reserved") {
           const exp = Date.parse(String((r as any).expires_at));
           if (!Number.isFinite(exp) || exp <= nowMs) continue;
@@ -1469,48 +1466,6 @@ export async function releasePlayerJersey(params: {
   return { freed: [], via: "none" };
 }
 
-export async function createPendingAllocation(input: {
-  clubId: string;
-  inventoryId: string;
-  jerseyNumber: number;
-  size: string;
-  seasonYear: number;
-  yearOfBirth: number;
-  teamId?: string | null;
-  expiresMinutes?: number;
-}): Promise<{ success: boolean; row?: PendingAllocationRow; message?: string }> {
-  const expiresMinutes = Math.max(1, input.expiresMinutes ?? 15);
-  const expiresAtIso = new Date(Date.now() + expiresMinutes * 60_000).toISOString();
-
-  const payload = {
-    club_id: input.clubId,
-    inventory_id: input.inventoryId,
-    jersey_number: input.jerseyNumber,
-    size: input.size,
-    season_year: input.seasonYear,
-    year_of_birth: input.yearOfBirth,
-    team_id: input.teamId ?? null,
-    status: "reserved",
-    expires_at: expiresAtIso,
-  };
-
-  const { data, error } = await supabase
-    .from("pending_allocations")
-    .insert(payload)
-    .select("*")
-    .limit(1);
-
-  if (error) {
-    console.error("createPendingAllocation insert error", error);
-    return { success: false, message: "Failed to create pending allocation record." };
-  }
-
-  const row = (data ?? [])[0] as PendingAllocationRow | undefined;
-  if (!row) return { success: false, message: "Pending allocation insert returned no row." };
-
-  return { success: true, row };
-}
-
 /**
  * Look up an existing player by name + YOB within a club.
  */
@@ -1582,40 +1537,18 @@ export async function lookupPlayerByName(params: {
     const first = (p.first_name ?? "").trim();
     const last = (p.last_name ?? "").trim();
     if (!first || !last) return null;
-    let purchaseQuery = supabase
-      .from("pending_allocations")
-      .select("inventory_id, created_at")
-      .eq("club_id", clubId)
-      .eq("jersey_number", jerseyNumber)
-      .eq("product_type", productType)
-      .eq("status", "purchased")
-      .not("inventory_id", "is", null)
-      .ilike("player_first_name", first)
-      .ilike("player_last_name", last)
-      .order("purchased_at", { ascending: false })
-      .limit(1);
-    if (p.year_of_birth != null) purchaseQuery = purchaseQuery.eq("year_of_birth", p.year_of_birth);
-    const { data: purchases } = await purchaseQuery;
-    const purchase = (purchases ?? [])[0] as { inventory_id: string; created_at: string } | undefined;
-    if (!purchase?.inventory_id) return null;
-
-    // Reserved or bought again since (returned, then sold to someone else)? No longer theirs.
-    const { data: newer } = await supabase
-      .from("pending_allocations")
-      .select("id")
-      .eq("inventory_id", purchase.inventory_id)
-      .in("status", ["reserved", "purchased"])
-      .gt("created_at", purchase.created_at)
-      .limit(1);
-    if ((newer ?? []).length > 0) return null;
-
-    const { data: inv } = await supabase
-      .from("inventory")
-      .select("id")
-      .eq("id", purchase.inventory_id)
-      .eq("status", STATUS_ALLOCATED)
-      .limit(1);
-    return ((inv ?? [])[0] as { id: string } | undefined)?.id ?? null;
+    // Their most recent purchase of that number, unless reserved or bought again since (returned,
+    // then sold to someone else), while still Allocated. Matched inside the database: the public
+    // key can't read pending_allocations, which holds buyers' names.
+    const { data: ownJersey } = await supabase.rpc("widget_own_purchased_jersey", {
+      p_club_id: clubId,
+      p_jersey_number: jerseyNumber,
+      p_product_type: productType,
+      p_first_name: first,
+      p_last_name: last,
+      p_year_of_birth: p.year_of_birth,
+    });
+    return (ownJersey as string | null) ?? null;
   };
 
   // Search by name first — no cohort filter on the primary query. BC-imported players
