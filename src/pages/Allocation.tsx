@@ -391,7 +391,7 @@ const Allocation: React.FC = () => {
       const { clashes, softWarnings, stockBySize, statusMessage } = await smartCheckNumber(
         selectedClubId,
         num,
-        { yearOfBirth: yobNum, ...teamCtx, productType: selectedProductType }
+        { yearOfBirth: yobNum, ...teamCtx, productType: selectedProductType, includeNames: true }
       );
       setClashes(clashes);
       setSoftWarnings(softWarnings);

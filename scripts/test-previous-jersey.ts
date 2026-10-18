@@ -1,6 +1,6 @@
 // lookupPlayerByName's previousInventoryId (the jersey the order webhook writes off when a returning
 // player says "this will be my only jersey") must be THAT player's own stock jersey, never another
-// child's jersey with the same number. Read-only, live data as of 2026-10-14.
+// child's jersey with the same number. Read-only, live data as of 2026-10-19.
 // Run with: npx tsx scripts/test-previous-jersey.ts
 import { lookupPlayerByName } from "../src/services/allocation";
 
@@ -13,9 +13,11 @@ function check(label: string, condition: boolean) {
 }
 
 async function main() {
-  // Storm Hunt wears #80 from BC (never in our stock); Lucas James bought a #80 (L) from stock.
-  const storm = await lookupPlayerByName({ clubId: WOLVES, firstName: "Storm", lastName: "Hunt", yearOfBirth: 2015 });
-  check("Storm Hunt (#80 from BC) has no stock jersey to write off", storm.found && storm.previousInventoryId === null);
+  // Piper Thams wears #29 from BC (never in our stock), while another child holds a #29 from stock.
+  const piper = await lookupPlayerByName({ clubId: WOLVES, firstName: "Piper", lastName: "Thams", yearOfBirth: 2010 });
+  check("Piper Thams (#29 from BC) has no stock jersey to write off",
+    piper.found && piper.currentJerseyNumber === 29 && piper.previousInventoryId === null);
+  // Lucas James bought a #80 (L) from stock.
   const lucas = await lookupPlayerByName({ clubId: WOLVES, firstName: "Lucas", lastName: "James", yearOfBirth: 1996 });
   check("Lucas James's own #80 (L) is found", lucas.previousInventoryId === "fea88fe3-8ee5-4fcd-8242-1153b84c0819");
 

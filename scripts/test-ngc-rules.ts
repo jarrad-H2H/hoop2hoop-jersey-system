@@ -1,7 +1,8 @@
 // Verifies the North Gold Coast rules (ALLOCATION_LOGIC.md §2f) against live Wolves data,
-// exactly as JerseyWidget calls allocation.ts. Read-only. Holders as of 2026-10-14:
+// exactly as JerseyWidget calls allocation.ts (public key, so clashes come back without names and
+// holders are matched by record id). Read-only. Holders as of 2026-10-19:
 //   #29 Piper Thams (SLG.2, kept from last season)   #40 Violet Emmett (SLG.1)
-//   #37 Archer Whyte (14B.2)   #30 Noah Turner (18B.1), Jaden Rendle (16B.2), Liam Smith (14B.2)
+//   #27 Oliver Garland (14B.2)   #30 Noah Turner (18B.1), teammate of Callum Honeycombe
 // Run with: npx tsx scripts/test-ngc-rules.ts
 import { supabase } from "../src/services/supabase";
 import { smartCheckNumber, suggestNumbersForClubRanked, lookupPlayerByName, BuyerGender } from "../src/services/allocation";
@@ -15,14 +16,22 @@ function check(label: string, condition: boolean) {
   if (!condition) failures++;
 }
 
+/** Record ids for a player's exact name (exact names don't use the birth year). */
+async function idsOf(firstName: string, lastName: string): Promise<string[]> {
+  const r = await lookupPlayerByName({ clubId: WOLVES, firstName, lastName, yearOfBirth: YEAR });
+  return r.candidates ? r.candidates.map((c) => c.playerId) : r.playerId ? [r.playerId] : [];
+}
+
 /** A new buyer as the widget sends them (Layer 1): birth-year window always on, picked team additive. */
 async function newBuyerClash(n: number, yob: number, gender: BuyerGender, team?: string) {
   const r = await smartCheckNumber(WOLVES, n, {
     seasonYear: YEAR, yearOfBirth: yob, teamName: team, enforceYobWindow: true,
     selectedTeamCode: team, buyerGender: gender, productType: "default",
   });
-  return r.clashes.map((p) => `${p.first_name} ${p.last_name}`);
+  return r.clashes.map((p) => p.id);
 }
+
+const blockedBy = (clashIds: string[], holderIds: string[]) => clashIds.some((id) => holderIds.includes(id));
 
 async function main() {
   const { data: wolvesNgc } = await supabase.rpc("club_uses_ngc_clash_rules", { p_club_id: WOLVES });
@@ -30,19 +39,24 @@ async function main() {
   check("Wolves plays North Gold Coast (rules on)", wolvesNgc === true);
   check("Celtics does not (rules off)", celticsNgc === false);
 
+  const [piper, violet, oliver, noah] = await Promise.all([
+    idsOf("Piper", "Thams"), idsOf("Violet", "Emmett"), idsOf("Oliver", "Garland"), idsOf("Noah", "Turner"),
+  ]);
+  check("fixture players found by exact name", [piper, violet, oliver, noah].every((ids) => ids.length > 0));
+
   // Rule 1: SLG number pool
-  check("SLG.1 girl: #40 blocked (SLG.1 teammate)", (await newBuyerClash(40, 2010, "Female", "SLG.1")).includes("Violet Emmett"));
-  check("SLG.1 girl: #29 blocked (SLG.2 girl kept from last season)", (await newBuyerClash(29, 2010, "Female", "SLG.1")).includes("Piper Thams"));
-  check("SLG.2 girl: #40 blocked (pool covers every SLG team)", (await newBuyerClash(40, 2010, "Female", "SLG.2")).includes("Violet Emmett"));
-  check("girl born 2008, team 'I don't know': #29 blocked (12+ = SLG pool)", (await newBuyerClash(29, 2008, "Female")).includes("Piper Thams"));
-  check("girl born 2013, team 'I don't know': #40 blocked (12+ = SLG pool)", (await newBuyerClash(40, 2013, "Female")).includes("Violet Emmett"));
+  check("SLG.1 girl: #40 blocked (SLG.1 teammate)", blockedBy(await newBuyerClash(40, 2010, "Female", "SLG.1"), violet));
+  check("SLG.1 girl: #29 blocked (SLG.2 girl kept from last season)", blockedBy(await newBuyerClash(29, 2010, "Female", "SLG.1"), piper));
+  check("SLG.2 girl: #40 blocked (pool covers every SLG team)", blockedBy(await newBuyerClash(40, 2010, "Female", "SLG.2"), violet));
+  check("girl born 2008, team 'I don't know': #29 blocked (12+ = SLG pool)", blockedBy(await newBuyerClash(29, 2008, "Female"), piper));
+  check("girl born 2013, team 'I don't know': #40 blocked (12+ = SLG pool)", blockedBy(await newBuyerClash(40, 2013, "Female"), violet));
   check("girl born 2015 (U12), 'I don't know': #29 NOT blocked (pool is 12+)", (await newBuyerClash(29, 2015, "Female")).length === 0);
 
   // Rule 2: boys' and girls' teams never block each other
   check("boy born 2008 (U20): #40 NOT blocked by an SLG girl", (await newBuyerClash(40, 2008, "Male")).length === 0);
-  check("boy born 2013 (U14): #40 NOT blocked by an SLG girl", (await newBuyerClash(40, 2013, "Male")).length === 0);
-  check("boy born 2013 (U14): #37 still blocked (Archer Whyte, boy, same age)", (await newBuyerClash(37, 2013, "Male")).includes("Archer Whyte"));
-  check("girl born 2013: #37 NOT blocked by a boys' team player", (await newBuyerClash(37, 2013, "Female")).length === 0);
+  check("boy born 2013 (U14): #29 NOT blocked by an SLG girl", (await newBuyerClash(29, 2013, "Male")).length === 0);
+  check("boy born 2013 (U14): #27 still blocked (Oliver Garland, boy, same age)", blockedBy(await newBuyerClash(27, 2013, "Male"), oliver));
+  check("girl born 2013: #27 NOT blocked by a boys' team player", (await newBuyerClash(27, 2013, "Female")).length === 0);
 
   // Plan B fix: a returning Seahawks player who also picks their own team keeps teammate blocking
   const c = await lookupPlayerByName({ clubId: WOLVES, firstName: "Callum", lastName: "Honeycombe", yearOfBirth: 2009 });
@@ -52,7 +66,7 @@ async function main() {
       excludePlayerId: c.playerId, enforceYobWindow: false, selectedTeamCode: picked, buyerGender: "Male", productType: "default",
     });
     check(`Plan B Callum (team list: ${picked ?? "I don't know"}): #30 blocked (teammate Noah Turner)`,
-      r.clashes.some((p) => p.first_name === "Noah" && p.last_name === "Turner"));
+      blockedBy(r.clashes.map((p) => p.id), noah));
   }
 
   // Number grid: an SLG girl never sees any SLG girl's number; boys' numbers aren't held against her

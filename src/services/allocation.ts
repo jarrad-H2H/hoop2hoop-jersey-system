@@ -168,8 +168,9 @@ export function yobOverlapsWindow(
  */
 export interface ClashPlayer {
   id: string;
-  first_name: string;
-  last_name: string;
+  /** Only with includeNames (signed-in admin pages); the public key can't read names. */
+  first_name?: string;
+  last_name?: string;
   division_code: string | null; // e.g. "JGC1" (GC) or "14B.1" (Seahawks)
   team_id?: string | null;      // BC team code on older imports, e.g. "12GC3"
   team_name: string | null;     // e.g. "BLAZES" (GC), null for Seahawks
@@ -237,6 +238,11 @@ export interface SmartCheckOptions {
   selectedTeamCode?: string | null;
   /** Buyer's gender (widget answer or mens/womens product). Enables the North Gold Coast rules (§2f). */
   buyerGender?: BuyerGender | null;
+  /**
+   * Also return the clashing players' names, for admin pages (signed in). The widget runs on the
+   * public key, which can only read the clash columns of players, so it must leave this off.
+   */
+  includeNames?: boolean;
 }
 
 /** Team-code variants to match against stored player records ("10BC3/4" -> 10BC3/4, 10BC3, 10BC4). */
@@ -524,6 +530,7 @@ export async function smartCheckNumber(
     enforceYobWindow = false,
     selectedTeamCode = null,
     buyerGender = null,
+    includeNames = false,
   } = options;
 
   const seasonYear =
@@ -573,9 +580,11 @@ export async function smartCheckNumber(
 
   // Fetch all ACTIVE players in this club wearing this jersey number (released players
   // don't block their old number on any path).
+  const clashColumns =
+    "id, division_code, team_id, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max";
   let clashQuery = supabase
     .from("players")
-    .select("id, first_name, last_name, division_code, team_id, team_name, age_group, final_shirt, year_of_birth, estimated_yob_min, estimated_yob_max")
+    .select<string, ClashPlayer>(includeNames ? `${clashColumns}, first_name, last_name` : clashColumns)
     .eq("club_id", clubId)
     .eq("final_shirt", jerseyNumber)
     .is("deleted_at", null)
@@ -1502,126 +1511,60 @@ export async function lookupPlayerByName(params: {
   teamName?: string | null;
 }> {
   const { clubId, firstName, lastName, yearOfBirth, ageGroup, productType = "default" } = params;
-  const firstTrimmed = firstName.trim();
-  const lastTrimmed = lastName.trim();
 
-  // Helper: the stock jersey THIS player holds with their current number — the one the order
-  // webhook writes off when they say it will be their only jersey. It used to take any
-  // Allocated jersey with that number at the club, so another child's jersey was written off
-  // (Celtics 2026-09/10: Harrison Cleary -> Cooper Mulheron's #75, Frankie Hunter -> Marisha
-  // Tasarz's #88). Same matching as releasePlayerJersey: the player link, else their own
-  // purchase of that number. A number that never came from our stock (e.g. a BC singlet)
-  // has no jersey to write off.
-  const fetchInventoryId = async (p: {
-    id: string;
+  // Matched inside the database (widget_lookup_player): the public key can't read players' names.
+  // Every player with this first name and surname comes back (the buyer picks); otherwise ONE player
+  // whose surname, or part of a double surname, matches and whose age fits the birth year, the
+  // closest first name first (typos, Mike for Michael). No birth-year filter on exact names: BC
+  // players' age groups move on after import. previous_inventory_id is the stock jersey the order
+  // webhook writes off when they say it will be their only jersey: only ever this player's own (the
+  // player link, else their own purchase of that number), never another child's with the same number
+  // (Celtics 2026-09/10: Harrison Cleary -> Cooper Mulheron's #75). A number that never came from our
+  // stock (e.g. a BC singlet) has no jersey to write off.
+  const { data } = await supabase.rpc("widget_lookup_player", {
+    p_club_id: clubId,
+    p_first_name: firstName.trim(),
+    p_last_name: lastName.trim(),
+    p_year_of_birth: yearOfBirth,
+    p_age_group: ageGroup ?? null,
+    p_product_type: productType,
+  });
+  const matches = (data ?? []) as {
+    player_id: string;
     first_name: string | null;
     last_name: string | null;
-    year_of_birth: number | null;
     final_shirt: number | null;
-  }): Promise<string | null> => {
-    const jerseyNumber = p.final_shirt;
-    if (jerseyNumber == null) return null;
+    previous_inventory_id: string | null;
+    division_code: string | null;
+    team_name: string | null;
+    age_group: string | null;
+  }[];
 
-    const { data: linked } = await supabase
-      .from("inventory")
-      .select("id")
-      .eq("club_id", clubId)
-      .eq("allocated_player_id", p.id)
-      .eq("jersey_number", jerseyNumber)
-      .eq("status", STATUS_ALLOCATED)
-      .eq("product_type", productType)
-      .limit(1);
-    const linkedId = ((linked ?? [])[0] as { id: string } | undefined)?.id;
-    if (linkedId) return linkedId;
-
-    const first = (p.first_name ?? "").trim();
-    const last = (p.last_name ?? "").trim();
-    if (!first || !last) return null;
-    // Their most recent purchase of that number, unless reserved or bought again since (returned,
-    // then sold to someone else), while still Allocated. Matched inside the database: the public
-    // key can't read pending_allocations, which holds buyers' names.
-    const { data: ownJersey } = await supabase.rpc("widget_own_purchased_jersey", {
-      p_club_id: clubId,
-      p_jersey_number: jerseyNumber,
-      p_product_type: productType,
-      p_first_name: first,
-      p_last_name: last,
-      p_year_of_birth: p.year_of_birth,
-    });
-    return (ownJersey as string | null) ?? null;
-  };
-
-  // Search by name first — no cohort filter on the primary query. BC-imported players
-  // have null year_of_birth and an age_group that reflects their last import season,
-  // which may differ from the age group derived from the buyer's entered YOB. Filtering
-  // by cohort in the query causes false negatives for players who've aged up since import.
-  // Cohort data is used only to disambiguate when multiple players share the same name.
-  const { data: exactByName } = await supabase
-    .from("players")
-    .select("id, first_name, last_name, final_shirt, year_of_birth, age_group, division_code, team_name")
-    .eq("club_id", clubId)
-    .ilike("first_name", firstTrimmed)
-    .ilike("last_name", lastTrimmed)
-    .is("deleted_at", null)
-    .limit(10);
-
-  let player: any = null;
-  const exactMatches = (exactByName ?? []) as any[];
-
-  if (exactMatches.length === 1) {
-    player = exactMatches[0];
-  } else if (exactMatches.length > 1) {
-    // Multiple exact name matches — surface them all so the customer can pick.
-    const candidates: PlayerCandidate[] = await Promise.all(
-      exactMatches.map(async (p) => ({
-        playerId: p.id,
-        firstName: p.first_name ?? "",
-        lastName: p.last_name ?? "",
-        currentJerseyNumber: p.final_shirt ?? null,
-        previousInventoryId: await fetchInventoryId(p),
-        divisionCode: p.division_code ?? null,
-        teamName: p.team_name ?? null,
-        ageGroup: p.age_group ?? null,
-      }))
-    );
+  if (matches.length > 1) {
+    // Several players with this name — surface them all so the customer can pick.
+    const candidates: PlayerCandidate[] = matches.map((p) => ({
+      playerId: p.player_id,
+      firstName: p.first_name ?? "",
+      lastName: p.last_name ?? "",
+      currentJerseyNumber: p.final_shirt ?? null,
+      previousInventoryId: p.previous_inventory_id ?? null,
+      divisionCode: p.division_code ?? null,
+      teamName: p.team_name ?? null,
+      ageGroup: p.age_group ?? null,
+    }));
     return { found: true, candidates };
   }
 
-  if (!player) {
-    // Fuzzy: last name only, then narrow by first-name prefix; cohort used for disambiguation
-    const { data: fuzzyByLast } = await supabase
-      .from("players")
-      .select("id, first_name, last_name, final_shirt, year_of_birth, age_group, division_code, team_name")
-      .eq("club_id", clubId)
-      .ilike("last_name", lastTrimmed)
-      .is("deleted_at", null)
-      .limit(10);
-
-    const fuzzyCandidates = (fuzzyByLast ?? []) as any[];
-    if (fuzzyCandidates.length > 0) {
-      const firstLower = firstTrimmed.toLowerCase();
-      const byPrefix = fuzzyCandidates.filter(
-        (p) => firstLower.length >= 3 && (p.first_name ?? "").toLowerCase().startsWith(firstLower.slice(0, 3))
-      );
-      const pool = byPrefix.length > 0 ? byPrefix : fuzzyCandidates;
-      player =
-        pool.find((p: any) => p.year_of_birth != null && p.year_of_birth === yearOfBirth) ??
-        pool.find((p: any) => ageGroup && p.age_group === ageGroup) ??
-        pool[0];
-    }
-  }
-
+  const player = matches[0];
   if (!player) return { found: false };
-
-  const previousInventoryId = await fetchInventoryId(player);
 
   return {
     found: true,
-    playerId: player.id,
+    playerId: player.player_id,
     matchedFirstName: player.first_name ?? undefined,
     matchedLastName: player.last_name ?? undefined,
     currentJerseyNumber: player.final_shirt ?? null,
-    previousInventoryId,
+    previousInventoryId: player.previous_inventory_id ?? null,
     divisionCode: player.division_code ?? null,
     teamName: player.team_name ?? null,
   };
