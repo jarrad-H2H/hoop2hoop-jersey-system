@@ -138,9 +138,10 @@ SELECT EXISTS (
 
 ## 6. Pending Reservations
 
-- A number in a pending reservation (15-minute checkout window) is **blocked the same as a confirmed allocation**
+- A number in a pending reservation (30-minute checkout window) is **blocked the same as a confirmed allocation**
 - Two players cannot reserve the same number simultaneously
 - Reservation expiry runs automatically; expired reservations re-release the number
+- The widget sees live holds only through `widget_reservation_holds` (no buyer names) and can't read or write `pending_allocations` itself; reservations are made only by `reserve_jersey`, which caps a hold at 30 minutes (2026-10-18, CLAUDE.md rule 19)
 
 ---
 
@@ -172,7 +173,7 @@ YOB values shift each season as players age — never hardcode year ranges. Alwa
 
 **Critical**: Numbers that would clash must **never be presented** — not rejected after selection.
 
-9. Player selects a number → system reserves it (15-min pending allocation, Section 6)
+9. Player selects a number → system reserves it (30-min pending allocation, Section 6)
 10. Player checks out via Shopify → webhook fires → allocation confirmed
 
 ---
