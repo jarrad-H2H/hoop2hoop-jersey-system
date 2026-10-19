@@ -820,7 +820,22 @@ const Allocation: React.FC = () => {
 
     setReturnBusy(true);
     try {
-      const result = await returnJerseyToStock(selectedClubId, num, returnSize, selectedProductType);
+      let result = await returnJerseyToStock(selectedClubId, num, returnSize, selectedProductType);
+
+      // The only matching jersey is marked Written Off (e.g. auto-written-off when the player bought a
+      // replacement). Nothing was changed; restore it only if the person confirms it is physically back.
+      if (result.needsConfirmation === "written_off") {
+        const confirmed = window.confirm(
+          `${result.message}\n\nHas this jersey physically come back to the warehouse? Click OK to restore it to stock.`
+        );
+        if (!confirmed) {
+          setReturnMessage("Cancelled. The jersey is still marked Written Off.");
+          return;
+        }
+        result = await returnJerseyToStock(selectedClubId, num, returnSize, selectedProductType, {
+          restoreWrittenOff: true,
+        });
+      }
       setReturnMessage(result.message);
     } catch (err: any) {
       console.error("handleReturnToStock error", err);

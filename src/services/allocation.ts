@@ -1640,52 +1640,102 @@ export async function reserveNumberForPurchase(input: {
   };
 }
 
+const STATUS_WRITTEN_OFF = "Written Off";
+
+export interface ReturnToStockResult {
+  success: boolean;
+  message: string;
+  /**
+   * Set when nothing was changed because the only matching jersey is marked Written Off. The caller
+   * should ask the person whether it has physically come back and, if so, call again with
+   * `restoreWrittenOff: true`.
+   */
+  needsConfirmation?: "written_off";
+}
+
+/**
+ * Warehouse return: puts a physical jersey (read off the jersey as number + size) back into stock.
+ *
+ * 1. If an Allocated row matches, it is freed (the normal case).
+ * 2. Otherwise, if a matching Written Off row exists, nothing changes until the caller confirms
+ *    (`restoreWrittenOff: true`). Jerseys are written off automatically when a returning player buys a
+ *    replacement and says they are not keeping the old one (api/shopify/orders-create.ts), so a jersey
+ *    that later comes back to the warehouse is still Written Off.
+ *
+ * `deps` exists only so the branching can be tested without touching the live database.
+ */
 export async function returnJerseyToStock(
   clubId: string,
   jerseyNumber: number,
   size: string,
-  productType: string = "default"
-): Promise<{ success: boolean; message: string }> {
+  productType: string = "default",
+  options: { restoreWrittenOff?: boolean } = {},
+  deps: { client?: typeof supabase; log?: typeof logAllocationEvent } = {}
+): Promise<ReturnToStockResult> {
+  const db = deps.client ?? supabase;
+  const log = deps.log ?? logAllocationEvent;
+
+  const findRow = async (status: string) =>
+    db
+      .from("inventory")
+      .select("id, status")
+      .eq("club_id", clubId)
+      .eq("jersey_number", jerseyNumber)
+      .eq("size", size)
+      .eq("product_type", productType)
+      .eq("status", status)
+      .limit(1);
+
   // Prefer an Allocated row: when duplicates exist for the same number/size, picking an
   // already-Available one would "succeed" without freeing anything.
-  const { data, error } = await supabase
-    .from("inventory")
-    .select("id, status")
-    .eq("club_id", clubId)
-    .eq("jersey_number", jerseyNumber)
-    .eq("size", size)
-    .eq("product_type", productType)
-    .eq("status", STATUS_ALLOCATED)
-    .limit(1);
+  const { data, error } = await findRow(STATUS_ALLOCATED);
 
   if (error) {
     console.error("returnJerseyToStock select error", error);
     return { success: false, message: "Failed to read inventory while returning jersey." };
   }
 
-  const row = (data ?? [])[0];
+  let row = (data ?? [])[0];
+  let restoredFromWrittenOff = false;
+
   if (!row) {
-    const { data: availRows } = await supabase
-      .from("inventory")
-      .select("id")
-      .eq("club_id", clubId)
-      .eq("jersey_number", jerseyNumber)
-      .eq("size", size)
-      .eq("product_type", productType)
-      .eq("status", STATUS_AVAILABLE)
-      .limit(1);
-    return {
-      success: false,
-      message:
-        (availRows ?? []).length > 0
-          ? `Jersey #${jerseyNumber} (${size}) is already Available. Nothing to return.`
-          : "No allocated inventory row found for that number and size. Nothing to return.",
-    };
+    const { data: availRows } = await findRow(STATUS_AVAILABLE);
+    if ((availRows ?? []).length > 0) {
+      return {
+        success: false,
+        message: `Jersey #${jerseyNumber} (${size}) is already Available. Nothing to return.`,
+      };
+    }
+
+    const { data: writtenOffRows, error: woError } = await findRow(STATUS_WRITTEN_OFF);
+    if (woError) {
+      console.error("returnJerseyToStock written-off select error", woError);
+      return { success: false, message: "Failed to read inventory while returning jersey." };
+    }
+    const writtenOff = (writtenOffRows ?? [])[0];
+    if (!writtenOff) {
+      return {
+        success: false,
+        message: "No allocated inventory row found for that number and size. Nothing to return.",
+      };
+    }
+    if (!options.restoreWrittenOff) {
+      return {
+        success: false,
+        needsConfirmation: "written_off",
+        message:
+          `Jersey #${jerseyNumber} (${size}) is marked Written Off, not allocated. ` +
+          `If it has physically come back to the warehouse, confirm to restore it to stock.`,
+      };
+    }
+    row = writtenOff;
+    restoredFromWrittenOff = true;
   }
 
   const inventoryId = row.id as string;
 
-  const { error: updateError } = await supabase
+  // Guard on the status we found, so a row that changed in the meantime is never touched.
+  const { data: updated, error: updateError } = await db
     .from("inventory")
     .update({
       status: STATUS_AVAILABLE,
@@ -1693,7 +1743,9 @@ export async function returnJerseyToStock(
       allocation_date: null,
       return_date_due: null,
     })
-    .eq("id", inventoryId);
+    .eq("id", inventoryId)
+    .eq("status", restoredFromWrittenOff ? STATUS_WRITTEN_OFF : STATUS_ALLOCATED)
+    .select("id");
 
   if (updateError) {
     console.error("returnJerseyToStock update error", updateError);
@@ -1702,19 +1754,29 @@ export async function returnJerseyToStock(
       message: "Failed to update inventory while returning jersey.",
     };
   }
+  if (!updated || updated.length === 0) {
+    return {
+      success: false,
+      message: "That jersey changed while you were returning it. Nothing was changed; please try again.",
+    };
+  }
 
-  await logAllocationEvent({
+  await log({
     allocation_type: "return",
     club_id: clubId,
     player_id: null,
     jersey_number: jerseyNumber,
     size,
     productType,
-    note: "Warehouse return to stock",
+    note: restoredFromWrittenOff
+      ? "Warehouse return to stock (restored from Written Off)"
+      : "Warehouse return to stock",
   });
 
   return {
     success: true,
-    message: `Jersey #${jerseyNumber} (${size}) marked Available.`,
+    message: restoredFromWrittenOff
+      ? `Jersey #${jerseyNumber} (${size}) restored from Written Off and marked Available.`
+      : `Jersey #${jerseyNumber} (${size}) marked Available.`,
   };
 }
