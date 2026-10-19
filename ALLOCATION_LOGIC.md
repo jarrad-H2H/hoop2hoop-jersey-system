@@ -234,10 +234,11 @@ If either condition is false → no cross-pool check (treat as single-gender poo
 ## 12. Returning Player Name Lookup
 
 - Player enters first name + last name + selects club in the widget
-- System fuzzy-searches `players` table for a match at that club
+- System searches `players` for a match at that club, inside the database (`widget_lookup_player`; the public key can't read names, CLAUDE.md rule 20). Names are compared ignoring capitals, spaces, hyphens, apostrophes and accents, never as a pattern
 - **Important**: BC-imported players have `year_of_birth = NULL` (BC CSV has no YOB)
-  - Name lookup must **NOT** filter by `year_of_birth` — it will miss all BC-imported players
-  - Use name + club match; use `estimated_yob_min/max` or `age_group` for context only
+  - An **exact name** match is never filtered by birth year — it would miss BC-imported players. Every exact match is returned (several → the buyer picks)
+  - Otherwise (agreed 2026-10-19, typos and name variants): ONE player whose surname matches, or one part of a double surname ("Smith" finds Smith-Williams), and whose birth year fits — their exact `year_of_birth`, else `estimated_yob_min/max` allowing one age group of playing up (the importer's website-buyer rule). The closest first name wins: same first 3 letters, then same first letter ("Mike" finds Michael), then any; then exact birth year, birth year inside the range, age group. A birth year that doesn't fit gives no suggestion; the buyer continues with birth-year protection
+  - `reserve_jersey` keeps the confirmed profile only if the same rules match the typed name
 - If found: show "Did you mean [First Last]?" confirmation prompt
 - If confirmed: use the player's known team membership for Plan B (Section 2c)
 - If player holds an existing jersey: offer choice — keep existing number vs. buy a new one
