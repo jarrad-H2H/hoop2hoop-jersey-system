@@ -1,6 +1,7 @@
 // FILE: api/shopify-sync.ts
 // Syncs available jersey inventory counts from Supabase → Shopify variant stock levels.
 // POST /api/shopify-sync  { clubId: string }
+// Requires "Authorization: Bearer <Supabase session access_token>" of a user in admin_users.
 // A club may have multiple Shopify products (e.g. mens + womens). All are synced in one call.
 // Uses GraphQL Admin API (inventorySetOnHandQuantities mutation).
 
@@ -239,11 +240,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { clubId } = req.body as { clubId?: string };
-  if (!clubId) {
-    return res.status(400).json({ error: "clubId is required" });
-  }
-
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !supabaseKey) {
@@ -253,7 +249,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Shopify env vars not configured" });
   }
 
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  const supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
+
+  // Verify caller is an authenticated admin (same check as api/preorder/sync-orders.ts):
+  // this route holds the service-role key and the Shopify admin token, so it must never run
+  // for an anonymous caller.
+  const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+  const { data: { user } } = await supabase.auth.getUser(token);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+  const { data: adminRow } = await supabase
+    .from("admin_users")
+    .select("user_id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!adminRow) return res.status(403).json({ error: "Admin access required" });
+
+  const { clubId } = (req.body ?? {}) as { clubId?: string };
+  if (!clubId) {
+    return res.status(400).json({ error: "clubId is required" });
+  }
 
   // 1. Look up ALL stock-backed Shopify products mapped to this club.
   // retain_only (made-to-order) products are excluded: they have no stock pool, so syncing
