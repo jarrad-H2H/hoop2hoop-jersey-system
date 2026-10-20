@@ -323,6 +323,15 @@ const PreOrderManager: React.FC = () => {
 
   const handleOpenWindow = async () => {
     if (!selectedClubId) return;
+    // Orders are saved against the club's active season; with none they're stored without a
+    // season and never show up in this manager.
+    if (!selectedClub?.active_preorder_season) {
+      setActionMsg({
+        type: "err",
+        text: "Set an active season first (Season → Set as active). Orders are saved to the active season, so without one they won't show up here.",
+      });
+      return;
+    }
     const wc = selectedClub?.widget_config ?? null;
     const isWindowSet = wc?.age_group_mode === "window_set";
     if (isWindowSet && !windowAgeGroup) {

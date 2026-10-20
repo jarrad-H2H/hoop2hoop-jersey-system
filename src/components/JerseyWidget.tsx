@@ -1376,6 +1376,13 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     return <div ref={widgetRootRef} />;
   }
 
+  // A pre-order club (Club Manager Order Mode FCFS / pre-allocated) whose window hasn't been
+  // opened in the Pre-Order Manager yet has no stock to sell from, so it must not fall back to
+  // the stock form (Gladstone Senior Domestic, Oct 2026).
+  const preorderNotOpenYet =
+    preorderMode === "off" &&
+    (widgetConfig?.order_mode === "fcfs" || widgetConfig?.order_mode === "pre_allocated");
+
   return (
     <div ref={widgetRootRef} className="w-full max-w-[440px]">
       <div className="mb-3">
@@ -1507,6 +1514,17 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             <p className="font-semibold text-gray-900">Pre-orders are now closed</p>
             <p className="text-sm text-gray-500 mt-2">
               Jersey number preferences are being allocated. Your club will notify you of the outcome soon.
+            </p>
+          </div>
+        )}
+
+        {/* Pre-order club whose window hasn't been opened yet */}
+        {widgetMode !== "retain_only" && preorderNotOpenYet && (
+          <div className="py-6 text-center">
+            <div className="text-3xl mb-2">🏀</div>
+            <p className="font-semibold text-gray-900">Pre-orders aren't open yet</p>
+            <p className="text-sm text-gray-500 mt-2">
+              Your club hasn't opened jersey pre-orders yet. Please check back soon.
             </p>
           </div>
         )}
@@ -1923,7 +1941,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         )}
 
         {/* Normal mode — not a pre-order window */}
-        {widgetMode !== "retain_only" && preorderMode === "off" && <>
+        {widgetMode !== "retain_only" && preorderMode === "off" && !preorderNotOpenYet && <>
 
         {/* First Name */}
         <div>
