@@ -43,15 +43,29 @@
   //   - click / form submit are blocked in the capture phase
   //   - /cart/add requests for the product are rejected (fetch + XHR) unless the
   //     widget has confirmed, and a confirmation is good for exactly ONE add
-  // Currently: Logan Thunder Rep Player Pack MALE / FEMALE (Logan Thunder Rep has
-  // widget_config.require_widget = true; the orders webhook flags any sale of these
-  // products that still arrives without allocator data). To guard another club's
-  // product, add its Shopify product id + handle here AND set require_widget on the club.
-  var GUARDED_PRODUCT_IDS = { "10489007833387": true, "10489010192683": true };
+  // Every product mapped to an active (is_client) club is guarded (since 2026-10-20; Logan
+  // Thunder's packs since 2026-10-14). Those clubs have widget_config.require_widget = true,
+  // so the orders webhook flags any sale that still arrives without allocator data.
+  // When a club goes live or a product is mapped, add its Shopify product id + handle
+  // here AND set require_widget on the club.
   var GUARDED_PRODUCT_HANDLES = {
-    "logan-thunder-rep-player-pack-male": "10489007833387",
-    "logan-thunder-rep-player-pack-female": "10489010192683",
+    "blades-basketball-reversible-playing-jersey-pre-order": "10513508303147",      // Blades
+    "celtics-reversible-jerseys": "10120606122283",                                 // Celtics
+    "celtics-female-reversible-jerseys": "10120608055595",                          // Celtics
+    "celtics-unisex-reversible-jersey-pre-order": "10556884320555",                 // Celtics made-to-order re-order
+    "gaba-senior-mens-reversible-playing-jerseys": "15438340292907",                // Gladstone Senior Domestic
+    "gc-rep-pack-boys": "10468386079019",                                           // Gold Coast Rep
+    "gc-rep-pack-girls-1": "10468689936683",                                        // Gold Coast Rep
+    "gold-coast-basketball-reversible-playing-jersey-boys": "10465572159787",       // Gold Coast Rep
+    "gold-coast-basketball-reversible-playing-jersey-girls": "10465580220715",      // Gold Coast Rep
+    "logan-thunder-rep-player-pack-male": "10489007833387",                         // Logan Thunder Rep
+    "logan-thunder-rep-player-pack-female": "10489010192683",                       // Logan Thunder Rep
+    "tamborine-wolves-reversible-playing-jersey": "10091944902955",                 // Wolves
+    "hoop2hoop-test-jersey": "10210830483755",                                      // Hoop2Hoop Test Club
+    "hoop2hoop-test-jersey-female": "10431328485675",                               // Hoop2Hoop Test Club
   };
+  var GUARDED_PRODUCT_IDS = {};
+  Object.keys(GUARDED_PRODUCT_HANDLES).forEach(function (h) { GUARDED_PRODUCT_IDS[GUARDED_PRODUCT_HANDLES[h]] = true; });
   var GUARD_LOAD_TIMEOUT_MS = 12000;
   var h2hGuarded = false;           // true on a guarded product page
   var h2hGuardVariantIds = null;    // { variantId: true } for the guarded product (null = unknown → treat every add as guarded)
@@ -338,25 +352,25 @@
   // Something tried to add the guarded product without a valid confirmation.
   function guardOnBlocked() {
     if (guardConsumed()) {
-      // The confirmation was already spent on a pack that is now in the cart.
-      guardLockAll("Pack added to cart");
-      guardShowNotice("This pack is already in your cart. To order for another player, reload this page and enter that player's details.", true);
+      // The confirmation was already spent on an item that is now in the cart.
+      guardLockAll("Added to cart");
+      guardShowNotice("This is already in your cart. To order for another player, reload this page and enter that player's details.", true);
       return;
     }
     guardLockAll(h2hGuardResponded ? "Select jersey number first" : "Loading jersey allocator…");
     guardShowNotice(
       h2hGuardResponded
-        ? "Please complete the jersey allocator above before adding this pack to your cart."
+        ? "Please complete the jersey allocator above before adding to your cart."
         : "The jersey allocator is still loading. Please wait a moment and try again.",
       false
     );
   }
 
-  // The one confirmed add succeeded: lock again so the next pack needs its own confirmation.
+  // The one confirmed add succeeded: lock again so the next item needs its own confirmation.
   function guardAfterSuccess() {
     if (!h2hGuarded) return;
-    guardLockAll("Pack added to cart");
-    guardShowNotice("Pack added to your cart. To order for another player, reload this page and enter that player's details.", true);
+    guardLockAll("Added to cart");
+    guardShowNotice("Added to your cart. To order for another player, reload this page and enter that player's details.", true);
   }
 
   // The confirmed add failed (network, Shopify error): give the confirmation back so they can retry.
@@ -1170,8 +1184,9 @@
           h2hBundlePage = !!bundleJerseyProperty;
           if (h2hBundlePage) lockAtcButton(scope);
           guardMarkResponded();
-          if (h2hGuarded && data.preorderMode === "off") {
-            guardShowNotice("This pack isn't open for ordering right now.", false);
+          // Only pre-order clubs whose window isn't open (stock clubs always report "off").
+          if (h2hGuarded && data.preorderNotOpen) {
+            guardShowNotice("Pre-orders for this item aren't open right now.", false);
           }
           sendVariantState(true);
         }

@@ -596,6 +596,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             bundleJerseyProperty: (row as any).bundle_jersey_property ?? null,
             currentWindowAgeGroup: resolvedWc?.current_window_age_group ?? null,
             preorderMode: (clubJoin?.preorder_mode as string | undefined) ?? null,
+            // A pre-order club whose window isn't open (stock clubs are always "off" too).
+            preorderNotOpen:
+              (clubJoin?.preorder_mode ?? "off") === "off" &&
+              (resolvedWc?.order_mode === "fcfs" || resolvedWc?.order_mode === "pre_allocated"),
           }, "*");
         }
       } catch (_) {}
@@ -1336,14 +1340,29 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       clubId: selectedClubId, size: selectedSize,
       gender: playerGenderAnswer,
     };
+    sendPreorderDetails(payload);
+    setPreorderSubmitted(true);
+  };
+
+  const submittedPreorderRef = useRef<{ size: string } & Record<string, unknown> | null>(null);
+  const sendPreorderDetails = (payload: { size: string } & Record<string, unknown>) => {
+    submittedPreorderRef.current = payload;
     try {
       if (window.parent && window.parent !== window) {
         window.parent.postMessage(payload, "*");
       }
       window.dispatchEvent(new CustomEvent("h2h:preorder:ready", { detail: payload }));
     } catch (_) {}
-    setPreorderSubmitted(true);
   };
+
+  // The customer picked another size after submitting: they'll pay for the new size, so the
+  // pre-order details must follow it (Gladstone test, Oct 2026: cart line L, recorded size M).
+  useEffect(() => {
+    const sent = submittedPreorderRef.current;
+    if (!preorderSubmitted || !sent || !selectedSize || sent.size === selectedSize) return;
+    sendPreorderDetails({ ...sent, size: selectedSize });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSize, preorderSubmitted]);
 
   // ── Auto-scroll: nudge the customer to each newly-revealed section instead of
   // relying on them to notice and scroll manually (see useScrollIntoViewOnReveal). ──
