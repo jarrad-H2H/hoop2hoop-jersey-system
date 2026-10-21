@@ -285,6 +285,7 @@ const Importer: React.FC = () => {
       const keptSold: string[] = [];
       let keptOverZero = 0;
       let linkedBuyers: string[] = [];
+      let retiredCopies: string[] = [];
       if (withBcId.length > 0) {
         const toPayload = (r: PreviewRow) => {
           const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
@@ -410,7 +411,7 @@ const Importer: React.FC = () => {
           }
           buyers.push(...((data ?? []) as WebsiteBuyerRef[]));
         }
-        const websiteLinks = linkWebsiteBuyers(
+        const { links: websiteLinks, copies: websiteCopies } = linkWebsiteBuyers(
           withBcId.flatMap((r, key) => {
             if (plan.matches.has(key) || knownPlayerIds.has(r.bcPlayerId)) return [];
             const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
@@ -421,11 +422,32 @@ const Importer: React.FC = () => {
               lastName: r.lastName,
               yobMin: yob.min,
               yobMax: yob.max,
+              bcShirt: r.finalShirt,
             }];
           }),
           buyers
         );
         linkedBuyers = Array.from(websiteLinks.values(), (b) => `${b.first_name} ${b.last_name}`);
+
+        // Numberless copies of a linked kid are retired — unless a sale or a stock jersey points at one.
+        const copyIds = websiteCopies.map((c) => c.id);
+        const copiesInUse = new Set<string>();
+        if (copyIds.length > 0) {
+          const [saleRefs, stockRefs, preorderRefs] = await Promise.all([
+            supabase.from("pending_allocations").select("player_id").in("player_id", copyIds),
+            supabase.from("inventory").select("allocated_player_id").in("allocated_player_id", copyIds),
+            supabase.from("preorder_requests").select("player_id").in("player_id", copyIds),
+          ]);
+          const refErr = saleRefs.error ?? stockRefs.error ?? preorderRefs.error;
+          if (refErr) {
+            setErrorMessage(`Failed to check duplicate website profiles: ${refErr.message}`);
+            return;
+          }
+          for (const s of saleRefs.data ?? []) copiesInUse.add(s.player_id);
+          for (const s of stockRefs.data ?? []) copiesInUse.add(s.allocated_player_id);
+          for (const p of preorderRefs.data ?? []) copiesInUse.add(p.player_id);
+        }
+        const copiesToRetire = websiteCopies.filter((c) => !copiesInUse.has(c.id));
 
         const returningPayload: (ReturnType<typeof toPayload> & { id: string })[] = [];
         const upsertPayload: ReturnType<typeof toPayload>[] = [];
@@ -478,8 +500,20 @@ const Importer: React.FC = () => {
           }
         }
 
+        if (copiesToRetire.length > 0) {
+          const { error: copyErr } = await supabase
+            .from("players")
+            .update({ deleted_at: new Date().toISOString() })
+            .in("id", copiesToRetire.map((c) => c.id));
+          if (copyErr) {
+            setErrorMessage(`Failed to retire duplicate website profiles: ${copyErr.message}`);
+            return;
+          }
+        }
+
         returningCount = returningPayload.length;
         retiredCount = plan.surplusIds.length;
+        retiredCopies = copiesToRetire.map((c) => `${c.first_name} ${c.last_name}`);
       }
 
       const withoutBcId = previewRows.filter((r) => !r.bcPlayerId);
@@ -606,6 +640,8 @@ const Importer: React.FC = () => {
       if (linkedBuyers.length > 0)
         parts.push(`${linkedBuyers.length} website buyers linked to their BC registration (${linkedBuyers.join(", ")})`);
       if (retiredCount > 0) parts.push(`${retiredCount} old duplicate registrations retired`);
+      if (retiredCopies.length > 0)
+        parts.push(`${retiredCopies.length} duplicate website profiles without a number retired (${retiredCopies.join(", ")})`);
       if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} players inserted`);
       if (newClubNames.length > 0) parts.push(`${newClubNames.length} club(s) created`);
       if (teamRows.length > 0) parts.push(`${teamRows.length} teams linked to "${season}"`);

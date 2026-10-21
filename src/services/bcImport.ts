@@ -412,8 +412,12 @@ export function planReturningPlayers(
 // A jersey bought on the website creates a profile with no BC IDs (the website never knows
 // them). When that player first appears in a BC report, the registration is linked to that
 // profile — same club, same name, birth year fits the team's age group (or is up to one age
-// group younger: playing up) — so it is updated in place instead of duplicated. Only
-// unambiguous pairs are linked: exactly one profile for the registration and vice versa.
+// group younger: playing up) — so it is updated in place instead of duplicated. A profile is
+// only linked when no other registration also wants it.
+// A kid can hold several website profiles: a club's team list loaded without numbers plus
+// their purchase (Celtics: "Jos Fitzgibbon, 14BC8, no number" + "Jos Fitzgibbon, #86"). The
+// registration then goes to the profile with the number — with two numbers (two jerseys), the
+// one BC also shows — and the numberless copies are returned to be retired (Jarrad 2026-10-21).
 
 export interface WebsiteBuyerRef extends ExistingPlayerRef {
   first_name: string | null;
@@ -429,16 +433,34 @@ export interface UnmatchedRegistration {
   /** estimated birth-year range for the registration's age group (estimateYobRange) */
   yobMin: number | null;
   yobMax: number | null;
+  /** BC's number for this registration: picks between a kid's numbered profiles */
+  bcShirt?: number | null;
+}
+
+export interface WebsiteBuyerLinks {
+  /** registration key → the website profile it updates */
+  links: Map<number, WebsiteBuyerRef>;
+  /** numberless copies of a linked kid (e.g. club team-list rows), to retire */
+  copies: WebsiteBuyerRef[];
 }
 
 const nameKey = (s: string | null | undefined) =>
   (s ?? "").normalize("NFKD").toLowerCase().replace(/[^a-z]/g, "");
 
+function pickProfile(found: WebsiteBuyerRef[], bcShirt: number | null): WebsiteBuyerRef | null {
+  if (found.length === 1) return found[0];
+  const numbered = found.filter((b) => b.final_shirt != null);
+  if (numbered.length === 1) return numbered[0];
+  const sameAsBc = numbered.filter((b) => bcShirt != null && b.final_shirt === bcShirt);
+  return sameAsBc.length === 1 ? sameAsBc[0] : null;
+}
+
 export function linkWebsiteBuyers(
   registrations: UnmatchedRegistration[],
   buyers: WebsiteBuyerRef[]
-): Map<number, WebsiteBuyerRef> {
+): WebsiteBuyerLinks {
   const links = new Map<number, WebsiteBuyerRef>();
+  const copies: WebsiteBuyerRef[] = [];
   const claimed = new Set<string>();
   const sameKid = (r: UnmatchedRegistration, b: WebsiteBuyerRef) =>
     b.club_id === r.clubId &&
@@ -448,6 +470,13 @@ export function linkWebsiteBuyers(
     (yob, min, max) => yob >= min && yob <= max, // birth year fits the age group
     (yob, _min, max) => yob > max && yob <= max + 2, // playing up one age group
   ];
+  // Same kid by name and birth year in either pass: a copy is only retired when exactly
+  // one registration could be that kid.
+  const fitsEither = (r: UnmatchedRegistration, b: WebsiteBuyerRef) =>
+    r.yobMin != null && r.yobMax != null && b.year_of_birth != null && sameKid(r, b) &&
+    b.year_of_birth >= r.yobMin && b.year_of_birth <= r.yobMax + 2;
+  const regCount = new Map(buyers.map((b) => [b.id, registrations.filter((r) => fitsEither(r, b)).length]));
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
 
   for (const fits of passes) {
     const forReg = new Map<number, WebsiteBuyerRef[]>();
@@ -462,13 +491,19 @@ export function linkWebsiteBuyers(
       for (const b of found) regsForBuyer.set(b.id, (regsForBuyer.get(b.id) ?? 0) + 1);
     }
     for (const [key, found] of forReg) {
-      if (found.length === 1 && regsForBuyer.get(found[0].id) === 1) {
-        links.set(key, found[0]);
-        claimed.add(found[0].id);
+      const r = byKey.get(key)!;
+      const pick = pickProfile(found, r.bcShirt ?? null);
+      if (!pick || regsForBuyer.get(pick.id) !== 1) continue;
+      links.set(key, pick);
+      claimed.add(pick.id);
+      for (const b of buyers) {
+        if (claimed.has(b.id) || b.final_shirt != null || regCount.get(b.id) !== 1 || !fitsEither(r, b)) continue;
+        copies.push(b);
+        claimed.add(b.id);
       }
     }
   }
-  return links;
+  return { links, copies };
 }
 
 // ─── Numbers we sold ──────────────────────────────────────────────────────────

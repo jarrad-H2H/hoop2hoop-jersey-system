@@ -57,14 +57,14 @@ check("legacy record without User ID untouched", !plan.surplusIds.includes("no-u
 check("exactly one record retired", plan.surplusIds.length === 1);
 
 // Website buyers (no BC IDs) linked to their first BC registration (2026-10-15).
-const buyer = (id: string, first: string, last: string, yob: number, club = CLUB): WebsiteBuyerRef =>
-  ({ id, club_id: club, bc_player_id: null, bc_user_id: null, division_code: null, age_group: null, final_shirt: 1,
+const buyer = (id: string, first: string, last: string, yob: number, club = CLUB, shirt: number | null = 1): WebsiteBuyerRef =>
+  ({ id, club_id: club, bc_player_id: null, bc_user_id: null, division_code: null, age_group: null, final_shirt: shirt,
      first_name: first, last_name: last, year_of_birth: yob });
-const unmatched = (key: number, first: string, last: string, age: string, club = CLUB): UnmatchedRegistration => {
+const unmatched = (key: number, first: string, last: string, age: string, club = CLUB, bcShirt: number | null = null): UnmatchedRegistration => {
   const r = estimateYobRange(age, 2026);
-  return { key, clubId: club, firstName: first, lastName: last, yobMin: r.min, yobMax: r.max };
+  return { key, clubId: club, firstName: first, lastName: last, yobMin: r.min, yobMax: r.max, bcShirt };
 };
-const links = linkWebsiteBuyers(
+const { links } = linkWebsiteBuyers(
   [
     unmatched(10, "Oaklie", "Hayes", "U10"),        // born 2018: fits U10
     unmatched(11, "Watson", "McHale", "U16"),       // born 2013: playing up into U16
@@ -90,6 +90,41 @@ check("not linked when two profiles share the name", !links.has(13));
 check("not linked across clubs", !links.has(14));
 check("one profile, two teams: linked to the team that fits, not the playing-up one",
   links.get(15)?.id === "russell" && !links.has(16));
+
+// A kid with several website profiles (Celtics: club team list without numbers + purchase), 2026-10-21.
+const C = "club-celtics";
+const pairs = linkWebsiteBuyers(
+  [
+    unmatched(20, "Jos", "Fitzgibbon", "U14", C, 78),      // born 2015, playing up; BC shows #78
+    unmatched(21, "Cooper", "Mulheron", "U16", C, 75),     // two jerseys, BC shows #75
+    unmatched(22, "Two", "Jerseys", "U16", C, null),       // two jerseys, BC shows no number
+    unmatched(23, "Jet", "Thwaites", "U14", C, 78),        // purchase b2013 + team-list copy b2015
+    unmatched(24, "Mia", "Same", "U14", C, 5),             // two registrations could be the copy
+    unmatched(25, "Mia", "Same", "U16", C, 5),
+    unmatched(26, "Two", "Lists", "U12", C, 9),            // two copies, no purchase
+  ],
+  [
+    buyer("jos-list", "Jos", "Fitzgibbon", 2015, C, null), buyer("jos-buy", "Jos", "Fitzgibbon", 2015, C, 86),
+    buyer("cooper-75", "Cooper", "Mulheron", 2012, C, 75), buyer("cooper-1", "Cooper", "Mulheron", 2012, C, 1),
+    buyer("two-1", "Two", "Jerseys", 2011, C, 4), buyer("two-2", "Two", "Jerseys", 2011, C, 8),
+    buyer("jet-buy", "Jet", "Thwaites", 2013, C, 77), buyer("jet-list", "Jet", "Thwaites", 2015, C, null),
+    buyer("mia-buy", "Mia", "Same", 2014, C, 5), buyer("mia-list", "Mia", "Same", 2014, C, null),
+    buyer("lists-1", "Two", "Lists", 2015, C, null), buyer("lists-2", "Two", "Lists", 2015, C, null),
+  ]
+);
+const copyIds = pairs.copies.map((c) => c.id);
+check("team-list + purchase: BC goes to the purchase profile (Jos Fitzgibbon #86)", pairs.links.get(20)?.id === "jos-buy");
+check("team-list copy without a number is retired", copyIds.includes("jos-list"));
+check("two jerseys: BC goes to the one BC also shows (Cooper Mulheron #75), other jersey kept",
+  pairs.links.get(21)?.id === "cooper-75" && !copyIds.includes("cooper-1"));
+check("two jerseys and BC shows neither: not linked", !pairs.links.has(22));
+check("copy with another birth year in the playing-up range is retired too (Jet Thwaites)",
+  pairs.links.get(23)?.id === "jet-buy" && copyIds.includes("jet-list"));
+check("copy that a second registration could be is NOT retired (it links to that one)",
+  pairs.links.get(24)?.id === "mia-buy" && !copyIds.includes("mia-list") && pairs.links.get(25)?.id === "mia-list");
+check("two copies and no purchase: not linked, nothing retired",
+  !pairs.links.has(26) && !copyIds.includes("lists-1") && !copyIds.includes("lists-2"));
+check("only Jos's and Jet's copies are retired", copyIds.length === 2);
 
 // U20 rule (2026-10-13): BC U20 players are born 2009 or earlier (in 2026).
 const u20 = estimateYobRange("U20", 2026);
