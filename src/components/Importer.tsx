@@ -15,6 +15,9 @@ import {
   resolveImportedShirt,
   linkWebsiteBuyers,
   WebsiteBuyerRef,
+  SOLD_NUMBER_MONTHS,
+  SaleRef,
+  soldNumberCheck,
 } from "../services/bcImport";
 
 type OnRecord = ExistingPlayerRef & { first_name: string | null; last_name: string | null };
@@ -279,7 +282,7 @@ const Importer: React.FC = () => {
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
       let returningCount = 0;
       let retiredCount = 0;
-      let keptPurchased = 0;
+      const keptSold: string[] = [];
       let keptOverZero = 0;
       let linkedBuyers: string[] = [];
       if (withBcId.length > 0) {
@@ -345,25 +348,37 @@ const Importer: React.FC = () => {
           if (!data || data.length < 1000) break;
         }
 
-        // Numbers bought through the allocator after this report's last game are newer than BC's.
-        const buyKey = (club: string | null, first: string | null, last: string | null, shirt: number | null) =>
-          `${club}|${(first ?? "").trim().toLowerCase()}|${(last ?? "").trim().toLowerCase()}|${shirt}`;
-        const boughtAfterReport = new Set<string>();
+        // Numbers we sold (website purchases and pre-orders) are kept over BC's (bcImport.ts).
+        const sales: SaleRef[] = [];
         if (importClubIds.length > 0) {
-          let q = supabase
+          const soldSince = new Date(seenOn);
+          soldSince.setMonth(soldSince.getMonth() - SOLD_NUMBER_MONTHS);
+          const { data: bought, error: boughtErr } = await supabase
             .from("pending_allocations")
-            .select("club_id, player_first_name, player_last_name, jersey_number")
+            .select("club_id, player_id, player_first_name, player_last_name, jersey_number")
             .eq("status", "purchased")
-            .in("club_id", importClubIds);
-          if (reportEndsAt) q = q.gt("purchased_at", reportEndsAt.toISOString());
-          const { data, error } = await q;
-          if (error) {
-            setErrorMessage(`Failed to check recent purchases: ${error.message}`);
+            .in("club_id", importClubIds)
+            .gte("purchased_at", soldSince.toISOString());
+          if (boughtErr) {
+            setErrorMessage(`Failed to check numbers we sold: ${boughtErr.message}`);
             return;
           }
-          for (const b of data ?? [])
-            boughtAfterReport.add(buyKey(b.club_id, b.player_first_name, b.player_last_name, b.jersey_number));
+          for (const b of bought ?? [])
+            sales.push({ club_id: b.club_id, player_id: b.player_id, first_name: b.player_first_name, last_name: b.player_last_name, number: b.jersey_number });
+          const { data: preorders, error: preErr } = await supabase
+            .from("preorder_requests")
+            .select("club_id, player_id, first_name, last_name, assigned_number")
+            .in("club_id", importClubIds)
+            .not("assigned_number", "is", null)
+            .gte("created_at", soldSince.toISOString());
+          if (preErr) {
+            setErrorMessage(`Failed to check pre-order numbers: ${preErr.message}`);
+            return;
+          }
+          for (const p of preorders ?? [])
+            sales.push({ club_id: p.club_id, player_id: p.player_id, first_name: p.first_name, last_name: p.last_name, number: p.assigned_number });
         }
+        const soldToPlayer = soldNumberCheck(sales);
 
         const plan = planReturningPlayers(
           withBcId.map((r, key) => ({
@@ -418,10 +433,10 @@ const Importer: React.FC = () => {
           const match =
             (plan.matches.get(key) as OnRecord | undefined) ?? websiteLinks.get(key) ?? knownByPid.get(r.bcPlayerId);
           if (match) {
-            const bought = boughtAfterReport.has(buyKey(match.club_id, match.first_name, match.last_name, match.final_shirt));
-            const shirt = resolveImportedShirt(r.finalShirt, match.final_shirt, bought);
+            const sold = soldToPlayer(match);
+            const shirt = resolveImportedShirt(r.finalShirt, match.final_shirt, sold);
             if (r.finalShirt !== null && shirt !== r.finalShirt) {
-              if (bought) keptPurchased++;
+              if (sold && r.finalShirt !== 0) keptSold.push(`${match.first_name} ${match.last_name} #${shirt} (BC #${r.finalShirt})`);
               else keptOverZero++;
             }
             returningPayload.push({ ...toPayload(r), id: match.id, final_shirt: shirt });
@@ -585,7 +600,8 @@ const Importer: React.FC = () => {
       if (importMode === "replace") parts.push("existing players cleared");
       if (withBcId.length > 0) parts.push(`${withBcId.length} players upserted`);
       if (returningCount > 0) parts.push(`${returningCount} existing players updated`);
-      if (keptPurchased > 0) parts.push(`${keptPurchased} numbers bought after this report kept`);
+      if (keptSold.length > 0)
+        parts.push(`${keptSold.length} numbers we sold kept where BC shows another (check with the club: ${keptSold.join(", ")})`);
       if (keptOverZero > 0) parts.push(`${keptOverZero} BC #0s ignored (existing number kept)`);
       if (linkedBuyers.length > 0)
         parts.push(`${linkedBuyers.length} website buyers linked to their BC registration (${linkedBuyers.join(", ")})`);

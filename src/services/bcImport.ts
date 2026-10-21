@@ -115,6 +115,7 @@ const CLUB_NAME_OVERRIDES: Record<string, string> = {
   VARSITY: "Varsity",   // all-caps variant
   COPPERHEADS: "Varsity",
   "KING'S": "King's",  // case variants
+  LAGS: "Lindisfarne", // BC's Summer 2026/27 name for Lindisfarne (Lindisfarne Anglican Grammar School)
 };
 
 function normalizeClubName(raw: string): string {
@@ -291,13 +292,14 @@ export function latestGameTime(rawRows: RawRow[]): Date | null {
 // ─── Number to store for a player already on record ──────────────────────────
 // BC's number wins, except: no BC number keeps ours (registered but not played); a BC #0
 // doesn't replace a different number we hold (#0 is often the scorer's "not entered"); and
-// a number bought through the allocator after the report's last game is newer than BC's.
+// a number we sold this player is never replaced (soldNumberCheck): BC lags behind sales —
+// grading games played before the jersey arrived, spare or borrowed singlets.
 export function resolveImportedShirt(
   bcShirt: number | null,
   existingShirt: number | null,
-  boughtAfterReport: boolean
+  soldByUs: boolean
 ): number | null {
-  if (boughtAfterReport || bcShirt === null) return existingShirt;
+  if (soldByUs || bcShirt === null) return existingShirt;
   if (bcShirt === 0 && existingShirt !== null && existingShirt !== 0) return existingShirt;
   return bcShirt;
 }
@@ -467,4 +469,37 @@ export function linkWebsiteBuyers(
     }
   }
   return links;
+}
+
+// ─── Numbers we sold ──────────────────────────────────────────────────────────
+// A number we sold a player in the last SOLD_NUMBER_MONTHS — a website purchase or a
+// pre-order number — is kept over BC's (resolveImportedShirt; Celtics Oct 2026: Nate Beecham
+// bought #82, BC's grading games showed #41). Matched on the profile id the sale recorded,
+// otherwise on club + name (as nameKey) + number.
+
+export const SOLD_NUMBER_MONTHS = 12;
+
+export interface SaleRef {
+  club_id: string | null;
+  player_id: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  number: number | null;
+}
+
+type SoldCheckProfile = Pick<WebsiteBuyerRef, "id" | "club_id" | "first_name" | "last_name" | "final_shirt">;
+
+export function soldNumberCheck(sales: SaleRef[]): (profile: SoldCheckProfile) => boolean {
+  const key = (club: string | null, first: string | null, last: string | null, n: number) =>
+    `${club}|${nameKey(first)}|${nameKey(last)}|${n}`;
+  const byProfile = new Set<string>();
+  const byName = new Set<string>();
+  for (const s of sales) {
+    if (s.number == null) continue;
+    if (s.player_id) byProfile.add(`${s.player_id}|${s.number}`);
+    byName.add(key(s.club_id, s.first_name, s.last_name, s.number));
+  }
+  return (p) =>
+    p.final_shirt != null &&
+    (byProfile.has(`${p.id}|${p.final_shirt}`) || byName.has(key(p.club_id, p.first_name, p.last_name, p.final_shirt)));
 }
