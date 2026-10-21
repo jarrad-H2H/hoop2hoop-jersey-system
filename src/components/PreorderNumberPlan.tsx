@@ -3,7 +3,7 @@
 // size × birth year, then suggests clash-free print numbers for warehouse stock.
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabase";
-import { activeCutoff } from "../services/allocation";
+import { activeCutoff, clubSeasonYear } from "../services/allocation";
 import {
   buildCohorts,
   suggestStockNumbers,
@@ -11,7 +11,6 @@ import {
   type NumberHolder,
 } from "../services/stockNumberPlan";
 
-const SEASON_YEAR = new Date().getFullYear();
 const SIZE_ORDER = ["YXS", "YS", "YM", "YL", "XS", "S", "M", "L", "XL", "2XL", "3XL"];
 // Girls-only merged divisions -- their numbers don't clash with a boys-only jersey.
 const GIRLS_ONLY_AGE_GROUPS = new Set(["JUNIOR", "OPEN GIRLS"]);
@@ -44,6 +43,20 @@ const PreorderNumberPlan: React.FC<Props> = ({ clubId, clubName, productType }) 
   const [units, setUnits] = useState<Record<string, string>>({});
   const [scaleTotal, setScaleTotal] = useState("");
   const [spareSummary, setSpareSummary] = useState<string[]>([]);
+
+  // Clash windows follow the club's season year (allocation.ts clubSeasonYear), the age groups the
+  // stock will be worn under, the same as the widget.
+  const [seasonYear, setSeasonYear] = useState<number>(() => new Date().getFullYear());
+  useEffect(() => {
+    if (!clubId) return;
+    let cancelled = false;
+    void clubSeasonYear(clubId).then((y) => {
+      if (!cancelled) setSeasonYear(y);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [clubId]);
 
   useEffect(() => {
     if (!clubId) return;
@@ -166,7 +179,7 @@ const PreorderNumberPlan: React.FC<Props> = ({ clubId, clubName, productType }) 
     });
   }, [demand]);
 
-  const cohorts = useMemo(() => buildCohorts(holders, demand, SEASON_YEAR, false), [holders, demand]);
+  const cohorts = useMemo(() => buildCohorts(holders, demand, seasonYear, false), [holders, demand, seasonYear]);
 
   const countBySizeYob = useMemo(() => {
     const m = new Map<string, number>();

@@ -5,9 +5,9 @@ import { BarChart3 } from "lucide-react";
 import { SkeletonCards, SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
 import PreorderNumberPlan from "../components/PreorderNumberPlan";
+import { clubSeasonYear } from "../services/allocation";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-const SEASON_YEAR = new Date().getFullYear();
 const USAGE_WINDOW_WEEKS = 12;
 const TREND_WINDOW_WEEKS = 4;
 const EXCLUDED_NUMBERS = new Set([69]);
@@ -98,8 +98,10 @@ interface SizePlanRow {
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
-function deriveAgeGroup(yob: number): string {
-  const age = SEASON_YEAR - yob;
+// Ages count from the club's season year (allocation.ts clubSeasonYear): stock bought now is worn
+// under this season's age groups, e.g. a 2013-born is U16 in Summer 2026/27.
+function deriveAgeGroup(yob: number, seasonYear: number): string {
+  const age = seasonYear - yob;
   if (age <= 9) return "U10";
   if (age <= 11) return "U12";
   if (age <= 13) return "U14";
@@ -138,6 +140,18 @@ const StockPlanner: React.FC = () => {
   // same product type, or planning numbers silently combine mens+womens.
   const [productTypeOptions, setProductTypeOptions] = useState<string[]>(["default"]);
   const [selectedProductType, setSelectedProductType] = useState<string>("default");
+
+  const [seasonYear, setSeasonYear] = useState<number>(() => new Date().getFullYear());
+  useEffect(() => {
+    if (!selectedClubId) return;
+    let cancelled = false;
+    void clubSeasonYear(selectedClubId).then((y) => {
+      if (!cancelled) setSeasonYear(y);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClubId]);
 
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [writtenOffRows, setWrittenOffRows] = useState<InventoryRow[]>([]);
@@ -399,7 +413,7 @@ const StockPlanner: React.FC = () => {
 
       // Age group breakdown
       if (row.year_of_birth && Number.isFinite(row.year_of_birth)) {
-        const ag = deriveAgeGroup(row.year_of_birth);
+        const ag = deriveAgeGroup(row.year_of_birth, seasonYear);
         const agMap = ageGroupBySize.get(size) ?? new Map<string, number>();
         agMap.set(ag, (agMap.get(ag) ?? 0) + 1);
         ageGroupBySize.set(size, agMap);
@@ -420,7 +434,7 @@ const StockPlanner: React.FC = () => {
     for (const p of playerRows) {
       if (p.final_shirt === null || p.final_shirt === undefined) continue;
       let ag = p.age_group ?? null;
-      if (!ag && p.year_of_birth) ag = deriveAgeGroup(p.year_of_birth);
+      if (!ag && p.year_of_birth) ag = deriveAgeGroup(p.year_of_birth, seasonYear);
       if (!ag) continue;
       const s = playerNumsByAgeGroup.get(ag) ?? new Set<number>();
       s.add(p.final_shirt);
@@ -609,6 +623,7 @@ const StockPlanner: React.FC = () => {
     playerRows,
     pendingRows,
     settings,
+    seasonYear,
   ]);
 
   // ─── Derived ─────────────────────────────────────────────────────────────
