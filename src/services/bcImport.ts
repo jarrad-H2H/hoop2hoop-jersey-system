@@ -289,6 +289,42 @@ export function latestGameTime(rawRows: RawRow[]): Date | null {
   return latest;
 }
 
+// ─── Team list (the widget's team dropdown) ───────────────────────────────────
+// One row per team: a club can field two teams in one division (Celtics 14BC5 Boston and
+// 14BC5 Crushers), shown as separate choices. `divisionCode` (teams.name) is what the clash
+// checks match on, so the whole division still counts as one team for clashes.
+
+export interface TeamListRow {
+  clubId: string;
+  divisionCode: string;
+  teamName: string | null;
+  ageGroup: string | null;
+  gender: string | null;
+}
+
+export function buildTeamList(
+  players: (Pick<ParsedPlayer, "divisionCode" | "teamName" | "teamRaw" | "ageGroup" | "ageGroupRaw"> & { clubId: string | null })[]
+): TeamListRow[] {
+  const teams = new Map<string, TeamListRow>();
+  for (const p of players) {
+    if (!p.clubId) continue;
+    const code = p.divisionCode ?? p.teamName ?? p.teamRaw;
+    if (!code) continue;
+    const teamName = p.divisionCode ? p.teamName : null; // without a code, the name already is the code
+    const key = `${p.clubId}::${code}::${teamName ?? ""}`;
+    if (!teams.has(key)) {
+      teams.set(key, {
+        clubId: p.clubId,
+        divisionCode: code,
+        teamName,
+        ageGroup: parseAgeGroupFromCode(p.divisionCode) ?? (p.ageGroup || null),
+        gender: parseGenderFromDivision(p.divisionCode, p.ageGroupRaw),
+      });
+    }
+  }
+  return Array.from(teams.values());
+}
+
 // ─── Number to store for a player already on record ──────────────────────────
 // BC's number wins, except: no BC number keeps ours (registered but not played); a BC #0
 // doesn't replace a different number we hold (#0 is often the scorer's "not entered"); and

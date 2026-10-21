@@ -1,6 +1,6 @@
 // Number rules for BC imports of players already on record (ALLOCATION_LOGIC.md 13).
 // Pure logic, no DB. Run with: npx tsx scripts/test-import-shirt-rules.ts
-import { resolveImportedShirt, parseBcRows, latestGameTime, soldNumberCheck, RawRow } from "../src/services/bcImport";
+import { resolveImportedShirt, parseBcRows, latestGameTime, soldNumberCheck, buildTeamList, RawRow } from "../src/services/bcImport";
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -37,6 +37,24 @@ const lags = parseBcRows([{ "Player Id": "9", "User ID": "208076", "First Name":
   "Played For (Team)": "18BC3 LAGs Kings", playerDivisionGrade: "UNDER 18 BOYS 3", playing: "1", "Start Time": "18/10/2026 9:00" }], "gold_coast")[0];
 check("LAGs is imported as Lindisfarne (18BC3, team Kings)", lags.clubName === "Lindisfarne" && lags.divisionCode === "18BC3" && lags.teamName === "Kings");
 
+// Team list for the widget's dropdown: one choice per team; the division code is kept for clash checks.
+const gcRow = (pid: string, team: string, grade: string): RawRow => ({
+  "Player Id": pid, "User ID": "u" + pid, "First Name": "A", "Last Name": "B", finalShirt: "1",
+  "Played For (Team)": team, playerDivisionGrade: grade, playing: "1", "Start Time": "18/10/2026 9:00",
+});
+const gcTeams = buildTeamList(parseBcRows([
+  gcRow("1", "14BC5 Celtics Boston", "UNDER 14 BOYS 5"),
+  gcRow("2", "14BC5 Celtics Crushers", "UNDER 14 BOYS 5"),
+  gcRow("3", "14BC5 Celtics Boston", "UNDER 14 BOYS 5"),
+  gcRow("4", "10MC2 Celtics Shamrocks", "UNDER 10 MIXED 2"),
+], "gold_coast").map((p) => ({ ...p, clubId: "celtics-id" })));
+const u14 = gcTeams.filter((t) => t.divisionCode === "14BC5");
+check("two teams in one division are two choices (14BC5 Boston, 14BC5 Crushers)",
+  u14.length === 2 && u14.map((t) => t.teamName).sort().join("/") === "Boston/Crushers");
+check("both keep division code 14BC5, U14 boys", u14.every((t) => t.ageGroup === "U14" && t.gender === "Male"));
+const shamrocks = gcTeams.find((t) => t.teamName === "Shamrocks");
+check("10MC2 Shamrocks is a mixed U10 team", shamrocks?.ageGroup === "U10" && shamrocks?.gender === "Mixed");
+
 const row = (pid: string, shirt: string, start: string): RawRow => ({
   "Player Id": pid, "User ID": "u" + pid, "First Name": "A", "Last Name": "B", finalShirt: shirt,
   "Played For (Team)": "Pelicans 16B.7", playerDivisionGrade: "U16 BOYS C", playing: "1", "Start Time": start,
@@ -45,6 +63,9 @@ const rows = [row("1", "299", "9/10/2026 16:57"), row("2", "69", "11/10/2026 13:
 const parsed = parseBcRows(rows, "north_gc");
 check("#299 (scorer typo) imported as no number", parsed.find((p) => p.bcPlayerId === "1")?.finalShirt === null);
 check("#69 kept as recorded", parsed.find((p) => p.bcPlayerId === "2")?.finalShirt === 69);
+const ngcTeams = buildTeamList(parsed.map((p) => ({ ...p, clubId: "pelicans-id" })));
+check("Seahawks team: one choice, code only (16B.7, no team name)",
+  ngcTeams.length === 1 && ngcTeams[0].divisionCode === "16B.7" && ngcTeams[0].teamName === null);
 const last = latestGameTime(rows);
 check("report's last game is 11 Oct 2026 13:05", !!last && last.getDate() === 11 && last.getMonth() === 9 && last.getHours() === 13);
 

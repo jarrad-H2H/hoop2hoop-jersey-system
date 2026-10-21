@@ -33,7 +33,8 @@ interface NumberSuggestion {
 
 interface TeamRow {
   id: string;
-  name: string;
+  name: string; // BC division code, e.g. "14BC5" (what the clash checks match on)
+  team_name?: string | null; // e.g. "Boston": one division can hold two of a club's teams
   club_id: string | null;
   club_id_uuid: string | null;
   age_group: string | null;
@@ -647,8 +648,9 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         const useUuid = isUuidLike(selectedClubId);
         const q = supabase
           .from("teams")
-          .select("id, name, club_id, club_id_uuid, age_group, gender")
-          .order("name");
+          .select("id, name, team_name, club_id, club_id_uuid, age_group, gender")
+          .order("name")
+          .order("team_name");
         const { data, error } = useUuid
           ? await q.eq("club_id_uuid", selectedClubId)
           : await q.eq("club_id", selectedClubId);
@@ -2238,7 +2240,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
             disabled={loadingTeams}
           >
             {orderedTeamOptions.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
+              <option key={t.id} value={t.id}>{t.team_name ? `${t.name} ${t.team_name}` : t.name}</option>
             ))}
           </select>
           {derivedAgeGroup && !loadingTeams && filteredTeams.length === 0 && (

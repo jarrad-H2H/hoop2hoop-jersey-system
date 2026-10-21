@@ -7,7 +7,7 @@ import {
   ExistingPlayerRef,
   parseCsv,
   parseBcRows,
-  parseAgeGroupFromCode,
+  buildTeamList,
   parseGenderFromDivision,
   estimateYobRange,
   planReturningPlayers,
@@ -547,32 +547,8 @@ const Importer: React.FC = () => {
       }
 
       // ── Step 5: Upsert teams with competition_id, age_group, gender ────────
-      // Collect unique (club, divisionCode) combinations from this import.
-      type TeamRow = {
-        clubId: string;
-        divisionCode: string;
-        ageGroup: string | null;
-        gender: string | null;
-      };
-
-      const teamMap = new Map<string, TeamRow>();
-      for (const r of previewRows) {
-        const clubId = clubMap.get(r.clubName) ?? r.clubId;
-        if (!clubId) continue;
-        const code = r.divisionCode ?? r.teamName ?? r.teamRaw;
-        if (!code) continue;
-        const key = `${clubId}::${code}`;
-        if (!teamMap.has(key)) {
-          teamMap.set(key, {
-            clubId,
-            divisionCode: code,
-            ageGroup: parseAgeGroupFromCode(r.divisionCode) ?? (r.ageGroup || null),
-            gender: parseGenderFromDivision(r.divisionCode, r.ageGroupRaw),
-          });
-        }
-      }
-
-      const teamRows = Array.from(teamMap.values());
+      // One row per team in this import: the widget's team dropdown (bcImport.ts buildTeamList).
+      const teamRows = buildTeamList(previewRows.map((r) => ({ ...r, clubId: clubMap.get(r.clubName) ?? r.clubId })));
 
       // Apply gender overrides — team_gender_overrides rows take precedence over the BC CSV gender.
       // Scoped to the clubs actually present in this import; only overridden teams are affected.
@@ -614,6 +590,7 @@ const Importer: React.FC = () => {
           club_id: t.clubId, // text FK (legacy)
           club_id_uuid: t.clubId,
           name: t.divisionCode,
+          team_name: t.teamName,
           age_group: t.ageGroup ?? "N/A",
           gender: t.gender ?? "Unknown",
           competition_id: competitionId,
