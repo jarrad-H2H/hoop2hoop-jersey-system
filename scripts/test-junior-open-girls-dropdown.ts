@@ -28,11 +28,16 @@ function inferTeamAgeGroupFromName(name: string): AgeGroupLabel | null {
   return null;
 }
 
-function filterTeams(allTeams: any[], effectiveAgeGroup: string, effectivePlayerGender: "Male" | "Female" | null) {
-  const bucketSiblingsLower = ageGroupBucketSiblings(effectiveAgeGroup).map((s) => s.toLowerCase());
+const AGE_GROUP_LADDER: AgeGroupLabel[] = ["U10", "U12", "U14", "U16", "U18", "U20", "SLG"];
+const nextAgeGroup = (ag: AgeGroupLabel): AgeGroupLabel | null => AGE_GROUP_LADDER[AGE_GROUP_LADDER.indexOf(ag) + 1] ?? null;
+
+// The player's age group and the one above (playing up / between seasons), 2026-10-21.
+function filterTeams(allTeams: any[], effectiveAgeGroup: AgeGroupLabel, effectivePlayerGender: "Male" | "Female" | null) {
+  const groups = [effectiveAgeGroup, nextAgeGroup(effectiveAgeGroup)].filter((g): g is AgeGroupLabel => !!g);
+  const bucketSiblingsLower = groups.flatMap((g) => ageGroupBucketSiblings(g)).map((s) => s.toLowerCase());
   return allTeams.filter((t) => {
     const tag = normalizeAgeGroup(t.age_group) ?? inferTeamAgeGroupFromName(t.name);
-    const standardMatch = tag === effectiveAgeGroup;
+    const standardMatch = !!tag && groups.includes(tag);
     const bucketMatch =
       effectivePlayerGender === "Female" &&
       !!t.age_group &&
@@ -67,6 +72,14 @@ async function main() {
 
   const olderGirlTeams = filterTeams(allTeams ?? [], "U18", "Female").map((t) => t.name);
   check("17yo girl sees Open Girls team", olderGirlTeams.includes("H2H Test Open Girls Team"));
+
+  const u12Boy = filterTeams(allTeams ?? [], "U12", "Male").map((t) => t.name);
+  check("U12 boy sees his own age group (U12 Mixed)", u12Boy.includes("H2H Test U12 Mixed Team A"));
+  check("U12 boy also sees one group up (U14 Boys)", u12Boy.includes("H2H Test U14 Boys Team"));
+  check("U12 boy does NOT see two groups up (U18 Boys)", !u12Boy.some((n) => n.startsWith("H2H Test U18")));
+  check("U12 boy does NOT see a younger group (U10)", !u12Boy.some((n) => n.startsWith("H2H Test U10")));
+  const u16Boy = filterTeams(allTeams ?? [], "U16", "Male").map((t) => t.name);
+  check("U16 boy (born 2013 in 2027) sees U18 teams one group up", u16Boy.includes("H2H Test U18 Boys Team A"));
 
   console.log(`\n${failures === 0 ? "ALL PASSED" : `${failures} FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);

@@ -12,6 +12,7 @@ import {
   estimateYobRange,
   planReturningPlayers,
   latestGameTime,
+  seasonAgeYear,
   resolveImportedShirt,
   linkWebsiteBuyers,
   WebsiteBuyerRef,
@@ -49,6 +50,7 @@ const Importer: React.FC = () => {
 
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [reportEndsAt, setReportEndsAt] = useState<Date | null>(null);
+  const [reportSeason, setReportSeason] = useState<ReturnType<typeof seasonAgeYear>>(null);
   const [newClubNames, setNewClubNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -86,6 +88,7 @@ const Importer: React.FC = () => {
     setFile(f);
     setPreviewRows([]);
     setReportEndsAt(null);
+    setReportSeason(null);
     setNewClubNames([]);
     setStatusMessage(null);
     setErrorMessage(null);
@@ -125,6 +128,8 @@ const Importer: React.FC = () => {
       }
 
       setReportEndsAt(latestGameTime(rawRows));
+      const season = seasonAgeYear(rawRows);
+      setReportSeason(season);
       const parsed: ParsedPlayer[] = parseBcRows(rawRows, parsingStrategy);
 
       if (parsed.length === 0) {
@@ -187,7 +192,10 @@ const Importer: React.FC = () => {
           (importMode === "replace"
             ? " ⚠ Replace mode: existing players for these clubs will be deleted first."
             : "") +
-          ` Competition: "${competitionLabel}".`
+          ` Competition: "${competitionLabel}".` +
+          (season
+            ? ` Ages count from ${season.year} (${season.from === "membership" ? "BC registrations" : "game dates"}).`
+            : "")
       );
     } catch (err: any) {
       setErrorMessage(err.message ?? "Unexpected error during preview.");
@@ -277,6 +285,8 @@ const Importer: React.FC = () => {
 
       // ── Step 4: Upsert players ─────────────────────────────────────────────
       const currentYear = new Date().getFullYear();
+      // Ages count from the report's season year (bcImport.ts seasonAgeYear): 2027 for Summer 2026/27.
+      const ageYear = reportSeason?.year ?? currentYear;
       const seenOn = reportEndsAt ?? new Date();
       const lastSeenDate = `${seenOn.getFullYear()}-${String(seenOn.getMonth() + 1).padStart(2, "0")}-${String(seenOn.getDate()).padStart(2, "0")}`;
       const withBcId = previewRows.filter((r) => r.bcPlayerId);
@@ -288,7 +298,7 @@ const Importer: React.FC = () => {
       let retiredCopies: string[] = [];
       if (withBcId.length > 0) {
         const toPayload = (r: PreviewRow) => {
-          const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
+          const yob = estimateYobRange(r.ageGroup, ageYear, ngcRules);
           return {
             bc_player_id: r.bcPlayerId,
             bc_user_id: r.bcUserId || null,
@@ -414,7 +424,7 @@ const Importer: React.FC = () => {
         const { links: websiteLinks, copies: websiteCopies } = linkWebsiteBuyers(
           withBcId.flatMap((r, key) => {
             if (plan.matches.has(key) || knownPlayerIds.has(r.bcPlayerId)) return [];
-            const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
+            const yob = estimateYobRange(r.ageGroup, ageYear, ngcRules);
             return [{
               key,
               clubId: clubMap.get(r.clubName) ?? r.clubId ?? null,
@@ -519,7 +529,7 @@ const Importer: React.FC = () => {
       const withoutBcId = previewRows.filter((r) => !r.bcPlayerId);
       if (withoutBcId.length > 0) {
         const insertPayload = withoutBcId.map((r) => {
-          const yob = estimateYobRange(r.ageGroup, currentYear, ngcRules);
+          const yob = estimateYobRange(r.ageGroup, ageYear, ngcRules);
           return {
             first_name: r.firstName,
             last_name: r.lastName,
@@ -606,6 +616,32 @@ const Importer: React.FC = () => {
         }
       }
 
+      // ── Step 6: Season year — the widget counts ages from it (widget_season_year) ──
+      // Only moves forward, so re-importing an older report can't put a club back a season.
+      let seasonYearSet: number | null = null;
+      if (competitionId && reportSeason) {
+        const { data: comp, error: compReadErr } = await supabase
+          .from("competitions")
+          .select("age_year")
+          .eq("id", competitionId)
+          .maybeSingle();
+        if (compReadErr) {
+          setErrorMessage(`Players imported, but the season year wasn't saved: ${compReadErr.message}`);
+          return;
+        }
+        if (!comp?.age_year || comp.age_year < reportSeason.year) {
+          const { error: yearErr } = await supabase
+            .from("competitions")
+            .update({ age_year: reportSeason.year })
+            .eq("id", competitionId);
+          if (yearErr) {
+            setErrorMessage(`Players imported, but the season year wasn't saved: ${yearErr.message}`);
+            return;
+          }
+          seasonYearSet = reportSeason.year;
+        }
+      }
+
       // ── Done ───────────────────────────────────────────────────────────────
       const parts: string[] = [];
       if (importMode === "replace") parts.push("existing players cleared");
@@ -622,6 +658,7 @@ const Importer: React.FC = () => {
       if (withoutBcId.length > 0) parts.push(`${withoutBcId.length} players inserted`);
       if (newClubNames.length > 0) parts.push(`${newClubNames.length} club(s) created`);
       if (teamRows.length > 0) parts.push(`${teamRows.length} teams linked to "${season}"`);
+      if (seasonYearSet) parts.push(`the widget now counts ages from ${seasonYearSet}`);
 
       setStatusMessage("Import complete: " + parts.join(", ") + ".");
       setPreviewRows([]);

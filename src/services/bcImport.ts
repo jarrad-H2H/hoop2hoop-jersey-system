@@ -289,6 +289,26 @@ export function latestGameTime(rawRows: RawRow[]): Date | null {
   return latest;
 }
 
+// ─── Season year ──────────────────────────────────────────────────────────────
+// Basketball Queensland counts ages by the season's registration year, which BC prints on every
+// row: "2027 BQ Player" for Summer 2026/27 (a 2013-born turns 14 in 2027, so plays U16),
+// "2026 BQ Player" for Winter 2026. Without that column, a report whose last game is in
+// October–December is a summer season that counts from next year.
+export function seasonAgeYear(rawRows: RawRow[]): { year: number; from: "membership" | "games" } | null {
+  const counts = new Map<number, number>();
+  for (const row of rawRows) {
+    const m = (row["Linked Membership Product"] ?? "").match(/\b(20\d\d)\b/);
+    if (m) counts.set(Number(m[1]), (counts.get(Number(m[1])) ?? 0) + 1);
+  }
+  if (counts.size > 0) {
+    const [year] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0];
+    return { year, from: "membership" };
+  }
+  const last = latestGameTime(rawRows);
+  if (!last) return null;
+  return { year: last.getMonth() >= 9 ? last.getFullYear() + 1 : last.getFullYear(), from: "games" };
+}
+
 // ─── Team list (the widget's team dropdown) ───────────────────────────────────
 // One row per team: a club can field two teams in one division (Celtics 14BC5 Boston and
 // 14BC5 Crushers), shown as separate choices. `divisionCode` (teams.name) is what the clash

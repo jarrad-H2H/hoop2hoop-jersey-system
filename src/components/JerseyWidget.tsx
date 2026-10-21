@@ -8,6 +8,7 @@ import {
   lookupPlayerByName,
   isAgeGroupCrossPool,
   ageGroupBucketSiblings,
+  clubSeasonYear,
   type PlayerCandidate,
 } from "../services/allocation";
 
@@ -188,8 +189,6 @@ interface JerseyWidgetProps {
 }
 
 const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: propSize, demoMode, gender = "unisex" }) => {
-  const SEASON_YEAR = new Date().getFullYear();
-
   // Shopify context
   const [shopifyProductId, setShopifyProductId] = useState<string>("");
   const [selectedSize, setSelectedSize] = useState<string>(propSize ?? "");
@@ -197,6 +196,20 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // Club detection
   const [selectedClubId, setSelectedClubId] = useState<string>(propClubId ?? "");
   const [clubDetectError, setClubDetectError] = useState<string | null>(null);
+
+  // The year ages count from (allocation.ts clubSeasonYear): 2027 for Summer 2026/27, so a
+  // 2013-born is U16. Calendar year until the club's season year has loaded.
+  const [seasonYear, setSeasonYear] = useState<number>(() => new Date().getFullYear());
+  useEffect(() => {
+    if (!selectedClubId) return;
+    let cancelled = false;
+    void clubSeasonYear(selectedClubId).then((y) => {
+      if (!cancelled) setSeasonYear(y);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedClubId]);
 
   // Product type (mens/womens/default) — resolved from shopify_product_club_map in
   // production, or from the demoMode `gender` prop. Drives which inventory pool is
@@ -328,8 +341,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   const derivedAgeGroup: AgeGroupLabel | null = useMemo(() => {
     if (!yobValid) return null;
-    return deriveAgeGroupFromYob(SEASON_YEAR, yobNum);
-  }, [SEASON_YEAR, yobNum, yobValid]);
+    return deriveAgeGroupFromYob(seasonYear, yobNum);
+  }, [seasonYear, yobNum, yobValid]);
 
   // When player is playing up, search against the age group ABOVE their YOB-derived group
   const effectiveAgeGroup: AgeGroupLabel | null = useMemo(() => {
@@ -354,7 +367,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (mode === "customer_select") return customerSelectedAgeGroup || null;
     if (mode === "auto_yob") {
       if (!yobValid) return null;
-      const age = SEASON_YEAR - yobNum;
+      const age = seasonYear - yobNum;
       const groups = wc?.age_groups ?? [];
       for (const g of groups) {
         if (g.max_age == null || age <= g.max_age) return g.label;
@@ -362,7 +375,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       return groups.length > 0 ? groups[groups.length - 1].label : derivedAgeGroup;
     }
     return derivedAgeGroup;
-  }, [wc, customerSelectedAgeGroup, yobValid, yobNum, SEASON_YEAR, derivedAgeGroup]);
+  }, [wc, customerSelectedAgeGroup, yobValid, yobNum, seasonYear, derivedAgeGroup]);
 
   // Label of the oldest age group if current YOB overflows all brackets (auto_yob only)
   const fcfsYobOverflowGroupLabel: string | null = useMemo(() => {
@@ -371,8 +384,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!groups.length) return null;
     const last = groups[groups.length - 1];
     if (last.max_age == null) return null; // no upper bound on last group = catch-all
-    return SEASON_YEAR - yobNum > last.max_age ? last.label : null;
-  }, [wc, yobValid, yobNum, SEASON_YEAR]);
+    return seasonYear - yobNum > last.max_age ? last.label : null;
+  }, [wc, yobValid, yobNum, seasonYear]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const sizeSelected = Boolean((selectedSize || "").trim());
@@ -719,14 +732,18 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // Super League Girls (Seahawks) has no age limit — it is the only girls' competition above
   // U14 and younger girls play up into it (BC exports: SLG girls also in U12G/U14G) — so a
   // girl always sees her club's SLG teams, whatever her year of birth.
+  //
+  // The age group above is listed too: players can play up one group, and between seasons the
+  // next season's group is one up until a new BC report moves the season year on.
   const filteredTeams = useMemo(() => {
     if (!effectiveAgeGroup) return [];
-    const bucketSiblingsLower = ageGroupBucketSiblings(effectiveAgeGroup).map((s) => s.toLowerCase());
+    const groups = [effectiveAgeGroup, nextAgeGroup(effectiveAgeGroup)].filter((g): g is AgeGroupLabel => !!g);
+    const bucketSiblingsLower = groups.flatMap((g) => ageGroupBucketSiblings(g)).map((s) => s.toLowerCase());
     return (allTeams ?? []).filter((t) => {
       const fromAgeGroupCol = normalizeAgeGroup(t.age_group);
       const fromName = inferTeamAgeGroupFromName(t.name);
       const tag = fromAgeGroupCol ?? fromName;
-      const standardMatch = tag === effectiveAgeGroup;
+      const standardMatch = !!tag && groups.includes(tag);
       const bucketMatch =
         effectivePlayerGender === "Female" &&
         !!t.age_group &&
@@ -783,7 +800,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!yobValid) { setError("Please enter a valid year of birth."); return; }
     setRetainLooking(true);
     try {
-      const ageGroup = yobNum ? deriveAgeGroupFromYob(SEASON_YEAR, yobNum) : null;
+      const ageGroup = yobNum ? deriveAgeGroupFromYob(seasonYear, yobNum) : null;
       const result = await lookupPlayerByName({
         clubId: selectedClubId,
         firstName: firstName.trim(),
@@ -818,7 +835,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         clubId: selectedClubId,
         jerseyNumber: retainFoundNumber,
         size: selectedSize,
-        seasonYear: SEASON_YEAR,
+        seasonYear: seasonYear,
         yearOfBirth: yobNum,
         playerFirstName: firstName.trim(),
         playerLastName: lastName.trim(),
@@ -861,7 +878,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (isNewPlayer === false && matchedPlayerId === null && !lookingUpPlayer) {
       setLookingUpPlayer(true);
       try {
-        const ageGroup = yobNum ? deriveAgeGroupFromYob(SEASON_YEAR, yobNum) : null;
+        const ageGroup = yobNum ? deriveAgeGroupFromYob(seasonYear, yobNum) : null;
         const result = await lookupPlayerByName({
           clubId: selectedClubId,
           firstName: firstName.trim(),
@@ -988,7 +1005,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const ranked = await suggestNumbersForClubRanked({
         clubId: selectedClubId,
         size: selectedSize,
-        seasonYear: SEASON_YEAR,
+        seasonYear: seasonYear,
         yearOfBirth: yobForSearch,
         ageGroup: yobWindowMode ? undefined : (effectiveAgeGroup ?? undefined),
         divisionCode: yobWindowMode ? undefined : effectiveDivisionCode,
@@ -1006,7 +1023,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       if (Number.isFinite(pref)) {
         try {
           const check = await smartCheckNumber(selectedClubId, pref, {
-            seasonYear: SEASON_YEAR,
+            seasonYear: seasonYear,
             yearOfBirth: yobForSearch,
             ageGroup: yobWindowMode ? undefined : (effectiveAgeGroup ?? undefined),
             divisionCode: yobWindowMode ? undefined : effectiveDivisionCode,
@@ -1075,7 +1092,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
               const fallbackRanked = await suggestNumbersForClubRanked({
                 clubId: selectedClubId,
                 size: selectedSize,
-                seasonYear: SEASON_YEAR,
+                seasonYear: seasonYear,
                 yearOfBirth: yobForSearch,
                 ageGroup: effectiveAgeGroup ?? undefined,
                 divisionCode: haveLookupTeam ? fallbackDivisionCode : undefined,
@@ -1130,7 +1147,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         clubId: selectedClubId,
         jerseyNumber: selectedNumber,
         size: selectedSize,
-        seasonYear: SEASON_YEAR,
+        seasonYear: seasonYear,
         yearOfBirth: yobNum,
         teamId: teamChoice === "not_sure" ? null : teamChoice,
         expiresMinutes: 30,

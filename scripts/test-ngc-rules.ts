@@ -76,7 +76,8 @@ async function main() {
   })).map((s) => s.jersey_number);
   console.log(`   3XS grid for an SLG.1 girl: ${grid.sort((a, b) => a - b).join(", ")}`);
   check("SLG.1 girl's 3XS grid excludes SLG numbers 29, 31, 32, 40", [29, 31, 32, 40].every((n) => !grid.includes(n)));
-  check("SLG.1 girl's 3XS grid offers boys-only numbers 34 and 37", [34, 37].every((n) => grid.includes(n)));
+  // 3XS #37 (also boys-only) was sold on 19 Oct 2026, so only #34 is still in stock to check.
+  check("SLG.1 girl's 3XS grid offers boys-only number 34", grid.includes(34));
 
   if (failures > 0) {
     console.error(`\n${failures} check(s) failed`);

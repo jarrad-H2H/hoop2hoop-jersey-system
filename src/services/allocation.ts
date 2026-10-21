@@ -364,6 +364,30 @@ async function activePlayersFilter(clubId: string): Promise<string> {
   return filter;
 }
 
+const seasonYearCache = new Map<string, number>();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The year a club's ages count from. Basketball Queensland uses the season's registration year:
+ * Summer 2026/27 is "2027 BQ Player", so a 2013-born plays U16 (14 in 2027). The BC importer saves
+ * it on the competition (competitions.age_year) and a club takes the newest year among its teams'
+ * competitions. Clubs without BC teams (pre-order clubs) keep the calendar year.
+ */
+export async function clubSeasonYear(clubId: string): Promise<number> {
+  const cached = seasonYearCache.get(clubId);
+  if (cached) return cached;
+  const calendarYear = new Date().getFullYear();
+  if (!UUID_RE.test(clubId ?? "")) return calendarYear;
+  const { data, error } = await supabase.rpc("widget_season_year", { p_club_id: clubId });
+  if (error) {
+    console.error("widget_season_year error", error);
+    return calendarYear; // not cached, so it retries
+  }
+  const year = typeof data === "number" && Number.isFinite(data) ? data : calendarYear;
+  seasonYearCache.set(clubId, year);
+  return year;
+}
+
 const isSlgCode =(code: string | null | undefined): boolean => /^SLG/i.test((code ?? "").trim());
 
 type TeamFields = {
@@ -536,7 +560,7 @@ export async function smartCheckNumber(
   const seasonYear =
     typeof optSeasonYear === "number" && Number.isFinite(optSeasonYear)
       ? optSeasonYear
-      : new Date().getFullYear();
+      : await clubSeasonYear(clubId);
 
   const ngc = await getNgcContext(clubId);
   const activeFilter = await activePlayersFilter(clubId);
@@ -876,7 +900,7 @@ export async function suggestNumbersForClubRanked(input: {
   // window is NOT being enforced on top. With enforceYobWindow the birth-year path decides.
   const teamAware = hasTeamContext && !input.enforceYobWindow;
 
-  const currentYear = input.seasonYear || new Date().getFullYear();
+  const currentYear = input.seasonYear || (await clubSeasonYear(input.clubId));
   const targetAge = currentYear - input.yearOfBirth;
 
   const { data: invRows, error: invErr } = await supabase
