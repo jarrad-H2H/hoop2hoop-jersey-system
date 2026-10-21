@@ -260,6 +260,7 @@ If either condition is false → no cross-pool check (treat as single-gender poo
   - `age_group` — e.g., "U10", "U12", "Junior"
   - `gender` — "Boys", "Girls", "Mixed" (from BC CSV column C or D)
   - `competition_id` — set from selected competition in the Importer UI
+  - one team row per team (`buildTeamList`, 2026-10-21): `name` = division code (what clash checks match on), `team_name` = the team within it, so the widget dropdown lists "14BC5 Boston" and "14BC5 Crushers" separately while clashes still treat the whole division as one team. Each import replaces the club's teams for that competition.
 - Importer estimates YOB range and stores `estimated_yob_min` / `estimated_yob_max` on each player
 - `bc_last_seen_at` is set to the report's last game date (latest `Start Time`) on every player seen in that run (also `bc_last_seen_season` = import year, informational only)
 - Club name normalisation handles known aliases: VARSITY → Varsity, COPPERHEADS → Varsity, king's → King's, LAGs → Lindisfarne (BC's name for Lindisfarne Anglican Grammar School from Summer 2026/27, e.g. "18BC3 LAGs Kings"; 21 of LAGs' 31 players in the Oct 2026 report were Lindisfarne players — confirmed by Jarrad 2026-10-21)

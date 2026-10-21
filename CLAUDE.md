@@ -68,10 +68,10 @@ CLAUDE.md                   ← This file
 ### `teams`
 - `id` (uuid PK)
 - `club_id` (short code, legacy), `club_id_uuid` (uuid FK to clubs)
-- `name` — full team name as parsed from BC CSV
+- `name` — the BC division code, e.g. "14B.2" (Seahawks) or "14BC5" (Gold Coast). Clash checks and the widget's picked team match on this, so a whole division counts as one team for clashes
+- `team_name` — the team within the division, e.g. "Boston" (null for Seahawks, whose code names the team). Added 2026-10-21: one row per team, and the widget's team dropdown shows "14BC5 Boston" / "14BC5 Crushers" (Celtics fields two teams in 14BC5). Built by `buildTeamList` in `bcImport.ts`, which each import uses to replace a club's teams for that competition
 - `age_group` — e.g. "U10", "U12", "U14", "U16", "U18", "SLG", "Junior"
-- `gender` — "Boys", "Girls", "Mixed" — sourced from BC CSV, authoritative for cross-pool checks
-- `division_code` — e.g. "14B.2" (Seahawks) or "JGC1" (Gold Coast)
+- `gender` — "Male", "Female", "Mixed" — parsed from the BC division at import (`team_gender_overrides` can override), authoritative for cross-pool checks
 - `competition_id`
 
 ### `players`
