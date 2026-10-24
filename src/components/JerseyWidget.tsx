@@ -42,14 +42,22 @@ interface TeamRow {
   gender: string | null;
 }
 
-type AgeGroupLabel = "U10" | "U12" | "U14" | "U16" | "U18" | "U20" | "SLG";
+type AgeGroupLabel = "U10" | "U12" | "U14" | "U16" | "U18" | "U20" | "Open" | "SLG";
 
 function isUuidLike(v: string): boolean {
   const s = (v || "").trim();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 }
 
-function deriveAgeGroupFromYob(seasonYear: number, yob: number): AgeGroupLabel {
+// Above U20, Super League Girls (no age cap) is the only real division for girls, so a known
+// female buyer still maps to SLG -- but a male (or gender not yet known) buyer over U20 has no
+// such division on file. Those are senior/open players; "Open" tracks them without falsely
+// labelling them as Super League Girls (see Wolves open men's team, 2026-10-24).
+function deriveAgeGroupFromYob(
+  seasonYear: number,
+  yob: number,
+  gender?: "Male" | "Female" | null
+): AgeGroupLabel {
   const age = seasonYear - yob;
   if (age <= 9) return "U10";
   if (age <= 11) return "U12";
@@ -57,7 +65,7 @@ function deriveAgeGroupFromYob(seasonYear: number, yob: number): AgeGroupLabel {
   if (age <= 15) return "U16";
   if (age <= 17) return "U18";
   if (age <= 19) return "U20";
-  return "SLG";
+  return gender === "Female" ? "SLG" : "Open";
 }
 
 function normalizeAgeGroup(raw: unknown): AgeGroupLabel | null {
@@ -129,8 +137,13 @@ function useScrollIntoViewOnReveal<T extends HTMLElement>(ref: React.RefObject<T
   }, [active, ref]);
 }
 
-function nextAgeGroup(ag: AgeGroupLabel | null): AgeGroupLabel | null {
+function nextAgeGroup(ag: AgeGroupLabel | null, gender?: "Male" | "Female" | null): AgeGroupLabel | null {
   if (!ag) return null;
+  // U20 is the top of the numbered ladder; a girl playing up from U20 moves into Super
+  // League Girls (no age cap), a boy (or gender not yet known) moves into Open. Neither
+  // "Open" nor "SLG" has anywhere further to play up into.
+  if (ag === "U20") return gender === "Female" ? "SLG" : "Open";
+  if (ag === "Open" || ag === "SLG") return null;
   const idx = AGE_GROUP_LADDER.indexOf(ag);
   if (idx === -1 || idx >= AGE_GROUP_LADDER.length - 1) return null;
   return AGE_GROUP_LADDER[idx + 1];
@@ -341,16 +354,16 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
 
   const derivedAgeGroup: AgeGroupLabel | null = useMemo(() => {
     if (!yobValid) return null;
-    return deriveAgeGroupFromYob(seasonYear, yobNum);
-  }, [seasonYear, yobNum, yobValid]);
+    return deriveAgeGroupFromYob(seasonYear, yobNum, effectivePlayerGender);
+  }, [seasonYear, yobNum, yobValid, effectivePlayerGender]);
 
   // When player is playing up, search against the age group ABOVE their YOB-derived group
   const effectiveAgeGroup: AgeGroupLabel | null = useMemo(() => {
     if (keepExistingJersey === true && playingUp === true) {
-      return nextAgeGroup(derivedAgeGroup);
+      return nextAgeGroup(derivedAgeGroup, effectivePlayerGender);
     }
     return derivedAgeGroup;
-  }, [derivedAgeGroup, keepExistingJersey, playingUp]);
+  }, [derivedAgeGroup, keepExistingJersey, playingUp, effectivePlayerGender]);
 
   const remainingSeconds = expiresAt
     ? Math.max(0, Math.floor((expiresAt - tick) / 1000))
@@ -737,7 +750,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   // next season's group is one up until a new BC report moves the season year on.
   const filteredTeams = useMemo(() => {
     if (!effectiveAgeGroup) return [];
-    const groups = [effectiveAgeGroup, nextAgeGroup(effectiveAgeGroup)].filter((g): g is AgeGroupLabel => !!g);
+    const groups = [effectiveAgeGroup, nextAgeGroup(effectiveAgeGroup, effectivePlayerGender)].filter((g): g is AgeGroupLabel => !!g);
     const bucketSiblingsLower = groups.flatMap((g) => ageGroupBucketSiblings(g)).map((s) => s.toLowerCase());
     return (allTeams ?? []).filter((t) => {
       const fromAgeGroupCol = normalizeAgeGroup(t.age_group);
@@ -800,7 +813,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!yobValid) { setError("Please enter a valid year of birth."); return; }
     setRetainLooking(true);
     try {
-      const ageGroup = yobNum ? deriveAgeGroupFromYob(seasonYear, yobNum) : null;
+      const ageGroup = yobNum ? deriveAgeGroupFromYob(seasonYear, yobNum, effectivePlayerGender) : null;
       const result = await lookupPlayerByName({
         clubId: selectedClubId,
         firstName: firstName.trim(),
@@ -878,7 +891,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (isNewPlayer === false && matchedPlayerId === null && !lookingUpPlayer) {
       setLookingUpPlayer(true);
       try {
-        const ageGroup = yobNum ? deriveAgeGroupFromYob(seasonYear, yobNum) : null;
+        const ageGroup = yobNum ? deriveAgeGroupFromYob(seasonYear, yobNum, effectivePlayerGender) : null;
         const result = await lookupPlayerByName({
           clubId: selectedClubId,
           firstName: firstName.trim(),
