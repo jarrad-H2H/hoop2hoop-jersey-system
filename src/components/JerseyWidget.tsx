@@ -556,7 +556,11 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       try {
         const data: any = event?.data;
         if (!data || data.type !== "h2h:variantChanged") return;
-        const size = (data.size || "").trim();
+        const rawSize = (data.size || "").trim();
+        // A swatch label read with its hover-tooltip copy arrives doubled ("MM", "3XS3XS");
+        // no real size label is two copies of itself, so keep one (Wolves, Oct 2026).
+        const half = rawSize.length % 2 === 0 ? rawSize.slice(0, rawSize.length / 2) : "";
+        const size = half && half + half === rawSize ? half : rawSize;
         if (size) {
           setSelectedSize(size);
           setSuggestions([]);

@@ -494,6 +494,16 @@
     return fallback && fallback.value ? String(fallback.value).trim() : "";
   }
 
+  // Visible text of a swatch label without the swatch app's hover-tooltip copy. Globo started
+  // rendering <span class="attr-title-hover">M</span>M (~23 Oct 2026), so textContent read "MM"
+  // and the widget found no stock in a size called "MM" (Wolves, every size).
+  function swatchLabelText(el) {
+    var clone = el.cloneNode(true);
+    var extras = clone.querySelectorAll(".attr-title-hover, .visually-hidden");
+    for (var i = 0; i < extras.length; i++) extras[i].parentNode.removeChild(extras[i]);
+    return (clone.textContent || "").trim();
+  }
+
   function findSelectedSizeValue(scope, bundleJersProp) {
     // 0) Simple Bundles: use the explicitly configured property name
     if (bundleJersProp) {
@@ -512,6 +522,17 @@
         if (name.indexOf("size") !== -1) return (sel.value || "").trim();
       }
       if (selects[0] && selects[0].value) return (selects[0].value || "").trim();
+      // Newer Dawn: variant-selects holds radio pills instead of a <select>
+      var vsFieldsets = $all("fieldset", variantSelects);
+      for (var v = 0; v < vsFieldsets.length; v++) {
+        var vsLegend = $("legend", vsFieldsets[v]);
+        if ((vsLegend && vsLegend.textContent ? vsLegend.textContent : "").toLowerCase().indexOf("size") !== -1) {
+          var vsChecked = $('input[type="radio"]:checked', vsFieldsets[v]);
+          if (vsChecked && vsChecked.value) return (vsChecked.value || "").trim();
+        }
+      }
+      var vsAnyChecked = $('input[type="radio"]:checked', variantSelects);
+      if (vsAnyChecked && vsAnyChecked.value) return (vsAnyChecked.value || "").trim();
     }
 
     // 2) Dawn variant-radios (native size pills)
@@ -531,20 +552,21 @@
       if (anyChecked && anyChecked.value) return (anyChecked.value || "").trim();
     }
 
-    // 3) Globo swatches
+    // 3) Globo swatches: the checked radio's value is the size itself; label text is a fallback
+    var checkedSwatch = $('input[id^="swatch-detail-"]:checked', scope);
+    if (checkedSwatch && checkedSwatch.value) return String(checkedSwatch.value).trim();
+
     var globoActive =
       $('.swatch-anchor[aria-pressed="true"]', scope) ||
       $(".swatch-anchor.active", scope) ||
       $(".swatch-anchor.selected", scope) ||
       $(".swatch-anchor.is-selected", scope) ||
       $(".swatch-anchor.globo-active", scope);
-    if (globoActive && globoActive.textContent) return globoActive.textContent.trim();
+    if (globoActive && swatchLabelText(globoActive)) return swatchLabelText(globoActive);
 
-    var checkedSwatch = $('input[id^="swatch-detail-"]:checked', scope);
     if (checkedSwatch) {
       var lbl = $('label[for="' + checkedSwatch.id + '"]', scope);
-      if (lbl && lbl.textContent) return lbl.textContent.trim();
-      if (checkedSwatch.value) return String(checkedSwatch.value).trim();
+      if (lbl && swatchLabelText(lbl)) return swatchLabelText(lbl);
     }
 
     // 4) Conservative fallback
