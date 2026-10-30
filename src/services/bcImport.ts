@@ -201,6 +201,74 @@ export function parseCsv(text: string): RawRow[] {
   return rows;
 }
 
+// ─── Text encoding ────────────────────────────────────────────────────────────
+// BC's 26 Oct 2026 exports came in Mac Roman instead of UTF-8. Read as Windows-1252 (which is
+// what Excel does) every apostrophe and accent turns into another letter: "DÕAmico" for D’Amico,
+// "MŸller" for Müller, "NoŽ" for Noé, and a saved .xlsx or CSV keeps it that way. Imported as-is,
+// those would overwrite the right names on record.
+
+/** A CSV file's text: UTF-8 when the bytes are valid UTF-8, otherwise Windows-1252 (Excel's plain "CSV"). */
+export function decodeCsvBytes(bytes: ArrayBuffer | Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
+// Windows-1252 bytes 0x80–0x9F; the five it leaves unused read as their control codes.
+const CP1252_80_9F = "€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008DŽ\u008F\u0090‘’“”•–—˜™š›œ\u009DžŸ";
+
+/** Mac Roman text that was read as Windows-1252, decoded back; null when it can't be. */
+function fromMacRoman(s: string): string | null {
+  const bytes: number[] = [];
+  for (const ch of s) {
+    const i = CP1252_80_9F.indexOf(ch);
+    const c = ch.codePointAt(0)!;
+    if (i >= 0) bytes.push(0x80 + i);
+    else if (c <= 0xff) bytes.push(c);
+    else return null;
+  }
+  try {
+    return new TextDecoder("macintosh").decode(new Uint8Array(bytes));
+  } catch {
+    return null; // runtime without a Mac Roman decoder
+  }
+}
+
+// Letters that only turn up in a name as Mac Roman read as Windows-1252: Õ inside a
+// mixed-case name is an apostrophe (OÕBrien), Ÿ is ü, Ž after a small letter is é.
+function looksMacRoman(name: string): boolean {
+  return (/[A-Za-z]Õ[A-Za-z]/.test(name) && /[a-z]/.test(name)) || /Ÿ|[a-z]Ž/.test(name);
+}
+
+const NAME_COLUMNS = ["First Name", "FirstName", "Last Name", "LastName"];
+
+/**
+ * Names in a report exported as Mac Roman, decoded back ("DÕAmico" → "D’Amico"). The encoding
+ * belongs to the whole file, so once one name gives it away every name with an accent or
+ * apostrophe is decoded; a report without such a name is returned exactly as it is.
+ * `repaired` lists each change ("DÕAmico → D’Amico") for the import preview.
+ */
+export function repairMacRomanNames(rawRows: RawRow[]): { rows: RawRow[]; repaired: string[] } {
+  const isMac = rawRows.some((r) => NAME_COLUMNS.some((k) => r[k] && looksMacRoman(r[k])));
+  if (!isMac) return { rows: rawRows, repaired: [] };
+  const repaired = new Set<string>();
+  const rows = rawRows.map((r) => {
+    const out = { ...r };
+    for (const k of NAME_COLUMNS) {
+      if (!r[k] || !/[^\x00-\x7f]/.test(r[k])) continue;
+      const fixed = fromMacRoman(r[k]);
+      if (fixed && fixed !== r[k]) {
+        out[k] = fixed;
+        repaired.add(`${r[k]} → ${fixed}`);
+      }
+    }
+    return out;
+  });
+  return { rows, repaired: Array.from(repaired) };
+}
+
 // ─── Game-log rows → one ParsedPlayer per BC registration ────────────────────
 // BC exports one row per player per game; this collapses them to one row per
 // Player Id, preferring a row that has a shirt number, isn't a borrow, and played.

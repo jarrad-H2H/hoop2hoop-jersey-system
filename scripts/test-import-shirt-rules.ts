@@ -1,6 +1,9 @@
 // Number rules for BC imports of players already on record (ALLOCATION_LOGIC.md 13).
 // Pure logic, no DB. Run with: npx tsx scripts/test-import-shirt-rules.ts
-import { resolveImportedShirt, parseBcRows, latestGameTime, soldNumberCheck, buildTeamList, RawRow } from "../src/services/bcImport";
+import {
+  resolveImportedShirt, parseBcRows, latestGameTime, soldNumberCheck, buildTeamList, RawRow,
+  decodeCsvBytes, repairMacRomanNames,
+} from "../src/services/bcImport";
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -68,6 +71,25 @@ check("Seahawks team: one choice, code only (16B.7, no team name)",
   ngcTeams.length === 1 && ngcTeams[0].divisionCode === "16B.7" && ngcTeams[0].teamName === null);
 const last = latestGameTime(rows);
 check("report's last game is 11 Oct 2026 13:05", !!last && last.getDate() === 11 && last.getMonth() === 9 && last.getHours() === 13);
+
+// Reports exported in Mac Roman (BC, 26 Oct 2026): names are decoded back, nothing else is touched.
+const names = (first: string, last: string): RawRow => ({ "First Name": first, "Last Name": last });
+const mac = repairMacRomanNames([
+  names("Kirra", "DÕAmico"), names("Noah", "MŸller"), names("NoŽ", "Smith"),
+  names("Freda", "FaÕaofonuÕu"), names("Aurlando-WanyÌ©", "Hano"), names("Zac", "Brown"),
+]);
+check("Mac text names decoded (D’Amico, Müller, Noé, Fa’aofonu’u)",
+  mac.rows[0]["Last Name"] === "D’Amico" && mac.rows[1]["Last Name"] === "Müller" &&
+  mac.rows[2]["First Name"] === "Noé" && mac.rows[3]["Last Name"] === "Fa’aofonu’u");
+check("a name BC already holds garbled comes back as stored (Aurlando-WanyÃ©)", mac.rows[4]["First Name"] === "Aurlando-WanyÃ©");
+check("plain names untouched and the preview lists 5 fixes", mac.rows[5]["Last Name"] === "Brown" && mac.repaired.length === 5);
+const clean = repairMacRomanNames([names("Peyton", "O’Loughlin"), names("Ahngell", "Ramírez Rodriguez"), names("ANA", "SIMÕES")]);
+check("a UTF-8 report is left exactly as it is (O’Loughlin, Ramírez, all-caps SIMÕES)",
+  clean.repaired.length === 0 && clean.rows[0]["Last Name"] === "O’Loughlin" && clean.rows[1]["Last Name"] === "Ramírez Rodriguez");
+check("a Mac Roman CSV file reads as Windows-1252 (D\\xD5Amico -> DÕAmico)",
+  decodeCsvBytes(new Uint8Array([0x44, 0xd5, 0x41, 0x6d, 0x69, 0x63, 0x6f])) === "DÕAmico");
+check("a UTF-8 CSV (with Excel's BOM) reads as UTF-8",
+  decodeCsvBytes(new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("D’Amico")])) === "D’Amico");
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`);

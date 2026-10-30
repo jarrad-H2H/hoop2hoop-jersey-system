@@ -6,6 +6,8 @@ import {
   ParsedPlayer,
   ExistingPlayerRef,
   parseCsv,
+  decodeCsvBytes,
+  repairMacRomanNames,
   parseBcRows,
   buildTeamList,
   parseGenderFromDivision,
@@ -119,8 +121,8 @@ const Importer: React.FC = () => {
 
     setLoading(true);
     try {
-      const text = await file.text();
-      const rawRows = parseCsv(text);
+      const text = decodeCsvBytes(await file.arrayBuffer());
+      const { rows: rawRows, repaired: repairedNames } = repairMacRomanNames(parseCsv(text));
 
       if (rawRows.length === 0) {
         setErrorMessage("No data rows found in CSV.");
@@ -195,6 +197,9 @@ const Importer: React.FC = () => {
           ` Competition: "${competitionLabel}".` +
           (season
             ? ` Ages count from ${season.year} (${season.from === "membership" ? "BC registrations" : "game dates"}).`
+            : "") +
+          (repairedNames.length > 0
+            ? ` ${repairedNames.length} names fixed (file was in Mac text format): ${repairedNames.slice(0, 3).join(", ")}${repairedNames.length > 3 ? ", …" : ""}.`
             : "")
       );
     } catch (err: any) {

@@ -201,6 +201,8 @@ Imports Basketball Connect CSV files to populate `players` and `teams`.
 
 **LAGs = Lindisfarne**: from Summer 2026/27 BC names Lindisfarne's teams "LAGs" (e.g. "18BC3 LAGs Kings"). `CLUB_NAME_OVERRIDES` in `bcImport.ts` maps it so they update the existing Lindisfarne records instead of creating a new club (confirmed by Jarrad 2026-10-21).
 
+**Mac text exports (found 2026-10-30)**: BC's 26 Oct 2026 CSV ("NGC October.3 2026.csv") came in Mac Roman, not UTF-8, and the xlsx copies made from it (NGC 26 Oct, GC 21 Oct) show "DÕAmico" for D’Amico, "MŸller" for Müller, "NoŽ" for Noé. Imported as-is these overwrite the right names on record. The importer now reads a file that isn't valid UTF-8 as Windows-1252 (`decodeCsvBytes`) and, when a name gives the Mac format away, decodes every accented name back (`repairMacRomanNames`); the preview lists the fixes. BC's raw CSV, an Excel "CSV UTF-8" or a plain Excel "CSV" all import correctly. Test: `scripts/test-import-shirt-rules.ts`.
+
 ---
 
 ## Shopify Integration
