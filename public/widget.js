@@ -33,6 +33,13 @@
   var h2hBundlePage = false; // true when widget is on a Simple Bundles product page
   var h2hClubConfirmed = false; // true when widget has confirmed a valid H2H club mapping
 
+  // A reserved number is held in ONE size. Wolves, 13 Nov 2026: George Bartle reserved 5XS #10,
+  // the size was then switched to 4XS and Add to Cart bought a 4XS carrying "#10" (there was no
+  // 4XS #10). Variant ids of the reserved size, so an add of any other size is refused; null when
+  // nothing is reserved or the size can't be matched to variants. mount() supplies the drop handler.
+  var h2hReservedVariantIds = null;
+  var h2hOnWrongSizeAdd = null;
+
   // ── Guarded products (fail-closed) ───────────────────────────────────────────
   // Products that must NEVER reach the cart unless the allocator confirmed first.
   // Every other product keeps the normal behaviour (locked only once the iframe
@@ -88,14 +95,11 @@
         if (h2hGuarded && gMethod === "POST" && gUrl.indexOf("/cart/add") !== -1 && guardTouchesProduct(options && options.body)) {
           if (!(h2hSharedProps && !h2hSharedPropsInjected)) {
             guardOnBlocked();
-            try {
-              return Promise.resolve(new Response(
-                JSON.stringify({ status: 422, message: "Jersey allocator not completed", description: "Please complete the jersey allocator on this page before adding to cart." }),
-                { status: 422, headers: { "Content-Type": "application/json" } }
-              ));
-            } catch (_) {
-              return Promise.reject(new Error("Jersey allocator not completed"));
-            }
+            return guardRejectFetch("Jersey allocator not completed", "Please complete the jersey allocator on this page before adding to cart.");
+          }
+          if (guardWrongSize(options && options.body)) {
+            if (h2hOnWrongSizeAdd) h2hOnWrongSizeAdd();
+            return guardRejectFetch("Size changed", "The jersey number was reserved in a different size. Please choose your number again for this size.");
           }
           guardedAdd = true;
         }
@@ -161,8 +165,9 @@
       try {
         if (h2hGuarded && String(this._h2hXhrMethod).toUpperCase() === "POST" &&
             String(this._h2hXhrUrl).indexOf("/cart/add") !== -1 && guardTouchesProduct(body)) {
-          if (!(h2hSharedProps && !h2hSharedPropsInjected)) {
-            guardOnBlocked();
+          var wrongSize = false;
+          if (!(h2hSharedProps && !h2hSharedPropsInjected) || (wrongSize = guardWrongSize(body))) {
+            if (wrongSize) { if (h2hOnWrongSizeAdd) h2hOnWrongSizeAdd(); } else { guardOnBlocked(); }
             try { origOpen.call(this, "GET", "/__h2h_guard_blocked__", true); } catch (_) {}
             return origSend.call(this, null);
           }
@@ -266,6 +271,58 @@
     var ids = guardAddIds(body);
     if (ids === null || !h2hGuardVariantIds) return true;
     for (var i = 0; i < ids.length; i++) { if (h2hGuardVariantIds[ids[i]]) return true; }
+    return false;
+  }
+
+  // A refused /cart/add, shaped like Shopify's own error so themes show it as a failed add.
+  function guardRejectFetch(message, description) {
+    try {
+      return Promise.resolve(new Response(
+        JSON.stringify({ status: 422, message: message, description: description }),
+        { status: 422, headers: { "Content-Type": "application/json" } }
+      ));
+    } catch (_) {
+      return Promise.reject(new Error(message));
+    }
+  }
+
+  // Size labels compared the way the widget does: case and spacing ignored, and a label read
+  // twice by a swatch app ("MM", "3XS3XS") counts once.
+  function h2hSizeKey(s) {
+    var t = String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+    var half = t.length % 2 === 0 ? t.slice(0, t.length / 2) : "";
+    return half && half + half === t ? half : t;
+  }
+
+  // Variant ids of this product whose options include the size, from Shopify's own product
+  // data. Null when it can't be told (then only the size checks in mount() apply).
+  function variantIdsForSize(size) {
+    try {
+      var want = h2hSizeKey(size);
+      var vs = window.ShopifyAnalytics && window.ShopifyAnalytics.meta &&
+               window.ShopifyAnalytics.meta.product && window.ShopifyAnalytics.meta.product.variants;
+      if (!want || !vs || !vs.length) return null;
+      var out = {};
+      var n = 0;
+      for (var i = 0; i < vs.length; i++) {
+        var parts = String((vs[i] && vs[i].public_title) || "").split(" / ");
+        for (var p = 0; p < parts.length; p++) {
+          if (h2hSizeKey(parts[p]) === want && vs[i].id != null) { out[String(vs[i].id)] = true; n++; break; }
+        }
+      }
+      return n ? out : null;
+    } catch (_) { return null; }
+  }
+
+  // True when this add is for the guarded product in a size other than the reserved one.
+  function guardWrongSize(body) {
+    if (!h2hReservedVariantIds) return false;
+    var ids = guardAddIds(body);
+    if (!ids) return false;
+    for (var i = 0; i < ids.length; i++) {
+      if (h2hGuardVariantIds && !h2hGuardVariantIds[ids[i]]) continue; // another product in the same add
+      if (!h2hReservedVariantIds[ids[i]]) return true;
+    }
     return false;
   }
 
@@ -816,6 +873,50 @@
     var bundleJerseyProperty = null;
     var cartSnapshotKeys = null; // cart item keys at the moment H2H data was confirmed
 
+    // A reserved number (stock or made-to-order) is held in ONE size. If the size on the page
+    // changes before Add to Cart, the reservation no longer matches what would be bought: drop it
+    // (Add to Cart locks again) and tell the widget, which releases the hold and asks for a number
+    // in the new size. A pre-allocated number doesn't depend on size, so Add to Cart stays open
+    // and the widget just re-saves the record in the new size. Once the item is in the cart it
+    // is left alone: that cart line already has the size the number was held in.
+    function checkConfirmationSize(size) {
+      if (!size || h2hSharedPropsInjected) return;
+      if (lastReservation) {
+        if (lastReservation.size && h2hSizeKey(size) !== h2hSizeKey(lastReservation.size)) dropReservationForSizeChange(size);
+        return;
+      }
+      if (lastPreallocated && lastPreallocated.size && h2hSizeKey(size) !== h2hSizeKey(lastPreallocated.size)) {
+        var previous = lastPreallocated.size;
+        lastPreallocated.size = size;
+        tellWidgetSizeChanged("preallocated", size, previous);
+      }
+    }
+
+    function tellWidgetSizeChanged(kind, size, previousSize) {
+      try {
+        iframe.contentWindow && iframe.contentWindow.postMessage(
+          { type: "h2h:confirmedSizeChanged", kind: kind, size: size || "", previousSize: previousSize || "" }, "*"
+        );
+      } catch (_) {}
+    }
+
+    function dropReservationForSizeChange(newSize) {
+      if (!lastReservation) return;
+      var previousSize = lastReservation.size || "";
+      lastReservation = null;
+      h2hSharedProps = null;
+      h2hSharedPropsInjected = false;
+      h2hReservedVariantIds = null;
+      ["h2h_jersey_number", "h2h_pending_allocation_id", "h2h_reserved_at", "h2h_player_name"].forEach(function (id) {
+        setHiddenInputValue(id, "");
+      });
+      lockAtcButton(scope);
+      if (h2hGuarded) guardLockAll("Select jersey number first");
+      guardShowNotice("You changed the size after choosing your number. A number is held in one size only, so please choose your number again for the new size in the jersey allocator above.", false);
+      tellWidgetSizeChanged("reservation", newSize, previousSize);
+    }
+    h2hOnWrongSizeAdd = function () { dropReservationForSizeChange(findSelectedSizeValue(scope, bundleJerseyProperty)); };
+
     // Re-injects hidden inputs into the CURRENT form if they were destroyed
     // (e.g. Dawn section rendering replaces product-form innerHTML on variant change).
     function ensureInputsInCurrentForm() {
@@ -926,6 +1027,14 @@
       atcBtn.addEventListener("click", function (e) {
         if (!lastReservation && !lastPreorder && !lastPreallocated && !lastUnmatched) return; // nothing set → let Dawn handle normally
 
+        // Size changed since the number was reserved: drop it and stop this add.
+        checkConfirmationSize(findSelectedSizeValue(scope, bundleJerseyProperty));
+        if (!lastReservation && !lastPreorder && !lastPreallocated && !lastUnmatched) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
+
         // Simple Bundles pages: let the click propagate so their modal opens,
         // then start the post-add watcher to merge H2H props after the bundle lands.
         if (bundleJerseyProperty) {
@@ -993,6 +1102,7 @@
     function sendVariantState(force) {
       var size = findSelectedSizeValue(scope, bundleJerseyProperty);
       var variantId = findSelectedVariantId(scope);
+      checkConfirmationSize(size);
       scheduleSend(
         iframe,
         { type: "h2h:variantChanged", productId: String(productId), size: size, variantId: variantId },
@@ -1060,7 +1170,10 @@
             pendingId: pendingId,
             reservedAt: new Date().toISOString(),
             playerName: playerName,
+            // The size the number was reserved in (an older widget doesn't send it: use the page's).
+            size: String(data.size || "") || findSelectedSizeValue(scope, bundleJerseyProperty),
           };
+          h2hReservedVariantIds = bundleJerseyProperty ? null : variantIdsForSize(lastReservation.size);
           h2hSharedProps = { "Jersey Number": String(jerseyNum), "_h2h_pending_allocation_id": String(pendingId), "_h2h_reserved_at": lastReservation.reservedAt, "Player Name": playerName };
           h2hSharedPropsInjected = false;
 
@@ -1082,11 +1195,15 @@
           setupAtcClickHandler();
 
           forceAtcLabel(scope, "Add to cart");
+          guardClearNotice();
+          // The size may have changed while the number was being reserved.
+          checkConfirmationSize(findSelectedSizeValue(scope, bundleJerseyProperty));
         }
 
         if (data.type === "h2h:reservation:cleared") {
           lastReservation = null;
           h2hSharedProps = null;
+          h2hReservedVariantIds = null;
 
           window.dispatchEvent(new CustomEvent("h2h:reservation:cleared"));
 
@@ -1101,6 +1218,9 @@
         // Pre-order: customer submitted preferences — store in lastPreorder so the
         // ATC click handler can write them via /cart/add.js (same approach as reservations).
         if (data.type === "h2h:preorder:ready") {
+          // The widget re-sends the same details when the size changes. Once they're in the cart,
+          // that cart line keeps the size it was added in, and the re-send must not open a second add.
+          if (data.resend === true && lastPreorder && h2hSharedPropsInjected) return;
           lastPreorder = {
             pref1: data.pref1, pref2: data.pref2, pref3: data.pref3,
             anyNumber: data.anyNumber,
@@ -1122,10 +1242,13 @@
         // Pre-allocated: customer confirmed size + jersey name in widget.
         // Store details so the ATC click handler can write them to the cart.
         if (data.type === "h2h:preallocated:ready") {
+          // A re-send after a size re-save must not open a second add once the item is in the cart.
+          if (data.resend === true && lastPreallocated && h2hSharedPropsInjected) return;
           lastPreallocated = {
             preorderRequestId: data.preorderRequestId,
             jerseyNumber: data.jerseyNumber,
             jerseyName: data.jerseyName || "",
+            size: String(data.size || "") || findSelectedSizeValue(scope, bundleJerseyProperty),
           };
           h2hSharedProps = {
             "_h2h_preorder_request_id": String(data.preorderRequestId),
@@ -1160,6 +1283,7 @@
           unlockAtcButton(scope);
           forceAtcLabel(scope, "Add to cart");
           setupAtcClickHandler();
+          checkConfirmationSize(findSelectedSizeValue(scope, bundleJerseyProperty));
         }
 
         // Pre-allocated fallback: player not found — order placed, club confirms number.

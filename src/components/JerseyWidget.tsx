@@ -5,12 +5,20 @@ import {
   smartCheckNumber,
   suggestNumbersForClubRanked,
   reserveNumberForPurchase,
+  releaseReservation,
   lookupPlayerByName,
   isAgeGroupCrossPool,
   ageGroupBucketSiblings,
   clubSeasonYear,
   type PlayerCandidate,
 } from "../services/allocation";
+
+// Size labels compared the way widget.js does: case and spacing ignored, a doubled read ("MM") counts once.
+function sizeKey(s: string): string {
+  const t = (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const half = t.length % 2 === 0 ? t.slice(0, t.length / 2) : "";
+  return half && half + half === t ? half : t;
+}
 
 interface MappingRow {
   shopify_product_id: string;
@@ -299,6 +307,18 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [tick, setTick] = useState<number>(Date.now());
   const [pendingAllocationId, setPendingAllocationId] = useState<string>("");
 
+  // The live hold (stock or made-to-order) and the size it was made in. A number is held in ONE
+  // size: if the shop page's size changes before Add to Cart, widget.js drops the reservation and
+  // sends "h2h:confirmedSizeChanged", and the hold is released here (Wolves, Nov 2026: George Bartle
+  // reserved 5XS #10, switched to 4XS and bought a 4XS "#10" that didn't exist).
+  const heldRef = useRef<{ kind: "stock" | "retain"; pendingId: string; size: string; number: number } | null>(null);
+  const selectedSizeRef = useRef<string>(selectedSize);
+  selectedSizeRef.current = selectedSize;
+  const [sizeChangeNotice, setSizeChangeNotice] = useState<string | null>(null);
+  const onConfirmationDroppedRef = useRef<((kind: string, newSize: string) => void) | null>(null);
+  // Pre-allocated: the record id and size last confirmed, so a size change re-saves the same record.
+  const paConfirmedRef = useRef<{ id: string; size: string; jerseyNumber: string | number; jerseyName: string } | null>(null);
+
   // Pre-allocated form state (only used when preorderMode === "open" && allocationTypeState === "pre_allocated")
   interface PreAllocCandidate {
     id: string;
@@ -555,6 +575,10 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     const onMsg = (event: MessageEvent) => {
       try {
         const data: any = event?.data;
+        if (data && data.type === "h2h:confirmedSizeChanged") {
+          onConfirmationDroppedRef.current?.(String(data.kind || ""), String(data.size || ""));
+          return;
+        }
         if (!data || data.type !== "h2h:variantChanged") return;
         const rawSize = (data.size || "").trim();
         // A swatch label read with its hover-tooltip copy arrives doubled ("MM", "3XS3XS");
@@ -654,6 +678,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
         setStatusMessage("");
         setSelectedNumber(null);
         setPendingAllocationId("");
+        if (heldRef.current?.kind === "stock") heldRef.current = null;
         notifyShopify("h2h:reservation:cleared");
       }
     }, 1000);
@@ -733,6 +758,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const clearMessages = () => {
     setError(null);
     setStatusMessage("");
+    setSizeChangeNotice(null);
   };
 
   // Filter by effectiveAgeGroup, not derivedAgeGroup -- when playing up, the team being
@@ -847,11 +873,13 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!retainMadeToOrderChecked) { setError("Please acknowledge the made-to-order policy before confirming."); return; }
     setRetainConfirming(true);
     setError(null);
+    setSizeChangeNotice(null);
+    const reservedSize = selectedSize;
     try {
       const result = await reserveNumberForPurchase({
         clubId: selectedClubId,
         jerseyNumber: retainFoundNumber,
-        size: selectedSize,
+        size: reservedSize,
         seasonYear: seasonYear,
         yearOfBirth: yobNum,
         playerFirstName: firstName.trim(),
@@ -865,11 +893,17 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       });
       if (!result.success) { setError(result.message || "Could not reserve. Please try again."); return; }
       const pid = result.pendingAllocationId || "";
+      heldRef.current = { kind: "retain", pendingId: pid, size: reservedSize, number: retainFoundNumber };
+      if (sizeKey(selectedSizeRef.current) !== sizeKey(reservedSize)) {
+        handleConfirmationDropped("reservation", selectedSizeRef.current);
+        return;
+      }
       setRetainPendingId(pid);
       notifyShopify("h2h:reservation:ready", {
         jerseyNumber: retainFoundNumber,
         pendingAllocationId: pid,
         playerName: `${firstName.trim()} ${lastName.trim()}`.trim(),
+        size: reservedSize,
       });
     } catch (e: any) {
       setError(e?.message || "Reservation failed.");
@@ -1159,11 +1193,12 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     if (!disclaimerChecked) { setError("Please accept the disclaimer before reserving."); return; }
 
     setReserving(true);
+    const reservedSize = selectedSize;
     try {
       const result = await reserveNumberForPurchase({
         clubId: selectedClubId,
         jerseyNumber: selectedNumber,
-        size: selectedSize,
+        size: reservedSize,
         seasonYear: seasonYear,
         yearOfBirth: yobNum,
         teamId: teamChoice === "not_sure" ? null : teamChoice,
@@ -1188,13 +1223,21 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       setExpiresAt(expiry);
 
       const pid = result.pendingAllocationId || "";
+      heldRef.current = { kind: "stock", pendingId: pid, size: reservedSize, number: selectedNumber };
+      if (sizeKey(selectedSizeRef.current) !== sizeKey(reservedSize)) {
+        // The size changed while the number was being reserved: let it go straight away.
+        handleConfirmationDropped("reservation", selectedSizeRef.current);
+        return;
+      }
       setPendingAllocationId(pid);
       setStatusMessage(`Jersey #${selectedNumber} reserved.`);
 
+      // widget.js checks this size against the page's and drops the reservation if it changed meanwhile.
       notifyShopify("h2h:reservation:ready", {
         jerseyNumber: selectedNumber,
         pendingAllocationId: pid,
         playerName: `${firstName.trim()} ${lastName.trim()}`.trim(),
+        size: reservedSize,
       });
     } catch (e: any) {
       setError(e?.message || "Reservation failed.");
@@ -1296,13 +1339,82 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Could not save your details. Please try again."); return; }
       setPaSubmitted(true);
-      notifyShopify("h2h:preallocated:ready", {
+      paConfirmedRef.current = {
+        id: json.preorderRequestId ?? paSelected.id,
+        size,
         jerseyNumber: paSelected.assignedNumberDisplay ?? paSelected.assignedNumber ?? "",
         jerseyName: paJerseyName.trim().toUpperCase(),
-        preorderRequestId: json.preorderRequestId ?? paSelected.id,
+      };
+      notifyShopify("h2h:preallocated:ready", {
+        jerseyNumber: paConfirmedRef.current.jerseyNumber,
+        jerseyName: paConfirmedRef.current.jerseyName,
+        preorderRequestId: paConfirmedRef.current.id,
+        size,
       });
     } catch {
       setPaError("Could not reach the server. Please try again.");
+    } finally {
+      setPaSubmitting(false);
+    }
+  };
+
+  // widget.js saw the page's size change before Add to Cart.
+  // Stock / made-to-order: it dropped the reservation; release the hold now (not in 30 minutes)
+  // and ask for the number again in the new size. Pre-allocated: re-save the record in the new size.
+  const handleConfirmationDropped = (kind: string, newSize: string) => {
+    if (kind === "preallocated") {
+      void reconfirmPreallocSize(newSize);
+      return;
+    }
+    const held = heldRef.current;
+    if (!held) return;
+    heldRef.current = null;
+    void releaseReservation(held.pendingId);
+    const toSize = newSize || selectedSizeRef.current;
+    const changed = `You changed the size${toSize ? ` to ${toSize}` : ""}, and a number is held in one size only.`;
+    if (held.kind === "stock") {
+      setExpiresAt(null);
+      setStatusMessage("");
+      setPendingAllocationId("");
+      setSelectedNumber(null);
+      setSuggestions([]);
+      setSizeChangeNotice(`${changed} #${held.number} in size ${held.size} has been released. Click "Find Available Numbers" to choose your number in the new size.`);
+    } else {
+      setRetainPendingId("");
+      setSizeChangeNotice(`${changed} Please click "Confirm & Reserve #${held.number}" again to reserve it in the new size.`);
+    }
+    notifyShopify("h2h:reservation:cleared");
+  };
+  onConfirmationDroppedRef.current = handleConfirmationDropped;
+
+  const reconfirmPreallocSize = async (newSize: string) => {
+    const sent = paConfirmedRef.current;
+    const size = newSize || selectedSizeRef.current;
+    if (!sent || !size || sizeKey(size) === sizeKey(sent.size)) return;
+    setPaSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/preorder/confirm-size", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preorderRequestId: sent.id, jerseyName: sent.jerseyName, size, shopifyProductId: shopifyProductId || undefined, yearOfBirth: paYob.trim() ? Number(paYob.trim()) : undefined }),
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error ?? "save failed");
+      const newId = json.preorderRequestId ?? sent.id;
+      paConfirmedRef.current = { ...sent, id: newId, size };
+      // The cart details only carry the record id, so they need re-sending only if that changed.
+      if (newId !== sent.id) {
+        notifyShopify("h2h:preallocated:ready", {
+          jerseyNumber: sent.jerseyNumber,
+          jerseyName: sent.jerseyName,
+          preorderRequestId: newId,
+          size,
+          resend: true,
+        });
+      }
+    } catch {
+      setError(`You changed the size to ${size}, but we couldn't save the change. Please reload this page and confirm your details again before adding to cart.`);
     } finally {
       setPaSubmitting(false);
     }
@@ -1396,7 +1508,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   useEffect(() => {
     const sent = submittedPreorderRef.current;
     if (!preorderSubmitted || !sent || !selectedSize || sent.size === selectedSize) return;
-    sendPreorderDetails({ ...sent, size: selectedSize });
+    // `resend`: widget.js ignores it once the item is already in the cart (that line keeps its size).
+    sendPreorderDetails({ ...sent, size: selectedSize, resend: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSize, preorderSubmitted]);
 
@@ -1450,6 +1563,12 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       {error && (
         <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3 mb-3">
           {error}
+        </div>
+      )}
+
+      {sizeChangeNotice && (
+        <div role="alert" className="text-sm text-amber-900 bg-amber-50 border-2 border-amber-400 rounded p-3 mb-3">
+          {sizeChangeNotice}
         </div>
       )}
 

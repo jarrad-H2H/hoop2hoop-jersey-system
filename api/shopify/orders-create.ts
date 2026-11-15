@@ -222,6 +222,51 @@ async function writeOrderNoteUnallocated(orderId: string, units: number): Promis
   });
 }
 
+// ── Size check: a reserved number is held in ONE size ─────────────────────────
+// Wolves H2H2413715 (13 Nov 2026): 5XS #10 was reserved, the size was switched to 4XS before Add
+// to Cart, and the order bought a 4XS "#10" that didn't exist. The storefront now drops the
+// reservation when the size changes; this flags any line that still arrives in another size.
+function sizeKey(s: string | null | undefined): string {
+  const t = String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const half = t.length % 2 === 0 ? t.slice(0, t.length / 2) : "";
+  return half && half + half === t ? half : t;
+}
+
+// True only when both sizes are known and differ. A variant title with several options
+// ("Mens / L") matches when any option equals the reserved size.
+export function boughtSizeDiffers(
+  reservedSize: string | null | undefined,
+  variantTitle: string | null | undefined
+): boolean {
+  const want = sizeKey(reservedSize);
+  const title = String(variantTitle ?? "").trim();
+  if (!want || !title || title.toLowerCase() === "default title") return false;
+  return !title.split(" / ").some((part) => sizeKey(part) === want);
+}
+
+async function writeOrderNoteSizeMismatch(
+  orderId: string,
+  jerseyNumber: number | string,
+  reservedSize: string,
+  boughtSize: string,
+  playerName: string
+): Promise<void> {
+  if (!process.env.SHOPIFY_ADMIN_TOKEN || !process.env.SHOPIFY_STORE_DOMAIN) return;
+  const marker = `SIZE MISMATCH #${jerseyNumber}`;
+  const who = playerName ? ` (${playerName})` : "";
+  const block = `⚠️ ${marker}${who}: this number was reserved in size ${reservedSize}, but the jersey ordered is ${boughtSize}. Check stock and confirm the number with the customer before packing.`;
+  const getResp = await shopifyAdminFetch(`orders/${orderId}.json?fields=id,note`);
+  if (!getResp.ok) return;
+  const { order: existingOrder } = await getResp.json() as { order: { id: number; note: string | null } };
+  const existingNote = (existingOrder.note ?? "").trim();
+  if (existingNote.includes(marker)) return; // webhook retry
+  const newNote = existingNote ? `${existingNote}\n\n${block}` : block;
+  await shopifyAdminFetch(`orders/${orderId}.json`, {
+    method: "PUT",
+    body: JSON.stringify({ order: { id: Number(orderId), note: newNote } }),
+  });
+}
+
 // A confirmed returning player's purchase updates their own profile, except when they keep their
 // current jersey and buy a different number (a second jersey, e.g. playing up): that gets its
 // own profile for the team it was bought for.
@@ -645,6 +690,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (pending.status === "purchased" || pending.status === "reconciled") {
         processed += 1;
         continue;
+      }
+
+      // Bought in a different size from the one the number was held in: flag it for a person to
+      // sort out before packing (the purchase is still recorded as normal).
+      try {
+        const reservedSize = String((pending as any).size ?? "");
+        let boughtSize = String(li.variant_title ?? "").trim();
+        let differs = boughtSizeDiffers(reservedSize, boughtSize);
+        if (differs && li.product_id != null) {
+          // Pack products carry the jersey size in a line property, not the variant.
+          const { data: mapRow } = await supabase
+            .from("shopify_product_club_map")
+            .select("bundle_jersey_property")
+            .eq("shopify_product_id", String(li.product_id))
+            .maybeSingle();
+          const bundleProp = (mapRow as any)?.bundle_jersey_property as string | null | undefined;
+          if (bundleProp) {
+            boughtSize = propertyValue(li.properties, bundleProp);
+            differs = boughtSizeDiffers(reservedSize, boughtSize);
+          }
+        }
+        if (differs) {
+          const playerName = `${(pending as any).player_first_name ?? ""} ${(pending as any).player_last_name ?? ""}`.trim();
+          issues.push({ reservationId, issue: `Size mismatch: #${pending.jersey_number} reserved in ${reservedSize}, bought in ${boughtSize}.` });
+          await logEvent(supabase, {
+            order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+            level: "error", message: "Size mismatch: number reserved in one size, jersey bought in another. Check before packing.",
+            meta: { jerseyNumber: pending.jersey_number, reservedSize, boughtSize, lineItemId, playerName },
+          });
+          await writeOrderNoteSizeMismatch(orderId, pending.jersey_number, reservedSize, boughtSize, playerName);
+        }
+      } catch (e: any) {
+        await logEvent(supabase, {
+          order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+          level: "warn", message: "Size check failed", meta: { detail: e?.message ?? String(e) },
+        });
       }
 
       // Determine whether this is a clean purchase or needs reconciliation

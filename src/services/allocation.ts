@@ -1594,6 +1594,21 @@ export async function lookupPlayerByName(params: {
   };
 }
 
+/**
+ * Releases one unpaid hold made by this browser (stock jersey back on sale; a made-to-order
+ * placeholder removed). Used when the customer changes size after reserving: a number is held
+ * in one size only. Returns false if the hold was already paid, expired or released.
+ */
+export async function releaseReservation(pendingAllocationId: string): Promise<boolean> {
+  if (!pendingAllocationId) return false;
+  const { data, error } = await supabase.rpc("release_reservation", { p_pending_id: pendingAllocationId });
+  if (error) {
+    console.error("releaseReservation error", error);
+    return false;
+  }
+  return data === true;
+}
+
 export async function reserveNumberForPurchase(input: {
   clubId: string;
   jerseyNumber: number;
