@@ -225,7 +225,8 @@ async function writeOrderNoteUnallocated(orderId: string, units: number): Promis
 // ── Size check: a reserved number is held in ONE size ─────────────────────────
 // Wolves H2H2413715 (13 Nov 2026): 5XS #10 was reserved, the size was switched to 4XS before Add
 // to Cart, and the order bought a 4XS "#10" that didn't exist. The storefront now drops the
-// reservation when the size changes; this flags any line that still arrives in another size.
+// reservation when the size changes; a line that still arrives in another size is corrected
+// here when it can be (resolveSizeMismatch) and flagged on the order when it can't.
 function sizeKey(s: string | null | undefined): string {
   const t = String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   const half = t.length % 2 === 0 ? t.slice(0, t.length / 2) : "";
@@ -244,17 +245,118 @@ export function boughtSizeDiffers(
   return !title.split(" / ").some((part) => sizeKey(part) === want);
 }
 
+export type SizeMismatchOutcome =
+  | { outcome: "swapped"; boughtSize: string; newInventoryId: string; oldReleased: boolean }
+  | { outcome: "made_to_order"; boughtSize: string }
+  | { outcome: "flagged"; boughtSize: string };
+
+// A reserved line was bought in another size (agreed with Jarrad 2026-11-16):
+//  - stock: give them the SAME number in the size they paid for when one is free (same number,
+//    so it can't create a clash). The held jersey goes back on sale, but only while the hold is
+//    still live: after expiry it may already be someone else's. Updates `pending` in place so the
+//    rest of the order processing records the size bought.
+//  - made-to-order: nothing to swap, the jersey is made in the size ordered; the record takes it.
+//  - otherwise (that number isn't free in that size): flagged for a person, nothing changed.
+export async function resolveSizeMismatch(args: {
+  supabase: any;
+  pending: any;
+  reservationId: string;
+  boughtSizeRaw: string;
+  nowIso: string;
+}): Promise<SizeMismatchOutcome> {
+  const { supabase, pending, reservationId, nowIso } = args;
+  const parts = String(args.boughtSizeRaw ?? "").split(" / ").map((p) => p.trim()).filter(Boolean);
+  const boughtRaw = parts.join(" / ");
+  const clubId = String(pending.club_id ?? "");
+  const oldInvId = String(pending.inventory_id ?? "");
+  const oldSize = String(pending.size ?? "");
+
+  let oldInv: { id: string; status: string } | null = null;
+  if (oldInvId) {
+    const { data } = await supabase.from("inventory").select("id, status").eq("id", oldInvId).maybeSingle();
+    oldInv = (data as any) ?? null;
+  }
+
+  if (oldInv?.status === "Pending") {
+    let label = parts.length === 1 ? parts[0] : boughtRaw;
+    if (parts.length > 1) {
+      const { data: sizes } = await supabase.from("club_sizes").select("size_label").eq("club_id", clubId);
+      const hit = ((sizes ?? []) as any[]).find((s) => parts.some((p) => sizeKey(p) === sizeKey(s.size_label)));
+      if (hit) label = hit.size_label;
+    }
+    await supabase.from("pending_allocations").update({ size: label }).eq("id", reservationId);
+    pending.size = label;
+    return { outcome: "made_to_order", boughtSize: label };
+  }
+
+  let q = supabase
+    .from("inventory")
+    .select("id, size, status, product_type")
+    .eq("club_id", clubId)
+    .eq("jersey_number", Number(pending.jersey_number))
+    .eq("status", "Available");
+  if (pending.product_type) q = q.eq("product_type", pending.product_type);
+  const { data: free } = await q;
+  const candidates = ((free ?? []) as any[]).filter((r) => parts.some((p) => sizeKey(p) === sizeKey(r.size)));
+
+  for (const cand of candidates) {
+    const { data: claimed } = await supabase
+      .from("inventory")
+      .update({ status: "Allocated", allocation_date: nowIso })
+      .eq("id", cand.id)
+      .eq("status", "Available")
+      .select("id");
+    if (!claimed || claimed.length === 0) continue; // taken a moment ago: try the next one
+
+    let oldReleased = false;
+    if (oldInv && oldInv.status === "Allocated" && pending.status === "reserved") {
+      const { data: freed } = await supabase
+        .from("inventory")
+        .update({ status: "Available", allocation_date: null, allocated_player_id: null, return_date_due: null })
+        .eq("id", oldInv.id)
+        .eq("status", "Allocated")
+        .select("id");
+      oldReleased = !!freed && freed.length > 0;
+    }
+
+    await supabase.from("pending_allocations").update({ inventory_id: cand.id, size: cand.size }).eq("id", reservationId);
+    await supabase.from("allocations").insert({
+      allocation_type: "swap",
+      club_id: clubId,
+      jersey_number: Number(pending.jersey_number),
+      size: cand.size,
+      previous_jersey_number: Number(pending.jersey_number),
+      previous_size: oldSize,
+      product_type: cand.product_type ?? pending.product_type ?? "default",
+      note: `Size corrected at checkout: #${pending.jersey_number} reserved in ${oldSize}, ${cand.size} bought` +
+        (oldReleased ? ` - ${oldSize} #${pending.jersey_number} returned to stock` : ""),
+    });
+
+    pending.inventory_id = cand.id;
+    pending.size = cand.size;
+    return { outcome: "swapped", boughtSize: cand.size, newInventoryId: cand.id, oldReleased };
+  }
+
+  return { outcome: "flagged", boughtSize: boughtRaw };
+}
+
 async function writeOrderNoteSizeMismatch(
   orderId: string,
   jerseyNumber: number | string,
   reservedSize: string,
   boughtSize: string,
-  playerName: string
+  playerName: string,
+  corrected: boolean,
+  oldReleased: boolean
 ): Promise<void> {
   if (!process.env.SHOPIFY_ADMIN_TOKEN || !process.env.SHOPIFY_STORE_DOMAIN) return;
-  const marker = `SIZE MISMATCH #${jerseyNumber}`;
+  const marker = corrected ? `SIZE CORRECTED #${jerseyNumber}` : `SIZE MISMATCH #${jerseyNumber}`;
   const who = playerName ? ` (${playerName})` : "";
-  const block = `⚠️ ${marker}${who}: this number was reserved in size ${reservedSize}, but the jersey ordered is ${boughtSize}. Check stock and confirm the number with the customer before packing.`;
+  const block = corrected
+    ? `✅ ${marker}${who}: this number was reserved in size ${reservedSize}, but ${boughtSize} was ordered, so ${boughtSize} #${jerseyNumber} was allocated automatically` +
+      (oldReleased ? ` and ${reservedSize} #${jerseyNumber} went back on sale` : "") +
+      `. Pack ${boughtSize} #${jerseyNumber}.`
+    : `⚠️ ${marker}${who}: this number was reserved in size ${reservedSize}, but the jersey ordered is ${boughtSize}, and #${jerseyNumber} isn't in stock in ${boughtSize}. Choose a number with the customer before packing.`;
   const getResp = await shopifyAdminFetch(`orders/${orderId}.json?fields=id,note`);
   if (!getResp.ok) return;
   const { order: existingOrder } = await getResp.json() as { order: { id: number; note: string | null } };
@@ -692,8 +794,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         continue;
       }
 
-      // Bought in a different size from the one the number was held in: flag it for a person to
-      // sort out before packing (the purchase is still recorded as normal).
+      // Bought in a different size from the one the number was held in: give them the same number
+      // in the size bought when it's free, otherwise flag it for a person before packing.
+      // Either way the purchase is then recorded as normal.
       try {
         const reservedSize = String((pending as any).size ?? "");
         let boughtSize = String(li.variant_title ?? "").trim();
@@ -713,13 +816,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         if (differs) {
           const playerName = `${(pending as any).player_first_name ?? ""} ${(pending as any).player_last_name ?? ""}`.trim();
-          issues.push({ reservationId, issue: `Size mismatch: #${pending.jersey_number} reserved in ${reservedSize}, bought in ${boughtSize}.` });
-          await logEvent(supabase, {
-            order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
-            level: "error", message: "Size mismatch: number reserved in one size, jersey bought in another. Check before packing.",
-            meta: { jerseyNumber: pending.jersey_number, reservedSize, boughtSize, lineItemId, playerName },
-          });
-          await writeOrderNoteSizeMismatch(orderId, pending.jersey_number, reservedSize, boughtSize, playerName);
+          const fix = await resolveSizeMismatch({ supabase, pending, reservationId, boughtSizeRaw: boughtSize, nowIso });
+          const meta = { jerseyNumber: pending.jersey_number, reservedSize, boughtSize: fix.boughtSize, lineItemId, playerName };
+          if (fix.outcome === "flagged") {
+            issues.push({ reservationId, issue: `Size mismatch: #${pending.jersey_number} reserved in ${reservedSize}, bought in ${fix.boughtSize}, none free in that size.` });
+            await logEvent(supabase, {
+              order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+              level: "error", message: `Size mismatch: #${pending.jersey_number} reserved in ${reservedSize}, bought in ${fix.boughtSize}, and that number isn't free in ${fix.boughtSize}. Choose a number with the customer before packing.`,
+              meta,
+            });
+            await writeOrderNoteSizeMismatch(orderId, pending.jersey_number, reservedSize, fix.boughtSize, playerName, false, false);
+          } else if (fix.outcome === "swapped") {
+            await logEvent(supabase, {
+              order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+              level: "warn", message: `Size corrected: #${pending.jersey_number} reserved in ${reservedSize}, ${fix.boughtSize} bought, so ${fix.boughtSize} #${pending.jersey_number} was allocated instead.`,
+              meta: { ...meta, newInventoryId: fix.newInventoryId, oldReleased: fix.oldReleased },
+            });
+            await writeOrderNoteSizeMismatch(orderId, pending.jersey_number, reservedSize, fix.boughtSize, playerName, true, fix.oldReleased);
+          } else {
+            await logEvent(supabase, {
+              order_id: orderId, order_number: orderNumber, reservation_id: reservationId,
+              level: "info", message: `Made-to-order size taken from the order: ${fix.boughtSize} (reserved as ${reservedSize}).`,
+              meta,
+            });
+          }
         }
       } catch (e: any) {
         await logEvent(supabase, {
