@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase, fetchAllPages } from "../services/supabase";
 import { runFcfsAllocation, validateImportRow, finalisePreorder, getLockedShopifyUpdates, importPreallocatedRoster, type PreorderRequest, type PreallocatedImportRow } from "../services/preorder";
-import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw, Trash2, Pencil, Plus, Check, X, GitMerge } from "lucide-react";
+import { ClipboardList, Download, Upload, Play, Lock, Unlock, RefreshCw, Trash2, Pencil, Plus, Check, X, GitMerge, Search } from "lucide-react";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import EmptyState from "../components/ui/EmptyState";
 
@@ -105,6 +105,7 @@ const PreOrderManager: React.FC = () => {
 
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
   const [ageGroupFilter, setAgeGroupFilter] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortColumn, setSortColumn] = useState<SortColumn>("index");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
@@ -149,8 +150,8 @@ const PreOrderManager: React.FC = () => {
   useEffect(() => { void loadClubs(); }, []);
 
   // Reset window age group picker, status filters, age group filter, and sort when selected club or season changes
-  useEffect(() => { setWindowAgeGroup(""); setStatusFilters(new Set()); setAgeGroupFilter(""); setSortColumn("index"); setSortDir("asc"); }, [selectedClubId]);
-  useEffect(() => { setStatusFilters(new Set()); setAgeGroupFilter(""); setSortColumn("index"); setSortDir("asc"); }, [season]);
+  useEffect(() => { setWindowAgeGroup(""); setStatusFilters(new Set()); setAgeGroupFilter(""); setSearchQuery(""); setSortColumn("index"); setSortDir("asc"); }, [selectedClubId]);
+  useEffect(() => { setStatusFilters(new Set()); setAgeGroupFilter(""); setSearchQuery(""); setSortColumn("index"); setSortDir("asc"); }, [season]);
 
   // ── Load requests ───────────────────────────────────────────────────────────
   const loadRequests = useCallback(async () => {
@@ -805,12 +806,37 @@ const PreOrderManager: React.FC = () => {
     return Array.from(groups).sort();
   }, [requests]);
 
+  // Every field shown in (or near) the table, flattened into one lowercase blob per row —
+  // covers the player's name, order #, YOB, gender, age group, size, preferred/claimed/
+  // assigned jersey numbers, jersey name, status, and paid date, so one search box can
+  // match any of them.
+  const searchTextFor = (r: PreorderRequest): string => {
+    const paidAtText = r.paid_at
+      ? new Date(r.paid_at).toLocaleString("en-AU", { timeZone: "Australia/Brisbane", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+      : "";
+    return [
+      r.first_name, r.last_name, r.order_number, r.year_of_birth, r.gender, r.age_group, r.size,
+      r.any_number ? "any" : null,
+      r.pref_1, r.pref_2, r.pref_3, r.claimed_current,
+      r.assigned_number, r.jersey_number_display, (r as any).jersey_name,
+      r.status, paidAtText,
+    ].filter(v => v != null && v !== "").join(" ").toLowerCase();
+  };
+
   const filteredRequests = React.useMemo(() => {
     let rows = requests;
     if (statusFilters.size > 0) rows = rows.filter(r => statusFilters.has(r.status));
     if (ageGroupFilter) rows = rows.filter(r => r.age_group === ageGroupFilter);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      const terms = q.split(/\s+/).filter(Boolean);
+      rows = rows.filter(r => {
+        const text = searchTextFor(r);
+        return terms.every(t => text.includes(t));
+      });
+    }
     return rows;
-  }, [requests, statusFilters, ageGroupFilter]);
+  }, [requests, statusFilters, ageGroupFilter, searchQuery]);
 
   const displayRequests = React.useMemo(() => {
     const rows = [...filteredRequests];
@@ -1249,11 +1275,31 @@ const PreOrderManager: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200">
           <div className="px-4 py-2 border-b flex flex-wrap items-center gap-x-6 gap-y-2">
             <span className="text-xs text-gray-500">
-              {statusFilters.size === 0 && !ageGroupFilter
+              {statusFilters.size === 0 && !ageGroupFilter && !searchQuery.trim()
                 ? <>{requests.length} request{requests.length !== 1 ? "s" : ""} · sorted by payment time (earliest = highest FCFS priority)</>
                 : <><strong>{filteredRequests.length}</strong> of {requests.length} request{requests.length !== 1 ? "s" : ""}</>
               }
             </span>
+            <div className="relative">
+              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search player, number, YOB, gender, age group, size…"
+                className="text-xs border border-gray-300 rounded pl-7 pr-7 py-1 w-72 text-gray-700 bg-white"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  title="Clear search"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
             <div className="flex flex-wrap items-center gap-3">
               {FILTER_OPTIONS.map(opt => {
                 const active = statusFilters.has(opt.status);
@@ -1329,7 +1375,7 @@ const PreOrderManager: React.FC = () => {
               {displayRequests.length === 0 && !addingRow && (
                 <tr>
                   <td colSpan={showJerseyName ? 12 : 11} className="px-4 py-6 text-center text-sm text-gray-400">
-                    No rows match the selected filter{statusFilters.size !== 1 ? "s" : ""}.
+                    {searchQuery.trim() ? "No rows match your search." : <>No rows match the selected filter{statusFilters.size !== 1 ? "s" : ""}.</>}
                   </td>
                 </tr>
               )}
