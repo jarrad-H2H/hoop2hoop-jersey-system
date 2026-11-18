@@ -3,8 +3,12 @@
 // so a search for any name listed other children of that birth year with their full names and numbers
 // (found on the Gold Coast Rep U14 launch). Rule: same as the standard returning-player lookup
 // (ALLOCATION_LOGIC.md §12) plus a one-slip typo allowance.
+// 2026-11-18 additions, also tested here: (1) a name that is right apart from one letter is found whatever birth year
+// was typed ("near-exact"); (2) first name and surname typed the wrong way round are found when the birth year fits;
+// (3) the wrong-page pointer: nothing on this product's list but the name is on the other (boys'/girls') list ->
+// the answer says which list, and carries nothing else from it.
 // Part 1 tests the matching rule on made-up names. Part 2 runs the real handler against a local stand-in for
-// Supabase (no live data) to check the wiring: product, age-group window, required birth year.
+// Supabase (no live data) to check the wiring: product, age-group window, required birth year, the pointer.
 // Run with: npx tsx scripts/test-preallocated-lookup.ts
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -57,8 +61,21 @@ check("surname with no fitting birth year and an unrelated first name -> nobody"
 check("first-name slip, right surname + year", ids(roster, q("Tesa", "Wrenfield", 2014)) === "tessa");
 
 check("surname slip with first name and year right (Wrenfeld)", ids(roster, q("Tessa", "Wrenfeld", 2014)) === "tessa");
-check("surname slip with the wrong birth year -> nobody", ids(roster, q("Tessa", "Wrenfeld", 2010)) === "");
 check("surname with two neighbouring letters swapped (Wrenfeild) counts as one slip", ids(roster, q("Tessa", "Wrenfeild", 2014)) === "tessa");
+
+// Near-exact (2026-11-18): one name exactly right, the other one slip away -> found whatever birth year was typed.
+check("near-exact: surname slip with the wrong birth year (Wrenfeld, 2010)", ids(roster, q("Tessa", "Wrenfeld", 2010)) === "tessa");
+check("near-exact: first-name slip with the wrong birth year (Tesa, 2010)", ids(roster, q("Tesa", "Wrenfield", 2010)) === "tessa");
+check("near-exact: a name one letter short (Tess for Tessa) with the wrong birth year", ids(roster, q("Tess", "Wrenfield", 2010)) === "tessa");
+check("near-exact: neighbouring letters swapped in the surname, wrong birth year", ids(roster, q("Tessa", "Wrenfeild", 2010)) === "tessa");
+check("near-exact: a slip in a double surname that still shares a whole word (Dunmore Ker), wrong birth year", ids(roster, q("Willa", "Dunmore Ker", 2010)) === "willa");
+check("near-exact: only one word of a double surname is NOT a slip (Willa Kerr, wrong birth year)", ids(roster, q("Willa", "Kerr", 2010)) === "");
+check("near-exact does not cover two slips at once with the wrong birth year (Tesa Wrenfeld, 2010)", ids(roster, q("Tesa", "Wrenfeld", 2010)) === "");
+check("two slips at once are still found when the birth year fits (Tesa Wrenfeld, 2014)", ids(roster, q("Tesa", "Wrenfeld", 2014)) === "tessa");
+check("near-exact does not cover a nickname with the wrong birth year (Jem Ashdown, 2010)", ids(roster, q("Jem", "Ashdown", 2010)) === "");
+check("near-exact does not cover an unrelated first name with the wrong birth year (Zed Wrenfeld, 2010)", ids(roster, q("Zed", "Wrenfeld", 2010)) === "");
+check("near-exact: short names get no slip allowance (Zoy Fu, 2010)", ids(roster, q("Zoy", "Fu", 2010)) === "");
+check("near-exact is still only one child (five near-identical records)", findPreallocatedMatches(["a", "b", "c", "d", "e"].map(i => r(i, "Tessa", "Wrenfield", 2014)), q("Tessa", "Wrenfeld", 2010)).length === 1);
 check("surname with an extra letter (Wrenfielld)", ids(roster, q("Tessa", "Wrenfielld", 2014)) === "tessa");
 check("first name with two neighbouring letters swapped (Tesas) + right surname/year", ids(roster, q("Tesas", "Wrenfield", 2014)) === "tessa");
 check("two slips in a short surname (Ahsdwon for Ashdown) is not matched on its own", ids(roster, q("Zed", "Ahsdwon", 2014)) === "");
@@ -74,6 +91,24 @@ check("2-letter surname slip is not tolerated", ids(roster, q("Zoe", "Fi", 2014)
 check("no birth year on file: exact name found", ids(roster, q("Lena", "Orchard", 2014)) === "lena");
 check("no birth year on file: first-name slip + surname found", ids(roster, q("Lenna", "Orchard", 2014)) === "lena");
 check("no birth year on file: unrelated first name is NOT enough", ids(roster, q("Zed", "Orchard", 2014)) === "");
+
+// Swapped (2026-11-18): first name and surname the wrong way round (the club's list, or typed into the wrong boxes).
+check("swapped names + right birth year (Wrenfield Tessa, 2014)", ids(roster, q("Wrenfield", "Tessa", 2014)) === "tessa");
+check("swapped names, capitals/spaces/accents ignored (MULLER chloe)", ids(roster, q("MULLER", "chloe", 2015)) === "chloe");
+check("swapped double surname (Dunmore Kerr / Willa)", ids(roster, q("Dunmore Kerr", "Willa", 2014)) === "willa");
+check("swapped names with the wrong birth year -> nobody", ids(roster, q("Wrenfield", "Tessa", 2010)) === "");
+check("swapped names, no birth year on file -> found (Orchard Lena)", ids(roster, q("Orchard", "Lena", 2014)) === "lena");
+check("swapped needs BOTH names reversed (Wrenfield Xavier shows nobody)", ids(roster, q("Wrenfield", "Xavier", 2014)) === "");
+check("an exact match always beats a swapped one", ids([r("a", "Tessa", "Wrenfield", 2014), r("b", "Wrenfield", "Tessa", 2014)], q("Tessa", "Wrenfield", 2014)) === "a");
+
+// nameOnly (the wrong-page pointer): only records whose first name AND surname both fit count.
+const nameOnly = (rows: R[], query: ReturnType<typeof q>) => findPreallocatedMatches(rows, query, { nameOnly: true }).map(x => x.id).join(",");
+check("nameOnly: an exact name counts", nameOnly(roster, q("Tessa", "Wrenfield", 2014)) === "tessa");
+check("nameOnly: a near-exact name counts, whatever the birth year", nameOnly(roster, q("Tessa", "Wrenfeld", 2010)) === "tessa");
+check("nameOnly: swapped names count", nameOnly(roster, q("Wrenfield", "Tessa", 2014)) === "tessa");
+check("nameOnly: a close first name + surname + birth year counts (Jem Ashdown, 2014)", nameOnly(roster, q("Jem", "Ashdown", 2014)) === "jemma");
+check("nameOnly: a sibling who only shares surname + birth year does NOT count (Zed Ashdown, 2015)",
+  ids(roster, q("Zed", "Ashdown", 2015)) === "ruby" && nameOnly(roster, q("Zed", "Ashdown", 2015)) === "");
 
 // A player with two records (e.g. bundle + singlet): the one already claimed by this product comes first.
 const twoRecords = [r("bundle", "Tessa", "Wrenfield", 2014, "p-bundle"), r("single", "Tessa", "Wrenfield", 2014, "p-single")];
@@ -106,6 +141,8 @@ const table = [
   { id: "g1", club_id: CLUB, season: "2026-2027", age_group: "U14 Rep", product_type: "womens", status: "needs_size", first_name: "Tessa", last_name: "Wrenfield", year_of_birth: 2014, assigned_number: 7, jersey_number_display: null, jersey_name: "WRENFIELD", shopify_product_id: null },
   { id: "g2", club_id: CLUB, season: "2026-2027", age_group: "U14 Rep", product_type: "womens", status: "needs_size", first_name: "Nova", last_name: "Hartigan", year_of_birth: 2014, assigned_number: 12, jersey_number_display: null, jersey_name: "HARTIGAN", shopify_product_id: null },
   { id: "b1", club_id: CLUB, season: "2026-2027", age_group: "U14 Rep", product_type: "mens", status: "needs_size", first_name: "Felix", last_name: "Brandt", year_of_birth: 2014, assigned_number: 3, jersey_number_display: null, jersey_name: "BRANDT", shopify_product_id: null },
+  { id: "g3", club_id: CLUB, season: "2026-2027", age_group: "U14 Rep", product_type: "womens", status: "needs_size", first_name: "Sam", last_name: "Rowe", year_of_birth: 2014, assigned_number: 21, jersey_number_display: null, jersey_name: "ROWE", shopify_product_id: null },
+  { id: "b3", club_id: CLUB, season: "2026-2027", age_group: "U14 Rep", product_type: "mens", status: "needs_size", first_name: "Sam", last_name: "Rowe", year_of_birth: 2014, assigned_number: 22, jersey_number_display: null, jersey_name: "ROWE", shopify_product_id: null },
   { id: "o1", club_id: CLUB, season: "2026-2027", age_group: "U16 Rep", product_type: "womens", status: "allocated", first_name: "Ivy", last_name: "Oakes", year_of_birth: 2013, assigned_number: 9, jersey_number_display: null, jersey_name: "OAKES", shopify_product_id: "p1" },
   { id: "u1", club_id: CLUB, season: "2026-2027", age_group: "U14 Rep", product_type: "womens", status: "unmatched", first_name: "Nell", last_name: "Pemberton", year_of_birth: 2014, assigned_number: null, jersey_number_display: null, jersey_name: "PEMBERTON", shopify_product_id: null },
 ] as Array<Record<string, unknown>>;
@@ -166,6 +203,39 @@ async function main() {
 
   reply = await call(handler, { ...base, productType: "womens", firstName: "", lastName: "Wrenfield", yearOfBirth: 2014 });
   check("handler: missing name -> 400", reply.status === 400);
+
+  // The wrong-page pointer (2026-11-18): nothing on this product's list, but the name is on the other one.
+  reply = await call(handler, { ...base, productType: "womens", firstName: "Felix", lastName: "Brandt", yearOfBirth: 2014 });
+  check("handler: a boy searched on the girls' page -> no candidates, the answer points to the boys' list", names(reply) === "" && reply.body.otherProductType === "mens");
+  check("handler: that pointer carries nothing from the other list (no name, number or id)",
+    JSON.stringify(reply.body) === JSON.stringify({ ok: true, candidates: [], otherProductType: "mens" }));
+  reply = await call(handler, { ...base, productType: "mens", firstName: "Tessa", lastName: "Wrenfield", yearOfBirth: 2014 });
+  check("handler: a girl searched on the boys' page -> points to the girls' list", names(reply) === "" && reply.body.otherProductType === "womens");
+  reply = await call(handler, { ...base, productType: "womens", firstName: "Felix", lastName: "Brandt", yearOfBirth: 2009 });
+  check("handler: the pointer works with the wrong birth year too (exact name)", names(reply) === "" && reply.body.otherProductType === "mens");
+  reply = await call(handler, { ...base, productType: "womens", firstName: "Brandt", lastName: "Felix", yearOfBirth: 2014 });
+  check("handler: swapped names on the wrong page also point to the right list", names(reply) === "" && reply.body.otherProductType === "mens");
+  reply = await call(handler, { ...base, productType: "womens", firstName: "Xavier", lastName: "Quill", yearOfBirth: 2014 });
+  check("handler: a name on neither list -> no pointer", names(reply) === "" && reply.body.otherProductType === null);
+  reply = await call(handler, { ...base, productType: "womens", firstName: "Zed", lastName: "Brandt", yearOfBirth: 2014 });
+  check("handler: another family's surname + birth year with an unrelated first name -> no pointer (could be a sibling)", names(reply) === "" && reply.body.otherProductType === null);
+  reply = await call(handler, { ...base, productType: "mens", firstName: "Ivy", lastName: "Oakes", yearOfBirth: 2013 });
+  check("handler: the pointer ignores records outside the open age group", names(reply) === "" && reply.body.otherProductType === null);
+  reply = await call(handler, { ...base, productType: "mens", firstName: "Nell", lastName: "Pemberton", yearOfBirth: 2014 });
+  check("handler: the pointer ignores unmatched rows", names(reply) === "" && reply.body.otherProductType === null);
+  reply = await call(handler, { ...base, productType: "womens", firstName: "Sam", lastName: "Rowe", yearOfBirth: 2014 });
+  check("handler: when this list has the player (a girl and a boy share a name) the other list is ignored",
+    names(reply) === "Sam Rowe" && reply.body.candidates[0].assignedNumber === 21 && reply.body.otherProductType === null);
+  reply = await call(handler, { ...base, firstName: "Felix", lastName: "Brandt", yearOfBirth: 2014 });
+  check("handler: no product type (single-list club) -> everything is searched, no pointer", names(reply) === "Felix Brandt" && reply.body.otherProductType === null);
+
+  // Near-exact and swapped names through the real handler.
+  reply = await call(handler, { ...base, productType: "mens", firstName: "Felix", lastName: "Brandtt", yearOfBirth: 2009 });
+  check("handler: one-letter surname slip with the wrong birth year finds the record", names(reply) === "Felix Brandt");
+  reply = await call(handler, { ...base, productType: "mens", firstName: "Brandt", lastName: "Felix", yearOfBirth: 2014 });
+  check("handler: swapped names find the record", names(reply) === "Felix Brandt");
+  reply = await call(handler, { ...base, productType: "mens", firstName: "Brandt", lastName: "Felix", yearOfBirth: 2009 });
+  check("handler: swapped names with the wrong birth year show nobody", names(reply) === "");
 
   stub.close();
   if (failures > 0) { console.log(`\n${failures} check(s) FAILED`); process.exit(1); }

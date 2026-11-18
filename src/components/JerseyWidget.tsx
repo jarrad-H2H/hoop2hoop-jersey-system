@@ -20,6 +20,12 @@ function sizeKey(s: string): string {
   return half && half + half === t ? half : t;
 }
 
+// Pre-allocated clubs keep one list per product ("mens" = the boys' list, "womens" = the girls' list). These are the
+// words parents see when the name they typed is on the other page's list ("That name is on the boys' list").
+function preallocListLabel(productType: string | null | undefined): string {
+  return productType === "mens" ? "boys'" : productType === "womens" ? "girls'" : "";
+}
+
 interface MappingRow {
   shopify_product_id: string;
   club_id: string;
@@ -336,6 +342,8 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
   const [paLookupDone, setPaLookupDone] = useState<boolean>(false);
   const [paLooking, setPaLooking] = useState<boolean>(false);
   const [paCandidates, setPaCandidates] = useState<PreAllocCandidate[]>([]);
+  // Set when nothing was found on this page's list but the same name is on the club's other list ("mens" | "womens").
+  const [paOtherList, setPaOtherList] = useState<"mens" | "womens" | null>(null);
   const [paSelected, setPaSelected] = useState<PreAllocCandidate | null>(null);
   const [paJerseyName, setPaJerseyName] = useState<string>("");
   const [paSize, setPaSize] = useState<string>("");
@@ -1260,6 +1268,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
     setPaLooking(true);
     setPaLookupDone(false);
     setPaCandidates([]);
+    setPaOtherList(null);
     setPaSelected(null);
     try {
       const res = await fetch("/api/preorder/lookup-preallocated", {
@@ -1270,6 +1279,7 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
       const json = await res.json();
       if (!json.ok) { setPaError(json.error ?? "Lookup failed."); return; }
       setPaCandidates(json.candidates ?? []);
+      setPaOtherList(json.otherProductType === "mens" || json.otherProductType === "womens" ? json.otherProductType : null);
     } catch {
       setPaError("Could not reach the server. Please try again.");
     } finally {
@@ -1743,15 +1753,15 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                   <p className="text-xs text-gray-500">Your jersey number has already been allocated by the club. Enter your details below to confirm your size.</p>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Player's First Name</label>
-                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="First name" value={paFirstName} onChange={e => { setPaFirstName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="First name" value={paFirstName} onChange={e => { setPaFirstName(e.target.value); setPaLookupDone(false); setPaCandidates([]); setPaOtherList(null); }} />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Player's Surname</label>
-                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="Last name" value={paLastName} onChange={e => { setPaLastName(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                    <input type="text" className="border rounded px-3 py-2 w-full text-base" placeholder="Last name" value={paLastName} onChange={e => { setPaLastName(e.target.value); setPaLookupDone(false); setPaCandidates([]); setPaOtherList(null); }} />
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Year of Birth {paRequireYob ? <span className="text-red-500">*</span> : <span className="normal-case font-normal text-gray-400">(optional)</span>}</label>
-                    <input type="number" required={paRequireYob} className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2008" value={paYob} onChange={e => { setPaYob(e.target.value); setPaLookupDone(false); setPaCandidates([]); }} />
+                    <input type="number" required={paRequireYob} className="border rounded px-3 py-2 w-full text-base" placeholder="e.g. 2008" value={paYob} onChange={e => { setPaYob(e.target.value); setPaLookupDone(false); setPaCandidates([]); setPaOtherList(null); }} />
                   </div>
 
                   <button
@@ -1766,10 +1776,30 @@ const JerseyWidget: React.FC<JerseyWidgetProps> = ({ clubId: propClubId, size: p
                   {/* Lookup results */}
                   {paLookupDone && paCandidates.length === 0 && (
                     <div className="space-y-3">
-                      <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
-                        We couldn't find a match in our records. Please check the spelling, or make sure you're entering the <strong>player's</strong> name (not a parent's name).
-                      </div>
-                      {!paFallback ? (
+                      {paOtherList ? (
+                        // Nothing on this page's list, but the same name is on the club's other list (wrong jersey page).
+                        <div className="bg-amber-50 border border-amber-300 rounded p-3 text-sm text-amber-900 space-y-1">
+                          <p className="font-semibold">That name is on the {preallocListLabel(paOtherList)} list.</p>
+                          <p>
+                            {preallocListLabel(selectedProductType) ? `You're on the ${preallocListLabel(selectedProductType)} jersey page, which only has ${preallocListLabel(selectedProductType)} names. ` : ""}
+                            Please order from the {preallocListLabel(paOtherList)} jersey page instead.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
+                          We couldn't find a match in our records. Please check the spelling, or make sure you're entering the <strong>player's</strong> name (not a parent's name).
+                        </div>
+                      )}
+                      {!paFallback && paOtherList ? (
+                        // Still possible (e.g. the club listed a girl on the boys' list): the club confirms the number.
+                        <button
+                          type="button"
+                          onClick={() => setPaFallback(true)}
+                          className="text-xs text-gray-500 underline text-left"
+                        >
+                          I still want to order this jersey — the club will confirm my number
+                        </button>
+                      ) : !paFallback ? (
                         <div className="bg-gray-50 border border-gray-200 rounded p-3 space-y-2">
                           <p className="text-sm font-semibold text-gray-800">Not on the list? No problem.</p>
                           <p className="text-sm text-gray-600">Place your order now and your club will confirm your jersey number before jerseys are printed.</p>

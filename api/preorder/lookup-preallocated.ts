@@ -2,12 +2,18 @@
 // Finds the pre-allocated preorder_requests record for a typed name + birth year (club + season).
 // Called by the widget's pre-allocated form to find the player's record before they confirm size.
 // POST { clubId, season, productType, shopifyProductId, firstName, lastName, yearOfBirth }
-// Returns { candidates: [{ id, firstName, lastName, assignedNumber, assignedNumberDisplay, defaultJerseyName, alreadyConfirmed }] }
+// Returns { candidates: [{ id, firstName, lastName, assignedNumber, assignedNumberDisplay, defaultJerseyName, alreadyConfirmed }],
+//           otherProductType }
 //
 // Who is shown follows the same rule as the standard returning-player lookup (ALLOCATION_LOGIC.md §12):
 // a record only appears if the typed NAME fits it. A matching birth year on its own never shows anyone.
 // (Before 2026-11-17 it did: a search for any name listed other children of that birth year, with their
 // full names and numbers.) See findPreallocatedMatches below.
+//
+// otherProductType (added 2026-11-18): when nothing is found on this product's list but the same name is on the
+// club's OTHER list (boys' vs girls'), it says which one ("mens" | "womens"), so the widget can say "That name is on
+// the boys' list, please use the boys' jersey page" instead of a bare "couldn't find a match". It is only a pointer:
+// no name, number or id from the other list is ever returned.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
@@ -23,6 +29,7 @@ interface Row {
   status: string;
   year_of_birth: number | null;
   shopify_product_id: string | null;
+  product_type: string | null;
 }
 
 /** Letters only: capitals, spaces, hyphens, apostrophes and accents are ignored ("D'Abate" = "dabate"). */
@@ -56,15 +63,24 @@ function similarity(a: string, b: string): number {
   return Math.max(0, Math.round((1 - editDistance(a, b) / maxLen) * 50));
 }
 
-/** How the typed surname relates to a stored one: 3 same, 2 shares a whole word (Kerrison finds Manuel Kerrison),
- *  1 one slip away (Millar for Miller; 4+ letters only), 0 not the same name. */
+/** One slip: spelled differently but close, and long enough that a single slip means something
+ *  (a 3-4 letter name changed by a letter is often a different name: Mia/Max, Hall/Hill). */
+function isSlip(a: string, b: string, minLen: number): boolean {
+  return a !== b && Math.min(a.length, b.length) >= minLen && similarity(a, b) >= 40;
+}
+
+// How the typed surname relates to a stored one (surnameRel results).
+const SAME = 3;        // same letters
+const SHARES_WORD = 2; // shares a whole word of 3+ letters (Kerrison finds Manuel Kerrison)
+const ONE_SLIP = 1;    // one slip away (Millar for Miller; 4+ letters only)
+
 function surnameRel(typed: string, stored: string): 0 | 1 | 2 | 3 {
   const t = key(typed), s = key(stored);
   if (!t || !s) return 0;
-  if (t === s) return 3;
+  if (t === s) return SAME;
   const storedWords = new Set(words(stored));
-  if (words(typed).some(w => storedWords.has(w))) return 2;
-  if (Math.min(t.length, s.length) >= 4 && similarity(t, s) >= 40) return 1;
+  if (words(typed).some(w => storedWords.has(w))) return SHARES_WORD;
+  if (isSlip(t, s, 4)) return ONE_SLIP;
   return 0;
 }
 
@@ -74,7 +90,7 @@ function firstRank(typed: string, stored: string): 0 | 1 | 2 | 3 | 4 {
   const t = key(typed), s = key(stored);
   if (t && t === s) return 0;
   if (t.length >= 3 && s.length >= 3 && t.slice(0, 3) === s.slice(0, 3)) return 1;
-  if (Math.min(t.length, s.length) >= 3 && similarity(t, s) >= 40) return 2;
+  if (isSlip(t, s, 3)) return 2;
   if (t && s && t[0] === s[0]) return 3;
   return 4;
 }
@@ -86,43 +102,71 @@ export interface PreallocatedQuery {
   shopifyProductId: string | null;
 }
 
+type Kind = "exact" | "near" | "swapped" | "fuzzy";
+
 /** Which stored records to offer for a typed name + birth year.
  *  1. Same first name and surname: every such record (up to 3), whatever the birth year.
- *  2. Otherwise ONE record, the one whose first name is closest, and only if
- *       - the surname (or one word of a double surname) is the same and the birth year is the record's, or
- *       - the first name is close (same start or one slip) and the surname is the same or one slip away, with a
- *         matching birth year, or with no birth year on one side to compare.
- *  The birth year never makes a record appear by itself, and a name that matches no surname shows nothing. */
+ *  Otherwise ONE record, the best of these (a name that fits no surname shows nothing, and a birth year never
+ *  shows a record on its own):
+ *  2. Near-exact (2026-11-18): one name is exactly right and the other is one slip away (Tessa Wrenfeld for Tessa
+ *     Wrenfield, Tesa Wrenfield). The birth year is NOT needed: a typo and a wrong year can both happen, and a name that
+ *     is right apart from one letter is as specific as the whole name. Slips count only in names of 5+ letters (4+
+ *     for a surname), as before.
+ *  3. Surname (or a whole word of a double surname) the same and the record's birth year the typed one: any first
+ *     name (Jem for Jemma). Or a close first name (same first 3 letters, or one slip) with a surname that is the same
+ *     or one slip away, when the birth year is the typed one or there is none on the record (or none typed) to compare.
+ *  4. Swapped (2026-11-18): the typed first name is the record's surname and the typed surname is its first name
+ *     (the club listed them the wrong way round, or they went in the wrong boxes). The birth year must fit.
+ *  opts.nameOnly: used for the wrong-page pointer. Only records whose first name AND surname both fit count, so a
+ *  sibling or twin who merely shares the surname and birth year never makes it say "that name is on the other list". */
 export function findPreallocatedMatches<T extends { first_name: string; last_name: string; year_of_birth: number | null; shopify_product_id: string | null }>(
   rows: T[],
-  q: PreallocatedQuery
+  q: PreallocatedQuery,
+  opts: { nameOnly?: boolean } = {}
 ): T[] {
   const typedYob = Number.isFinite(q.yearOfBirth) && q.yearOfBirth > 0 ? q.yearOfBirth : null;
-  const hits: { row: T; exact: boolean; first: number; rel: number; yobFits: boolean; product: boolean }[] = [];
+  const typedFirst = key(q.firstName), typedLast = key(q.lastName);
+  const hits: { row: T; kind: Kind; first: number; rel: number; yobFits: boolean; product: boolean; nameFits: boolean }[] = [];
 
   for (const row of rows) {
-    const rel = surnameRel(q.lastName, row.last_name);
-    if (rel === 0) continue;
-    const first = firstRank(q.firstName, row.first_name);
-    const exact = rel === 3 && first === 0;
     const yobFits = typedYob !== null && row.year_of_birth != null && row.year_of_birth === typedYob;
     const nothingToCompare = typedYob === null || row.year_of_birth == null;
-    const shown = exact || (yobFits && rel >= 2) || (first <= 2 && (yobFits || nothingToCompare));
-    if (!shown) continue;
     // A player with two records (e.g. bundle + singlet) gets the one already claimed by this product back first.
     const product = q.shopifyProductId !== null && row.shopify_product_id === q.shopifyProductId;
-    hits.push({ row, exact, first, rel, yobFits, product });
+    const rel = surnameRel(q.lastName, row.last_name);
+
+    if (rel === 0) {
+      if (typedFirst && typedLast && typedFirst === key(row.last_name) && typedLast === key(row.first_name) && (yobFits || nothingToCompare)) {
+        hits.push({ row, kind: "swapped", first: 5, rel: 0, yobFits, product, nameFits: true });
+      }
+      continue;
+    }
+
+    const first = firstRank(q.firstName, row.first_name);
+    const exact = rel === SAME && first === 0;
+    // A surname one slip away counts even when a whole word of it is also shared (Van eden for Van Eeden), which
+    // surnameRel reports as SHARES_WORD.
+    const surnameSlip = isSlip(key(q.lastName), key(row.last_name), 4);
+    const near = !exact && ((rel === SAME && isSlip(typedFirst, key(row.first_name), 3)) || (first === 0 && surnameSlip));
+    const nameClose = first <= 2 && (yobFits || nothingToCompare);
+    const surnameAndYear = yobFits && rel >= SHARES_WORD;
+    if (!(exact || near || nameClose || surnameAndYear)) continue;
+    hits.push({ row, kind: exact ? "exact" : near ? "near" : "fuzzy", first, rel, yobFits, product, nameFits: exact || near || nameClose });
   }
 
-  const exactHits = hits.filter(h => h.exact);
+  const usable = opts.nameOnly ? hits.filter(h => h.nameFits) : hits;
+  const exactHits = usable.filter(h => h.kind === "exact");
   if (exactHits.length > 0) {
     return exactHits
       .sort((a, b) => Number(b.product) - Number(a.product) || Number(b.yobFits) - Number(a.yobFits))
       .slice(0, 3)
       .map(h => h.row);
   }
-  return hits
-    .sort((a, b) => a.first - b.first || b.rel - a.rel || Number(b.yobFits) - Number(a.yobFits) || Number(b.product) - Number(a.product))
+  const order: Record<Kind, number> = { exact: 0, near: 0, fuzzy: 1, swapped: 2 };
+  return usable
+    .sort((a, b) =>
+      order[a.kind] - order[b.kind] || a.first - b.first || b.rel - a.rel ||
+      Number(b.yobFits) - Number(a.yobFits) || Number(b.product) - Number(a.product))
     .slice(0, 1)
     .map(h => h.row);
 }
@@ -168,9 +212,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ ok: false, error: "A valid yearOfBirth is required" });
   }
 
+  // Both products' lists are read (same club, season, window and status filters); this product's list is searched
+  // for the player, and the other one only for the wrong-page pointer.
   let query = supabase
     .from("preorder_requests")
-    .select("id, first_name, last_name, assigned_number, jersey_number_display, jersey_name, status, year_of_birth, shopify_product_id")
+    .select("id, first_name, last_name, assigned_number, jersey_number_display, jersey_name, status, year_of_birth, shopify_product_id, product_type")
     .eq("club_id", clubId)
     // assigned_number may be null (number TBC) — those players still confirm size + jersey name.
     // 'unmatched' rows are excluded by status, so they never appear here.
@@ -178,7 +224,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (season) query = query.eq("season", season);
   if (windowAgeGroup) query = query.eq("age_group", windowAgeGroup);
-  if (productType === "mens" || productType === "womens") query = query.eq("product_type", productType);
 
   const { data, error } = await query;
 
@@ -186,7 +231,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ ok: false, error: error.message });
   }
 
-  const matches = findPreallocatedMatches((data ?? []) as Row[], { firstName, lastName, yearOfBirth, shopifyProductId });
+  const all = (data ?? []) as Row[];
+  const typed = { firstName, lastName, yearOfBirth, shopifyProductId };
+  const productScoped = productType === "mens" || productType === "womens";
+  const matches = findPreallocatedMatches(productScoped ? all.filter(r => r.product_type === productType) : all, typed);
+
+  // Nothing on this product's list: is the same name on the club's other list? (Only a pointer, see the header.)
+  let otherProductType: "mens" | "womens" | null = null;
+  if (productScoped && matches.length === 0) {
+    const other: "mens" | "womens" = productType === "mens" ? "womens" : "mens";
+    if (findPreallocatedMatches(all.filter(r => r.product_type === other), typed, { nameOnly: true }).length > 0) {
+      otherProductType = other;
+    }
+  }
 
   const candidates = matches.map(row => ({
     id: row.id,
@@ -198,5 +255,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     alreadyConfirmed: row.status === "allocated" && Boolean(row.jersey_name),
   }));
 
-  return res.status(200).json({ ok: true, candidates });
+  return res.status(200).json({ ok: true, candidates, otherProductType });
 }
